@@ -162,21 +162,21 @@ struct DashboardTab: View {
                      line: verdict.map { v in v == "Normal" || near == nil ? warmest.map { "\($0.name), the warmest" } ?? v : "\(v) · \(near!.name) \(MacConsole.degrees(near!.c))" } ?? warmest.map { "\($0.name), the warmest" },
                      good: verdict.map { $0 == "Normal" }, page: "temps") { model.macPage = .fans },
             TileData(id: "everything", title: "Everything", symbol: "checklist", figure: watch.active ? "Restarting" : bad.map { $0 == 0 ? "All well" : "\($0)" }, line: watch.active ? "Getting everything up" : bad.map { $0 == 0 ? "Every part answering" : $0 == 1 ? "part needs a look" : "parts need a look" }, good: watch.active ? nil : bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
-            TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", page: "activity") { model.history = .download },
+            TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", page: "overview") { model.history = .download },
             TileData(id: "processes", title: "Processes", symbol: "cpu", figure: top.map { "\(Int($0.cpu.rounded()))%" }, line: top?.name, page: "processes") { model.processes = .cpu },
             TileData(id: "storage", title: "Storage", symbol: "internaldrive", figure: Format.bytes(s.disk.free), line: "free of \(Format.bytes(s.disk.total))", page: "storage") { model.macPage = .storage },
         ]
-        if let l = links.value { let x = MacConsole.linkSummary(l); t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", figure: x.good ? "All up" : "Look", line: x.text, good: x.good, page: nil) { model.macPage = .links }) }
+        if let l = links.value { let x = MacConsole.linkSummary(l); t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", figure: x.good ? "All up" : "\(max(1, l.links.filter { !$0.up && $0.state != "off" }.count))", line: x.text, good: x.good, page: nil) { model.macPage = .links }) }
         if let u = updates.value {
             let waiting = (u.macos.pending ?? []).count + (u.brew?.outdated ?? []).count
-            t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: u.macos.pending == nil ? nil : waiting == 0 ? "Up to date" : "\(waiting)", line: waiting == 0 ? "macOS \(u.macos.current.split(separator: " ").first ?? "")" : waiting == 1 ? "waiting" : "waiting", page: "updates") { model.macPage = .updates })
+            t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: u.macos.pending == nil ? nil : waiting == 0 ? "Up to date" : "\(waiting)", line: waiting == 0 ? "macOS \(u.macos.current.split(separator: " ").first ?? "")" : "waiting", good: waiting == 0 ? true : nil, page: "updates") { model.macPage = .updates })
         }
         if let items = startup.value?.items {
             let stopped = StartupView.stopped(items.filter(\.mine)).count
             t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "All running" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) of his own" : "stopped", good: stopped == 0, page: "startup") { model.macPage = .startup })
         }
         if let w = s.usage.plan?.sevenDay {
-            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, page: nil) { model.tab = 2 })
+            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, page: "activity") { model.tab = 2 })
         }
         return t
     }

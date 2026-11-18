@@ -23,7 +23,7 @@ struct ConsoleState: Decodable, Equatable {
 enum ConsolePlace {
     static let pages: [(id: String, name: String, symbol: String)] = [
         ("home", "Home", "house"), ("overview", "Mac Pro", "gauge.with.dots.needle.67percent"), ("temps", "Temperatures", "thermometer.medium"),
-        ("everything", "Everything", "checklist"), ("activity", "Activity", "clock.arrow.circlepath"), ("processes", "Processes", "cpu"),
+        ("everything", "Everything", "checklist"), ("activity", "What’s happening", "clock.arrow.circlepath"), ("processes", "Processes", "cpu"),
         ("tv", "Google TV", "tv"), ("chumby", "Chumby", "alarm"), ("storage", "Storage", "internaldrive"),
         ("startup", "Startup", "power"), ("updates", "Updates", "arrow.down.circle"), ("logs", "Logs", "doc.text.magnifyingglass"),
         ("terminal", "Terminal", "terminal"), ("settings", "Settings", "gearshape"),
