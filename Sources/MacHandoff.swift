@@ -35,9 +35,10 @@ enum MacDeepLink {
         case "disk":
             model.tab = 0; model.history = .disk
         case "health", "everything":
-            model.tab = 5; model.macPage = .health
+            model.tab = 6; model.macPage = .health
         case "control":
-            model.tab = 5
+            // The Mac's pages live on the Dashboard now; Control itself is for working the Mac by hand.
+            model.tab = parts.first.map { ["links", "connections", "fans", "temps", "updates", "storage", "startup", "health", "restart", "actions"].contains($0) } == true ? 6 : 5
             switch parts.first ?? "" {
             case "links", "connections": model.macPage = .links
             case "fans", "temps": model.macPage = .fans
@@ -46,6 +47,7 @@ enum MacDeepLink {
             case "startup": model.macPage = .startup
             case "health": model.macPage = .health
             case "restart": model.macPage = .restart
+            case "actions": model.macPage = .actions
             default: model.macPage = nil
             }
         case "macos", "updates":

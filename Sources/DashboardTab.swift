@@ -12,6 +12,8 @@ struct DashboardTab: View {
     @ObservedObject private var links = ConsoleSummary.shared.links
     @ObservedObject private var updates = ConsoleSummary.shared.updates
     @ObservedObject private var startup = ConsoleSummary.shared.startup
+    @ObservedObject private var summary = ConsoleSummary.shared
+    @ObservedObject private var watch = RestartWatch.shared
     @Environment(\.horizontalSizeClass) private var size
     let s: Status
     var side: Side = .all
@@ -24,16 +26,18 @@ struct DashboardTab: View {
     var body: some View {
         Group {
             switch side {
-            case .all: screenCard; tiles; showOnMac
+            case .all: screenCard; tiles; showOnMac; runOnMac
             case .left: screenCard; tiles
-            case .right: showOnMac
+            case .right: showOnMac; runOnMac
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
+        // The tiles from the Mac's own pages (connections, updates, startup) every 30 s while the Dashboard is up, as
+        // Control's This Mac rows were; read once only, they went stale under him.
+        .task(id: side) { if side != .right { await ConsoleSummary.shared.loop(model) } }
         // Done when the Console answers yes, warn when it says no or can't be reached: once per tap, on the answer.
         .sensoryFeedback(trigger: remote.answered) { _, _ in MacPrefs.haptics && side != .right ? .success : nil }
         .sensoryFeedback(trigger: remote.refused) { _, _ in MacPrefs.haptics && side != .right ? .warning : nil }
-        .task { if model.pose.isEmpty { await ConsoleSummary.shared.readAll(model.api) } }
         // Back from one of its pages (an update installed, a startup item started), the tiles read the Mac again.
         .onReceive(model.nav.$dashPage.dropFirst()) { p in if p == nil, side != .right, model.pose.isEmpty { Task { await ConsoleSummary.shared.readAll(model.api) } } }
     }
@@ -99,8 +103,7 @@ struct DashboardTab: View {
                 if let f = remote.fail, ["show", "hide", "display", "glance"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text) }
             }
             .padding(16)
-            .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .padding(.horizontal, 20)
+            .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
@@ -156,7 +159,7 @@ struct DashboardTab: View {
             TileData(id: "temps", title: "Temperatures", symbol: "thermometer.medium", figure: warmest.map { MacConsole.degrees($0.c) },
                      line: verdict.map { v in v == "Normal" || near == nil ? warmest.map { "\($0.name), the warmest" } ?? v : "\(v) · \(near!.name) \(MacConsole.degrees(near!.c))" } ?? warmest.map { "\($0.name), the warmest" },
                      good: verdict.map { $0 == "Normal" }, page: "temps") { model.macPage = .fans },
-            TileData(id: "everything", title: "Everything", symbol: "checklist", figure: bad.map { $0 == 0 ? "All well" : "\($0)" }, line: bad.map { $0 == 0 ? "Every part answering" : $0 == 1 ? "part needs a look" : "parts need a look" }, good: bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
+            TileData(id: "everything", title: "Everything", symbol: "checklist", figure: watch.active ? "Restarting" : bad.map { $0 == 0 ? "All well" : "\($0)" }, line: watch.active ? "Getting everything up" : bad.map { $0 == 0 ? "Every part answering" : $0 == 1 ? "part needs a look" : "parts need a look" }, good: watch.active ? nil : bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
             TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", page: "activity") { model.history = .download },
             TileData(id: "processes", title: "Processes", symbol: "cpu", figure: top.map { "\(Int($0.cpu.rounded()))%" }, line: top?.name, page: "processes") { model.processes = .cpu },
             TileData(id: "storage", title: "Storage", symbol: "internaldrive", figure: Format.bytes(s.disk.free), line: "free of \(Format.bytes(s.disk.total))", page: "storage") { model.macPage = .storage },
@@ -176,47 +179,23 @@ struct DashboardTab: View {
         return t
     }
 
+    // The same tiles as Status's (WebTile), two across folded and three open, each opening the phone's page for it.
     var tiles: some View {
         Section {
             let cols = size == .regular ? 3 : 2
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: cols), spacing: 12) {
-                ForEach(tileData) { d in tile(d) }
+                ForEach(tileData) { d in
+                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open)
+                        .contextMenu {
+                            if let p = d.page {
+                                Button { remote.send(model, "page:" + p, "page", p) } label: { Label("Show on the Mac", systemImage: "arrow.up.forward.app") }
+                            }
+                        }
+                }
             }
             .opacity(model.stale ? staleDim : 1)
-            .padding(.horizontal, 20)
-        } header: { Text("The Mac").padding(.leading, 20) }
+        } header: { Text("The Mac") }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-    }
-
-    func tile(_ d: TileData) -> some View {
-        Button(action: d.open) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: d.symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue)
-                    Text(d.title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 0)
-                    // This page is the one on the Mac's screen now.
-                    if let p = d.page, p == onMac { Image(systemName: "macwindow").font(.caption.weight(.semibold)).foregroundStyle(macBlue).accessibilityLabel("On the Mac’s screen") }
-                }
-                Spacer(minLength: 0)
-                HStack(spacing: 6) {
-                    if let g = d.good, !g { Circle().fill(Color.orange).frame(width: 8, height: 8) }
-                    Text(d.figure ?? "–").font(.system(size: 28, weight: .light)).monospacedDigit().foregroundStyle(.primary)
-                        .lineLimit(1).minimumScaleFactor(0.6).contentTransition(.numericText())
-                }
-                Text(d.line ?? " ").font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 116, alignment: .topLeading)
-            .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-        .buttonStyle(PressStyle())
-        .contextMenu {
-            if let p = d.page {
-                Button { remote.send(model, "page:" + p, "page", p) } label: { Label("Show on the Mac", systemImage: "arrow.up.forward.app") }
-            }
-        }
     }
 
     // MARK: For the Mac's screen: boards and pages
@@ -236,51 +215,79 @@ struct DashboardTab: View {
     }
 
     var showOnMac: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 20)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+        Group {
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    chips {
                         ForEach(ConsolePlace.boards, id: \.id) { b in
                             let on = running && st?.board == b.id
                             chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
                         }
                     }
-                    .padding(.horizontal, 20)
-                }
-                Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.top, 4)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
+                    chips {
                         ForEach(ConsolePlace.pages, id: \.id) { p in
                             chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id) { remote.send(model, "page:" + p.id, "page", p.id) }
                         }
                     }
-                    .padding(.horizontal, 20)
                 }
-                VStack(spacing: 0) {
-                    Toggle(isOn: Binding(get: { st?.rotate == true }, set: { on in remote.send(model, "rotate", "rotate", on ? "on" : "off") })) {
-                        Text("Boards take turns")
-                    }
-                    .tint(macBlue).padding(.vertical, 10)
-                    Divider()
-                    HStack {
-                        Text("Animations")
-                        Spacer(minLength: 12)
-                        Picker("Animations", selection: Binding(get: { st?.animations ?? "full" }, set: { remote.send(model, "animations", "animations", $0) })) {
-                            Text("Full").tag("full"); Text("Gentle").tag("gentle"); Text("Off").tag("off")
-                        }
-                        .pickerStyle(.segmented).fixedSize()
-                    }
-                    .padding(.vertical, 10)
+            } header: { Text("For the Mac’s screen") }
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+            // Two settings, as rows of the system's own card, as in Settings.
+            Section {
+                Toggle(isOn: Binding(get: { st?.rotate == true }, set: { on in remote.send(model, "rotate", "rotate", on ? "on" : "off") })) {
+                    Text("Boards take turns")
                 }
-                .padding(.horizontal, 16)
-                .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .padding(.horizontal, 20).padding(.top, 4)
-                if let f = remote.fail, ["board", "page", "rotate", "animations"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text).padding(.horizontal, 20) }
+                .tint(macBlue)
+                HStack {
+                    Text("Animations")
+                    Spacer(minLength: 12)
+                    Picker("Animations", selection: Binding(get: { st?.animations ?? "full" }, set: { remote.send(model, "animations", "animations", $0) })) {
+                        Text("Full").tag("full"); Text("Gentle").tag("gentle"); Text("Off").tag("off")
+                    }
+                    .pickerStyle(.segmented).fixedSize()
+                }
+            } footer: {
+                if let f = remote.fail, ["board", "page", "rotate", "animations"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text) }
             }
-            .disabled(!running)
-            .opacity(running ? 1 : 0.4)
-        } header: { Text("For the Mac’s screen").padding(.leading, 20) }
-        .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+        }
+        .disabled(!running)
+        .opacity(running ? 1 : 0.4)
+    }
+    // A row of chips that scrolls sideways out to the display's edges, its first chip lined up with the cards.
+    func chips<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content() } }
+            .scrollClipDisabled()
+    }
+
+    // The jobs the Mac can run, and its restart: Control's This Mac and Health cards were the Dashboard's tiles again,
+    // so they live here now, beside the tiles that open the same pages (2026-11-18, "the app is a mess and needs to be
+    // streamlined").
+    var runOnMac: some View {
+        Section {
+            if summary.mp {
+                Button { model.macPage = .actions } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bolt").foregroundStyle(macBlue).frame(width: 28)
+                        Text("Actions").foregroundStyle(Color.primary)
+                        Spacer(minLength: 8)
+                        Text("Clean, ship, tests").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        RowChevron()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Button(role: .destructive) { model.macPage = .restart } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "restart").frame(width: 28)
+                    Text("Restart the Mac…")
+                    Spacer(minLength: 8)
+                    RowChevron()
+                }
+                .contentShape(Rectangle())
+            }
+        } header: { Text("Run on the Mac") }
     }
 }

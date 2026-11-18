@@ -785,7 +785,7 @@ struct Screen<Content: View>: View {
             // The This Mac card's readings (MacConsole.swift, ConsoleSummary), from the Control tab's list itself: hung off a
             // card down the page, a List never drew it until scrolled to, so the card came in late and the shots scrolled
             // to nothing (CI 43030e3).
-            .task(id: tab) { if tab == 5, side != .left { await ConsoleSummary.shared.loop(model) } }
+
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
@@ -983,10 +983,17 @@ struct WebTile: View {
     var spark: [Double] = []
     var top: Double?
     var read: (Double) -> String = { _ in "" }
+    // The Dashboard's tiles are these too, so the two tabs' tiles are one thing (2026-11-18): its icon before the name,
+    // an orange light before a figure that wants a look, and a small screen when the Mac's Console shows this page.
+    var symbol: String? = nil
+    var good: Bool? = nil
+    var onMac = false
     var open: () -> Void = {}
     var figure: Text {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
         let small = Font.system(size: 17, weight: .semibold)
+        // Words ("All well", "Up to date") at one size: only a number has a unit beside it.
+        guard value.first?.isNumber == true else { return Text(value).font(big) }
         // "%" is a unit like the others (designer, resize gate): small beside its number.
         if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
         guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
@@ -995,20 +1002,25 @@ struct WebTile: View {
     var body: some View {
         Button(action: open) {
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18) }
+                    Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 0)
+                    if onMac { Image(systemName: "macwindow").font(.caption.weight(.semibold)).foregroundStyle(macBlue).accessibilityLabel("On the Mac’s screen") }
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
                 // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
                 // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
-                figure.lineLimit(1).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
+                HStack(spacing: 7) {
+                    if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
+                    figure.lineLimit(1).minimumScaleFactor(symbol == nil ? 1 : 0.7).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
                     // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                     // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                     // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
                     .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
-                Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                }
+                Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
                 if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
@@ -1170,7 +1182,7 @@ struct Hero: View {
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
             HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale, fresh: model.gotFresh, route: model.route, pulse: model.pulse) {
-                model.tab = 5; model.macPage = .health
+                model.tab = 6; model.macPage = .health
             }
             .padding(.top, 9)
         }
@@ -2481,14 +2493,13 @@ struct ControlTab: View {
                 // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
                 ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.os.isEmpty ? (p.online ? "Connected" : "Offline") : "\(p.os) · \(p.online ? "Connected" : "Offline")") }
                 if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
-            } header: { Text("Remote access") } footer: {
+            // "Tailscale", not "Remote access": Status has a Remote access card of its own, with other rows (2026-11-18).
+            } header: { Text("Tailscale") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
-            // Connections, fans and temperatures, updates, storage and startup items, each its own page (2026-11-13).
-            MacConsoleSections()
-            // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
-            MacPowerSections()
-                .onReceive(model.nav.$macPage.dropFirst()) { p in if p == nil { Task { await ConsoleSummary.shared.readAll(model.api) } } }
+            // Connections, fans, updates, storage, startup items, Everything, Actions and Restart the Mac were here too, as
+            // rows into the same pages the Dashboard's tiles open; they live on the Dashboard now (2026-11-18: "the app
+            // is a mess and needs to be streamlined"). Control is for working the Mac by hand.
         }
     }
 }
