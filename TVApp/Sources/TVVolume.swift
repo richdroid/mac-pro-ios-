@@ -77,15 +77,16 @@ struct VolumeBar: View {
     var body: some View {
         let known = VolumeModel.known(model.status?.volume, model.status?.volumeMax)
         let mx = Double(max(1, model.status?.volumeMax ?? 25)), v = Double(max(0, vol.shown(model.status?.volume) ?? 0))
-        HStack(spacing: 10) {
-            Image(systemName: "speaker.fill").font(.caption2.weight(.semibold))
-            Capsule().fill(.white.opacity(0.16)).frame(height: 6)
-                .overlay(alignment: .leading) { GeometryReader { g in Capsule().fill(.white.opacity(0.85)).frame(width: g.size.width * min(1, v / mx)) } }
-                .frame(height: 6)
-            Image(systemName: "speaker.wave.3.fill").font(.caption2.weight(.semibold))
-        }
-        .foregroundStyle(.white.opacity(0.55))
-        .opacity(known ? 1 : 0)
+        // The speakers hang outside the track, drawn over the gap beside it: the track keeps its width and the row its
+        // 6 pt height, so nothing on the Remote moves for them (the 11-18 gate: inside, they shortened the track folded and
+        // pushed the keys down).
+        Capsule().fill(.white.opacity(0.16)).frame(height: 6)
+            .overlay(alignment: .leading) { GeometryReader { g in Capsule().fill(.white.opacity(0.85)).frame(width: g.size.width * min(1, v / mx)) } }
+            .overlay(alignment: .leading) { Image(systemName: "speaker.fill").font(.caption2.weight(.semibold)).fixedSize().alignmentGuide(.leading) { $0[.trailing] + 7 } }
+            .overlay(alignment: .trailing) { Image(systemName: "speaker.wave.3.fill").font(.caption2.weight(.semibold)).fixedSize().alignmentGuide(.trailing) { $0[.leading] - 7 } }
+            .foregroundStyle(.white.opacity(0.55))
+            .frame(height: 6)
+            .opacity(known ? 1 : 0)
             .accessibilityElement().accessibilityLabel("Volume").accessibilityValue("\(Int(v)) of \(Int(mx))")
             .onChange(of: model.status?.volume) { _, s in vol.sync(s) }
     }

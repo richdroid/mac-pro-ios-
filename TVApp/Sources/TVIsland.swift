@@ -276,6 +276,7 @@ enum TVIsland {
     // listen(), as an app-made card's does, so its pushes keep it true and end it. Begun at every launch, background
     // launches included, as iOS asks.
     private static var startsWatched = false
+    @MainActor private static var latestStart = ""
     static func watchStarts() {
         // Not for the build's staged launches (an address or a pose given on launch): no Mac there to hand a token to.
         let args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
@@ -284,7 +285,16 @@ enum TVIsland {
         Task {
             for await t in Activity<TVIslandAttributes>.pushToStartTokenUpdates {
                 let hex = t.map { String(format: "%02x", $0) }.joined()
-                try? await TVBridge.post("island-token", ["kind": "start", "token": hex, "bundle": Bundle.main.bundleIdentifier ?? ""], timeout: 10)
+                // iOS hands the token over once, not at every launch: a Mac out of reach at that moment would never get it
+                // (the 11-18 gate). So it's tried again, a minute apart, for an hour, unless a newer token has come since.
+                latestStart = hex
+                Task {
+                    for _ in 0..<60 {
+                        guard latestStart == hex else { return }
+                        if (try? await TVBridge.post("island-token", ["kind": "start", "token": hex, "bundle": Bundle.main.bundleIdentifier ?? ""], timeout: 10)) != nil { return }
+                        try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    }
+                }
             }
         }
         Task { for await a in Activity<TVIslandAttributes>.activityUpdates { listen(a) } }

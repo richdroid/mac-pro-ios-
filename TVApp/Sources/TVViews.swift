@@ -1465,7 +1465,8 @@ struct RemoteTab: View {
                     pad.frame(width: d, height: grid.pad)
                     HStack(spacing: RemoteGrid.sideGap) {
                         VolumeKey(down: true, size: grid.key)
-                        VolumeBar()
+                        // Room beside the track for its two speakers, clear of the keys' glass.
+                        VolumeBar().padding(.horizontal, 16)
                         VolumeKey(down: false, size: grid.key)
                     }
                 }
