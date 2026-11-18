@@ -101,6 +101,10 @@ jobs:
           shot remote-repisode-portrait 3 9 $M/repisode -tab 0
           shot remote-rmint-portrait 3 9 $M/rmint -tab 0
           shot remote-ridle-portrait 3 9 $M/ridle -tab 0
+          # Open flat (turned): the volume bar between its two keys.
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          shot remote-repisode-open 3 9 $M/repisode -tab 0
+          shot remote-rmint-open 3 9 $M/rmint -tab 0
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist
       - name: Publish
