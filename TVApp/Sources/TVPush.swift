@@ -70,6 +70,9 @@ final class TVPushDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         TVNotify.shared.install()
         if !TVNotify.shared.staged { application.registerForRemoteNotifications() }
+        #if os(iOS)
+        TVIsland.watchStarts()
+        #endif
         return true
     }
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

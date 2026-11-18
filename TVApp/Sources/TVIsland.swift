@@ -28,6 +28,8 @@ struct Activity<Attributes: IslandCardAttributes> {
     var content: ActivityContent<Attributes.ContentState>
     var activityState: State { .active }
     var pushTokenUpdates: AsyncStream<Data> { AsyncStream { $0.finish() } }
+    static var pushToStartTokenUpdates: AsyncStream<Data> { AsyncStream { $0.finish() } }
+    static var activityUpdates: AsyncStream<Activity> { AsyncStream { $0.finish() } }
     func update(_ content: ActivityContent<Attributes.ContentState>) async {}
     func end(_ content: ActivityContent<Attributes.ContentState>?, dismissalPolicy: DismissalPolicy) async {}
     static func request(attributes: Attributes, content: ActivityContent<Attributes.ContentState>, pushType: PushType?) throws -> Activity { throw Unavailable() }
@@ -265,6 +267,37 @@ enum TVIsland {
                 try? await TVBridge.post("island-token", ["id": a.id, "token": hex, "bundle": Bundle.main.bundleIdentifier ?? ""], timeout: 10)
             }
         }
+    }
+
+    // Cards the Mac starts (Richard, 2026-11-14: "notifs still dont work nor does the dynamic island"). A card could only
+    // begin with the app open in front of him, so a film started from the TV's own remote, or played again after its
+    // card had gone, never reached the island. The Mac is handed the token that starts one, and starts it when the TV
+    // begins playing; iOS then wakes the app in the background, and the new card's own token goes to the Mac through
+    // listen(), as an app-made card's does, so its pushes keep it true and end it. Begun at every launch, background
+    // launches included, as iOS asks.
+    private static var startsWatched = false
+    nonisolated(unsafe) private static var latestStart = ""
+    static func watchStarts() {
+        // Not for the build's staged launches (an address or a pose given on launch): no Mac there to hand a token to.
+        let args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        guard !sample, args["address"] == nil, args["pose"] == nil, !startsWatched else { return }
+        startsWatched = true
+        Task {
+            for await t in Activity<TVIslandAttributes>.pushToStartTokenUpdates {
+                let hex = t.map { String(format: "%02x", $0) }.joined()
+                // iOS hands the token over once, not at every launch: a Mac out of reach at that moment would never get it
+                // (the 11-18 gate). So it's tried again, a minute apart, for an hour, unless a newer token has come since.
+                latestStart = hex
+                Task {
+                    for _ in 0..<60 {
+                        guard latestStart == hex else { return }
+                        if (try? await TVBridge.post("island-token", ["kind": "start", "token": hex, "bundle": Bundle.main.bundleIdentifier ?? ""], timeout: 10)) != nil { return }
+                        try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    }
+                }
+            }
+        }
+        Task { for await a in Activity<TVIslandAttributes>.activityUpdates { listen(a) } }
     }
 }
 

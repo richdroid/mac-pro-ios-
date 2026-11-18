@@ -69,15 +69,23 @@ struct VolumeKey: View {
     }
 }
 
-// The level, as a slim bar the pad's width.
+// The level, as a slim bar the pad's width, between a quiet and a loud speaker as the Music app's own volume bar is: a
+// bare white bar under the pad read as the system's home indicator or a scroll bar (the 2026-11-18 audit).
 struct VolumeBar: View {
     @Environment(TVModel.self) var model
     @ObservedObject private var vol = VolumeModel.shared
     var body: some View {
         let known = VolumeModel.known(model.status?.volume, model.status?.volumeMax)
         let mx = Double(max(1, model.status?.volumeMax ?? 25)), v = Double(max(0, vol.shown(model.status?.volume) ?? 0))
+        // The speakers hang outside the track, drawn over the gap beside it: the track keeps its width and the row its
+        // 6 pt height, so nothing on the Remote moves for them (the 11-18 gate: inside, they shortened the track folded and
+        // pushed the keys down).
         Capsule().fill(.white.opacity(0.16)).frame(height: 6)
             .overlay(alignment: .leading) { GeometryReader { g in Capsule().fill(.white.opacity(0.85)).frame(width: g.size.width * min(1, v / mx)) } }
+            .overlay(alignment: .leading) { Image(systemName: "speaker.fill").font(.caption2.weight(.semibold)).fixedSize().alignmentGuide(.leading) { $0[.trailing] + 7 } }
+            .overlay(alignment: .trailing) { Image(systemName: "speaker.wave.3.fill").font(.caption2.weight(.semibold)).fixedSize().alignmentGuide(.trailing) { $0[.leading] - 7 } }
+            .foregroundStyle(.white.opacity(0.55))
+            .frame(height: 6)
             .opacity(known ? 1 : 0)
             .accessibilityElement().accessibilityLabel("Volume").accessibilityValue("\(Int(v)) of \(Int(mx))")
             .onChange(of: model.status?.volume) { _, s in vol.sync(s) }
