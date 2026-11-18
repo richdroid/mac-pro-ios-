@@ -2027,9 +2027,11 @@ struct ChannelsTab: View {
         .onChange(of: wide) { _, _ in adding = false }
         .onAppear {
             startFromCache()
-            guard !posed, ["chsync", "chdemo", "chadd"].contains(ChumbyModel.pose) else { return }
+            guard !posed, ["chsync", "chdemo", "chadd", "chedit"].contains(ChumbyModel.pose) else { return }
             posed = true
             Task {
+                // For the build: the channel's list in Edit, its delete controls and grips.
+                if ChumbyModel.pose == "chedit" { try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { reordering = true }; return }
                 if ChumbyModel.pose == "chadd" { try? await Task.sleep(nanoseconds: 1_500_000_000); openAdd(); return }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 if let n = model.state.channelNames.first(where: { $0 != model.state.channel }) { model.playChannel(n, id: "nowPlaying") }
