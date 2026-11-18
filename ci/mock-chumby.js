@@ -601,6 +601,14 @@ function chumbyScene(q, s) {
         }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
+        // A channel's list saved: kept, and the channel reloaded as the Chumby does (about half a minute, with its readings
+        // of what's playing blank for the first seconds), so a film shows the list holding still through it.
+        if (a === 'chedit') {
+          const id = qs.get('p'), ch = (live.chlist = live.chlist || JSON.parse(JSON.stringify(data.chlist))).channels.find(c => c.id === id);
+          if (ch) ch.conf = Array.from({ length: +f.get('n') || 0 }, (_, i) => [f.get(i + '_id'), f.get(i + '_on'), f.get(i + '_secs')]);
+          const was = live.sys.chan; live.sys.chan = ''; setTimeout(() => { live.sys.chan = was; }, 6000);
+          return json({ ok: true, missing: 0 });
+        }
         if (a === 'save' && live.failsLeft !== undefined) {
           if (live.failsLeft > 0) { live.failsLeft--; setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return; }
           const why = saveProblem(f);
@@ -623,6 +631,7 @@ function chumbyScene(q, s) {
     // portrait) must show every one of them held while the page is past its end, not landing under the pull.
     if (a === 'sys') { const n = Math.floor(Date.now() / 1000); return json(scene === 'live' ? { ...live.sys, up: live.sys.up + n % 100000, load: 0.3 + (n % 7) / 10, memFree: live.sys.memFree - (n % 5) * 400, wifi: 60 + (n * 7) % 31 } : live.sys); }
     if (a === 'state') return json(stateNow(live.state));
+    if (a === 'chlist' && live.chlist) return json(live.chlist);
     return false;
   }
   if (scene === 'slow') {

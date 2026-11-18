@@ -406,8 +406,8 @@ actor RingDesk {
             if r.kind == kind { return await r.task.value }
             // A Snooze behind a Stop: once the Stop is through, nothing is left to snooze.
             if kind == .snooze { let o = await r.task.value; return o == .confirmed(until: nil) ? .nothingRinging : o }
-            // A Stop behind a Snooze goes once the Snooze has had its answer (a snoozed alarm is stopped for good).
-            _ = await r.task.value
+            // A Stop behind a Snooze goes at once (gate, 11-18: it waited up to 14 s): the Chumby takes it whether the
+            // snooze has landed (it ends the snooze for good) or not (it stops the ring).
         }
         let send = send ?? { c in try await chumbyTry { try await $0.cmd(c) } }
         let read = read ?? { try await chumbyTry { try await $0.raw("sys") } }

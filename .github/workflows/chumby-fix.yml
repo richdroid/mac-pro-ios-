@@ -46,9 +46,11 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
-          node ci/mock-chumby.js &
+          node ci/mock-chumby.js & MOCK=$!
           sleep 2
           M=http://127.0.0.1:9000
+          # The live scenes keep what a film did (a ring stopped, a list saved): a fresh stand-in before each film.
+          remock() { kill $MOCK 2>/dev/null; wait $MOCK 2>/dev/null; node ci/mock-chumby.js & MOCK=$!; sleep 2; }
           shot() { # name, display, wait, address, args
             local name=$1 display=$2 wait=$3 address=$4; shift 4
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
@@ -83,7 +85,9 @@ jobs:
             shot once$2 $1 12 $M -tab 0 -pose justonce
             shot once-moved$2 $1 12 $M/moved -tab 0 -pose justoncemoved
             # Ring, Snooze (3.5 s in), Stop (4 s later) on a stand-in Chumby that answers as the real one does.
-            film ringdemo$2 $1 14 $M/liveringing -tab 0 -pose ringdemo
+            remock; film ringdemo$2 $1 14 $M/liveringing -tab 0 -pose ringdemo
+            # Channels: Edit, the last widget moved to the top, one taken out, Done; the stand-in reloads its channel.
+            remock; film cheditdemo$2 $1 18 $M/live -tab 1 -pose cheditdemo
           }
           xcrun simctl ui "$DEVICE" appearance light
           set_ 1 ""

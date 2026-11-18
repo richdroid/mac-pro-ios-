@@ -60,9 +60,12 @@ final class ChumbyModel: ObservableObject {
     @Published private(set) var ringReadings = 0
     private var ringSwept = false
     private var ringStoppedAt: Date?
-    // A Stop on its way and not yet confirmed by the Chumby: Home's ringing card says "Stopping…" with its keys dimmed,
-    // as the Lock Screen card does.
-    @Published private(set) var ringStopping = false
+    // A Stop or Snooze on its way and not yet confirmed by the Chumby: Home's ringing card and the ringing page say
+    // "Stopping…" or "Snoozing…" with their keys dimmed, as the Lock Screen card does. Nil when nothing is pending.
+    @Published private(set) var ringWorking: String?
+    var ringStopping: Bool { ringWorking == "Stopping…" }
+    // One sentence everywhere for a press the Chumby took and hasn't confirmed (card, notification, app).
+    static let unconfirmed = "Sent. The Chumby hasn’t confirmed yet."
     private var readingAt = Date()
     // Opens the ringing page for a tap on the ring's notification or card. With a reading seconds old in hand that says
     // nothing is ringing, there is no page to show: what was tapped is cleared away instead.
@@ -490,6 +493,8 @@ final class ChumbyModel: ObservableObject {
     }
     func failed(_ id: String) -> String? { kept[id] ?? (failure?.id == id ? failure?.text : nil) }
     func clearFail(_ id: String) { if failure?.id == id { withAnimation(.snappy) { failure = nil } } }
+    // A calm note, not a failure: no warning haptic, and it stays (with its ✕) until letGo, as the kept notes do.
+    func note(_ id: String, _ text: String) { withAnimation(.snappy) { kept[id] = text } }
     // Nothing that reloads the Chumby's channel goes while an alarm rings, snoozes or is a minute or two from ringing (a
     // channel's reload under a ring can cut it off; Richard, 2026-11-18). Nil when it's clear, else what's in the way, for
     // the note: "Not while an alarm is ringing."
@@ -577,12 +582,12 @@ final class ChumbyModel: ObservableObject {
         let was = sys.ring
         hold(RingDesk.patience + 2)
         let tapped = Date().timeIntervalSince1970
-        withAnimation(.easeOut(duration: 0.2)) { ringStopping = true }
-        guard let api else { ringStopping = false; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
+        withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Stopping…" }
+        guard let api else { ringWorking = nil; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
             let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
             hold(0)
-            withAnimation(.easeOut(duration: 0.2)) { ringStopping = false }
+            withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
             switch out {
             case .confirmed, .nothingRinging:
                 withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
@@ -594,7 +599,7 @@ final class ChumbyModel: ObservableObject {
                 return true
             case .unconfirmed:
                 withAnimation(Self.ringSpring) { sys.ring = was }
-                fail("ring", "Sent, but the Chumby hasn’t confirmed it stopped.")
+                fail("ring", Self.unconfirmed)
                 Task { await self.loadSys() }
                 return false
             case .failed(let why):
@@ -609,15 +614,17 @@ final class ChumbyModel: ObservableObject {
     @discardableResult func ringSnoozeTask() -> Task<Bool, Never> {
         tick()
         let was = sys.ring
-        if let r = sys.ringing { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)"; snoozedAt = Date() } }
+        // "Snoozing…" until the Chumby says so, then its own time: never a guessed "Snoozed until" (gate, 11-18).
+        withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Snoozing…" }
         hold(RingDesk.patience + 2)
-        guard let api else { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
+        guard let api else { ringWorking = nil; withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
             let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
             hold(0)
+            withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
             switch out {
             case .confirmed(let until):
-                if let until, let r = sys.ringing { sys.ring = "s\t\(r.name)\t\(r.sound)\t\(Int(until))" }
+                if let r = sys.ringing { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() } }
                 Task { await ChumbyRingCard.handled() }
                 let end = until ?? snoozeEnds?.timeIntervalSince1970
                 await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = end; $0.problem = nil }
@@ -629,7 +636,7 @@ final class ChumbyModel: ObservableObject {
                 return true
             case .unconfirmed:
                 withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }
-                fail("ring", "Sent, but the Chumby hasn’t confirmed the snooze.")
+                fail("ring", Self.unconfirmed)
                 Task { await self.loadSys() }
                 return false
             case .failed(let why):

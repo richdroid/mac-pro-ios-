@@ -1610,7 +1610,7 @@ struct ChannelsTab: View {
     @State private var saveQueue: Task<Void, Never>?
     // Edit, as every iOS list has it (Richard, 2026-11-18: "the right side minus sign for delete on channel reorder makes
     // no sense"): the delete control at each row's start and the reorder grip at its end, only while editing, so a scroll
-    // that starts on a grip can't pick a widget up. Out of editing, a row is swiped to delete.
+    // that starts on a grip can't pick a widget up. Never a swipe (11-05).
     @State private var reordering = false
     // When this page last sent the channel's list: the Chumby reloads the channel for about half a minute after, and its
     // readings of what's playing in that time say nothing about a channel he chose.
@@ -1745,7 +1745,7 @@ struct ChannelsTab: View {
         saveTask?.cancel()
         // Never under an alarm (the save reloads the channel on the Chumby): kept, and sent once the alarm is over.
         if let why = model.alarmBusy {
-            if !heldForAlarm { heldForAlarm = true; model.fail("chedit", "Kept here while \(why). It goes to the Chumby after.") }
+            if !heldForAlarm { heldForAlarm = true; model.note("chedit", "Kept here while \(why). It goes to the Chumby after.") }
             saveTask = Task {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard !Task.isCancelled else { return }
@@ -1753,7 +1753,7 @@ struct ChannelsTab: View {
             }
             return
         }
-        if heldForAlarm { heldForAlarm = false; model.clearFail("chedit") }
+        if heldForAlarm { heldForAlarm = false; model.letGo("chedit") }
         unsent = nil
         savedAt = Date()
         // Saves go one after another, so an older list can never land on the Chumby after a newer one.
@@ -1813,7 +1813,12 @@ struct ChannelsTab: View {
     // this the list jumped between channels and back after each edit ("constantly refreshes", 11-18).
     func followPlaying(_ name: String, chosen: Bool = false) {
         guard !name.trimmingCharacters(in: .whitespaces).isEmpty, let id = channelID(named: name), id != picked else { return }
-        guard chosen || Date().timeIntervalSince(savedAt) > 40 else { return }
+        guard chosen || Date().timeIntervalSince(savedAt) > 40 else {
+            // Looked at again once the reload is over, so a real change in the window isn't missed (list and device agree).
+            let at = savedAt
+            Task { try? await Task.sleep(nanoseconds: 41_000_000_000); if savedAt == at { followPlaying(showing) } }
+            return
+        }
         picked = id
     }
     // From what was kept last time, so the editor is whole from the first frame: the channel chosen or playing, if known.
@@ -1879,39 +1884,44 @@ struct ChannelsTab: View {
     func widgetRow(_ w: EditorRow) -> some View {
         HStack(alignment: .center, spacing: 16) {
             if reordering {
+                // A 44 pt target laid out as the 21 pt disc, so the row is no taller and the name no further in than the
+                // disc needs.
                 Button { model.tick(); remove(w.id) } label: {
                     Circle().fill(ChumbyPalette.remove(scheme == .dark)).frame(width: 21, height: 21)
                         .overlay { Capsule().fill(.white).frame(width: 10, height: 2.5) }
-                        .frame(width: 30, height: 44, alignment: .leading).contentShape(Rectangle())
+                        .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
-                .padding(.vertical, -4).padding(.trailing, -6)
+                .padding(.vertical, -11.5).padding(.trailing, -23)
                 .transition(.move(edge: .leading).combined(with: .opacity))
                 .accessibilityLabel("Remove \(w.name) from \(pickedTitle)")
             }
             // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
             Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
-            Menu {
-                Picker("Time on screen", selection: Binding(get: { rows.first { $0.id == w.id }?.secs ?? w.secs },
-                                                            set: { v in rowBinding(w.id, \.secs, w.secs).wrappedValue = v; changed() }).ticking()) {
-                    Text(w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto").tag(0)
-                    ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
+            // While editing the row is its name alone, between the delete control and the grip, at the same height.
+            if !reordering {
+                Menu {
+                    Picker("Time on screen", selection: Binding(get: { rows.first { $0.id == w.id }?.secs ?? w.secs },
+                                                                set: { v in rowBinding(w.id, \.secs, w.secs).wrappedValue = v; changed() }).ticking()) {
+                        Text(w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto").tag(0)
+                        ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "timer")
+                        Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto") : timeText(w.secs))
+                        Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                    }
+                    .font(.footnote.weight(.medium))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.white.opacity(0.12), in: Capsule())
                 }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "timer")
-                    Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto") : timeText(w.secs))
-                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
-                }
-                .font(.footnote.weight(.medium))
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(.white.opacity(0.12), in: Capsule())
+                .accessibilityLabel("Time on screen")
             }
-            .accessibilityLabel("Time on screen")
-            // While editing the row is its name alone, between the delete control and the grip.
-            .opacity(reordering ? 0 : 1).allowsHitTesting(!reordering)
         }
+        // One height in and out of Edit: the time capsule's (gate, 11-18: rows grew 11 pt on Edit).
+        .frame(minHeight: 30)
         .padding(.vertical, 4)
         .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
     }
@@ -1948,8 +1958,11 @@ struct ChannelsTab: View {
                     changed()
                 }
                 .deleteDisabled(true)
-            if !picked.isEmpty && !reordering { addRow }
-            if let f = model.failed("chedit") { FailNote(text: f) }
+            if !picked.isEmpty { addRow }
+            // A save held under an alarm is said calmly, in the secondary ink, and stays until it has gone; a real failure
+            // is the warning note.
+            if heldForAlarm, let f = model.failed("chedit") { RowNote(icon: "clock", text: f, color: .secondary) }
+            else if let f = model.failed("chedit") { FailNote(text: f) }
             if let f = model.failed("nowPlaying") { FailNote(text: f) }
         } header: {
             // The channel is the header itself: its name, with the others in its menu (the tick on the one showing).
@@ -2039,11 +2052,21 @@ struct ChannelsTab: View {
         .onChange(of: wide) { _, _ in adding = false }
         .onAppear {
             startFromCache()
-            guard !posed, ["chsync", "chdemo", "chadd", "chedit"].contains(ChumbyModel.pose) else { return }
+            guard !posed, ["chsync", "chdemo", "chadd", "chedit", "cheditdemo"].contains(ChumbyModel.pose) else { return }
             posed = true
             Task {
                 // For the build: the channel's list in Edit, its delete controls and grips.
                 if ChumbyModel.pose == "chedit" { try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { reordering = true }; return }
+                // For the build's film: Edit, the last widget moved to the top, the second taken out, Done (the save goes, and the
+                // stand-in Chumby reloads its channel, blanking what's playing for a few seconds); the list must hold still.
+                if ChumbyModel.pose == "cheditdemo" {
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { reordering = true }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if shown.count > 1 { withAnimation(.snappy) { var on = shown; on.move(fromOffsets: IndexSet(integer: on.count - 1), toOffset: 0); rows = on + rows.filter { !$0.on } }; changed() }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000); if shown.count > 1 { model.tick(); remove(shown[1].id) }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000); withAnimation(.snappy) { reordering = false }; flush()
+                    return
+                }
                 if ChumbyModel.pose == "chadd" { try? await Task.sleep(nanoseconds: 1_500_000_000); openAdd(); return }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 if let n = model.state.channelNames.first(where: { $0 != model.state.channel }) { model.playChannel(n, id: "nowPlaying") }
@@ -3194,6 +3217,9 @@ struct SkipCard: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000); send(true)
                 try? await Task.sleep(nanoseconds: 4_000_000_000); send(false)
             }
+            // Back after a ring ends: its room opens as the controls above move up, and the card fades in once they have
+            // stopped, so nothing travels through it (gate, 11-18: the pills slid up through the incoming card).
+            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2).delay(ChumbyModel.stopFade + 0.35)), removal: .opacity.animation(.easeOut(duration: 0.1))))
         }
     }
     // A calendar day ringing at its own time goes back to the calendar's rule for it: that day's time is let go and the
