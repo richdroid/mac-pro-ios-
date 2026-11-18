@@ -1034,6 +1034,7 @@ struct WebTile: View {
         }
         .buttonStyle(PressStyle())
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("tile." + title)
         .accessibilityAction(named: "Show the past 24 hours", open)
     }
 }

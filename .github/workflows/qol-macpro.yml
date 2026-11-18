@@ -74,7 +74,8 @@ jobs:
             shot dash-board$x $d 8 -tab 6 -pose consoleboard
             for P in $(cat ci/qol-poses.txt 2>/dev/null); do shot dash-$P$x $d 8 -tab 6 -pose $P; done
             film dash-scroll$x $d 4 "drag 0.5 0.8 0.5 0.2;drag 0.5 0.8 0.5 0.2;drag 0.5 0.25 0.5 0.85" -tab 6
-            [ -f ci/qol-touches-$d.txt ] && while IFS='|' read -r n t a; do film "$n$x" $d 4 "$t" $a; done < ci/qol-touches-$d.txt
+            # Read on fd 3, so nothing a film runs can swallow the next lines.
+            [ -f ci/qol-touches-$d.txt ] && while IFS='|' read -r -u 3 n t a; do film "$n$x" $d 4 "$t" $a < /dev/null; done 3< ci/qol-touches-$d.txt
           }
           # Folded first (the outer display), then open upright, then open flat.
           dash 1 ""

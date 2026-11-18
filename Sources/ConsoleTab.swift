@@ -117,6 +117,13 @@ final class ConsoleRemote: ObservableObject {
             if Self.posed(model.pose) != nil {
                 // As the stand-in Mac answers: the Console's ack after a moment (Start takes longer), and its state after.
                 try? await Task.sleep(nanoseconds: cmd == "show" ? 1_500_000_000 : 600_000_000)
+                // The build's shot of a refusal: the Console didn't answer in time, said under the keys, then gone.
+                if model.pose == "consolefail" {
+                    withAnimation(Motion.quick) { busy = nil; fail = (key, "The Console didn’t answer."); refused += 1 }
+                    try? await Task.sleep(nanoseconds: 6_000_000_000)
+                    if fail?.key == key { withAnimation(Motion.quick) { fail = nil } }
+                    return
+                }
                 withAnimation(Motion.quick) {
                     busy = nil; answered += 1
                     switch cmd {
@@ -153,6 +160,7 @@ final class ConsoleRemote: ObservableObject {
         case "console", "glancefilm": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
         case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake")
         case "consoleoff", "consolestarting": return ConsoleState(running: false)
+        case "consolefail": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: false)
         // Open but not in front (another app is), and the display asleep under Glance, as the Mac was on 2026-11-16.
         case "consolebehind": return ConsoleState(running: true, frontmost: false, fullscreen: true, page: "everything", board: nil, rotate: true, animations: "full", display: "awake", glance: false)
         case "consoleasleep": return ConsoleState(running: true, frontmost: false, fullscreen: true, page: "everything", board: nil, rotate: true, animations: "full", display: "asleep", glance: true)

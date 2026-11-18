@@ -130,6 +130,8 @@ struct DashboardTab: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressStyle())
+            .accessibilityLabel(title)
+            .accessibilityIdentifier("key." + title)
             .accessibilityAddTraits(on ? .isSelected : [])
         }
     }
@@ -200,7 +202,7 @@ struct DashboardTab: View {
 
     // MARK: For the Mac's screen: boards and pages
 
-    func chip(_ name: String, _ symbol: String, on: Bool, busy: Bool, action: @escaping () -> Void) -> some View {
+    func chip(_ name: String, _ symbol: String, on: Bool, busy: Bool, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: symbol).font(.subheadline).opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.mini) } }
@@ -211,6 +213,8 @@ struct DashboardTab: View {
             .background(on ? macBlue : Color(white: 0.15), in: Capsule())
         }
         .buttonStyle(PressStyle())
+        .accessibilityLabel(name)
+        .accessibilityIdentifier("chip." + id)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
@@ -222,13 +226,13 @@ struct DashboardTab: View {
                     chips {
                         ForEach(ConsolePlace.boards, id: \.id) { b in
                             let on = running && st?.board == b.id
-                            chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
+                            chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: "board." + b.id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
                         }
                     }
                     Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
                     chips {
                         ForEach(ConsolePlace.pages, id: \.id) { p in
-                            chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id) { remote.send(model, "page:" + p.id, "page", p.id) }
+                            chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: "page." + p.id) { remote.send(model, "page:" + p.id, "page", p.id) }
                         }
                     }
                 }
