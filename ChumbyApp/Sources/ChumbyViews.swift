@@ -1675,7 +1675,11 @@ struct ChannelsTab: View {
         }
     }
     func remove(_ id: String) {
-        withAnimation(.snappy) { if let i = rows.firstIndex(where: { $0.id == id }) { rows[i].on = false } }
+        withAnimation(.snappy) {
+            if let i = rows.firstIndex(where: { $0.id == id }) { rows[i].on = false }
+            // The last one gone: nothing left to edit.
+            if shown.isEmpty { reordering = false }
+        }
         if lastAdded == id { lastAdded = nil }
         changed()
     }
@@ -1868,10 +1872,23 @@ struct ChannelsTab: View {
             if let f = model.failed("catalog") { FailNote(text: f) }
         } header: { SectionHead(icon: "square.grid.3x3.square", text: "From the catalog") }
     }
-    // A widget in the channel: its name, and its time on screen on the right. Taken out the iOS way (11-18): swiped, or with
-    // Edit's delete control at the row's start; the ⊖ that sat at the row's end beside the reorder grip is gone.
+    // A widget in the channel: its name, and its time on screen on the right. Taken out the iOS way (11-18): Edit puts the
+    // delete control at each row's start and the grip at its end; the ⊖ that sat at the row's end beside the grip is gone.
+    // One tap on the control takes the widget out (Add widgets puts it back): the system's second step, a square Delete
+    // sliding in from the row's end, is the half-swiped row he ruled out ("looks fucked", 11-05), so there's no swipe either.
     func widgetRow(_ w: EditorRow) -> some View {
         HStack(alignment: .center, spacing: 16) {
+            if reordering {
+                Button { model.tick(); remove(w.id) } label: {
+                    Circle().fill(ChumbyPalette.remove(scheme == .dark)).frame(width: 21, height: 21)
+                        .overlay { Capsule().fill(.white).frame(width: 10, height: 2.5) }
+                        .frame(width: 30, height: 44, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .padding(.vertical, -4).padding(.trailing, -6)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+                .accessibilityLabel("Remove \(w.name) from \(pickedTitle)")
+            }
             // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
             Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
@@ -1930,12 +1947,7 @@ struct ChannelsTab: View {
                     model.tick()
                     changed()
                 }
-                .onDelete { at in
-                    let ids = at.map { shown[$0].id }
-                    for id in ids { remove(id) }
-                    // The last one gone: nothing left to edit.
-                    if shown.isEmpty { withAnimation(.snappy) { reordering = false } }
-                }
+                .deleteDisabled(true)
             if !picked.isEmpty && !reordering { addRow }
             if let f = model.failed("chedit") { FailNote(text: f) }
             if let f = model.failed("nowPlaying") { FailNote(text: f) }
