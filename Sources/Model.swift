@@ -69,6 +69,11 @@ final class NavStore: ObservableObject {
     @Published var appHistory: String?  // the package (TV.ipa) whose Version History is open on the Apps tab's stack
     @Published var macPage: MacPage?  // Everything on the Mac, or Restart the Mac, on the Control tab's stack
     @Published var settingsOpen = false  // Settings, behind the gear on Status
+    // The Dashboard's own stack: the same pages, kept apart from Status's and Control's, so a page opened on one tab never
+    // turns up on the other's stack too (two pages pushed at once), and re-tapping either tab only closes its own.
+    @Published var dashHistory: HistoryMetric?
+    @Published var dashProcesses: ProcessSort?
+    @Published var dashPage: MacPage?
 }
 
 @MainActor
@@ -115,11 +120,13 @@ final class AppModel: ObservableObject {
     @Published var gotFresh = false      // the Mac has answered at least once since launch, not just the cache
     private var posedSheet = false
     // The open pages, by their old names: read and set through the model, published only by `nav`.
-    var history: HistoryMetric? { get { nav.history } set { nav.history = newValue } }
-    var processes: ProcessSort? { get { nav.processes } set { nav.processes = newValue } }
+    // History, processes and the Mac's pages open on the stack of the tab in front: the Dashboard's own, or else Status's
+    // and Control's.
+    var history: HistoryMetric? { get { tab == 6 ? nav.dashHistory : nav.history } set { if tab == 6 { nav.dashHistory = newValue } else { nav.history = newValue } } }
+    var processes: ProcessSort? { get { tab == 6 ? nav.dashProcesses : nav.processes } set { if tab == 6 { nav.dashProcesses = newValue } else { nav.processes = newValue } } }
     var sessionScreen: Status.Session? { get { nav.sessionScreen } set { nav.sessionScreen = newValue } }
     var appHistory: String? { get { nav.appHistory } set { nav.appHistory = newValue } }
-    var macPage: MacPage? { get { nav.macPage } set { nav.macPage = newValue } }
+    var macPage: MacPage? { get { tab == 6 ? nav.dashPage : nav.macPage } set { if tab == 6 { nav.dashPage = newValue } else { nav.macPage = newValue } } }
     // A page asked for before its tab has been on screen (a launch straight onto a page: a notification tapped, the
     // build's -openHistory) is pushed once the tab has drawn. Pushed at once, the tab underneath was never drawn until
     // Back first showed it, and it arrived late and in pieces, open flat a pane at a time (designer, CI 1b744be).

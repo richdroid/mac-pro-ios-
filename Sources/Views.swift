@@ -504,12 +504,17 @@ struct RootView: View {
                 // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
                 // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
                 // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
-                let open = (t == 0 && (model.history != nil || model.processes != nil || model.nav.settingsOpen)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil) || (t == 5 && model.macPage != nil)
+                let n = model.nav
+                let open = (t == 0 && (n.history != nil || n.processes != nil || n.settingsOpen)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
+                    || (t == 6 && (n.dashHistory != nil || n.dashProcesses != nil || n.dashPage != nil))
                 if open {
-                    if t == 0 { model.history = nil; model.processes = nil; model.nav.settingsOpen = false }
-                    if t == 1 { model.appHistory = nil }
-                    if t == 2 { model.sessionScreen = nil }
-                    if t == 5 { model.macPage = nil }
+                    if t == 0 { n.history = nil; n.processes = nil; n.settingsOpen = false }
+                    if t == 1 { n.appHistory = nil }
+                    if t == 2 { n.sessionScreen = nil }
+                    if t == 5 { n.macPage = nil }
+                    // The Dashboard's page goes back the way Back takes it; rebuilt instead, its stack lost the page with
+                    // no motion and pushed it again at once, as the page was still asked for.
+                    if t == 6 { n.dashHistory = nil; n.dashProcesses = nil; n.dashPage = nil }
                 } else {
                     resets[t, default: 0] += 1
                 }
@@ -925,16 +930,17 @@ struct StackPages: ViewModifier {
     @ObservedObject var nav: NavStore
     func body(content: Content) -> some View {
         content
-            // Status's histories, and the Dashboard's (on whichever of the two is in front, so only one stack takes it).
-            .navigationDestination(item: (tab == 0 && model.tab != 6) || (tab == 6 && model.tab == 6) ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6) }
             // Settings, behind the gear beside Status's name.
             .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true) }
-            // All processes, from Status itself; from a history, that page opens them over itself.
-            .navigationDestination(item: ((tab == 0 && model.tab != 6) || (tab == 6 && model.tab == 6)) && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            // All processes, from the tab itself; from a history, that page opens them over itself.
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
             .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
-            .navigationDestination(item: (tab == 5 && model.tab != 6) || (tab == 6 && model.tab == 6) ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
+            // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
+            .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 6 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
                 switch p {
                 case .health: MacHealthView(model: model)
                 case .restart: MacRestartView(model: model)
@@ -949,14 +955,18 @@ struct StackPages: ViewModifier {
             }
     }
 }
-// Processes over a history, the same way.
+// Processes over a history, the same way, on the stack the history is on.
 struct ProcessesOverHistory: ViewModifier {
     let model: AppModel
     @ObservedObject var nav: NavStore
+    @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: $nav.processes) { ProcessesView(first: $0, model: model) }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model) }
     }
 }
+// A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.
+private struct OnDashboardKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var onDashboard: Bool { get { self[OnDashboardKey.self] } set { self[OnDashboardKey.self] = newValue } } }
 
 struct StateRow: View {
     let label: String; let good: Bool; let value: String

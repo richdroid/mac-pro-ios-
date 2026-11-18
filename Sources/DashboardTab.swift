@@ -31,6 +31,8 @@ struct DashboardTab: View {
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
         .task { if model.pose.isEmpty { await ConsoleSummary.shared.readAll(model.api) } }
+        // Back from one of its pages (an update installed, a startup item started), the tiles read the Mac again.
+        .onReceive(model.nav.$dashPage.dropFirst()) { p in if p == nil, side != .right, model.pose.isEmpty { Task { await ConsoleSummary.shared.readAll(model.api) } } }
     }
 
     // MARK: The Mac's screen
