@@ -999,40 +999,54 @@ struct WebTile: View {
         guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
         return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
     }
-    var body: some View {
-        Button(action: open) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18) }
-                    // Whole, never "Temperatu…" (CI c4f3c64, folded): a little smaller first.
-                    Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                    Spacer(minLength: 0)
-                    // The page on the Mac's screen now takes the chevron's place, so the name keeps its room.
-                    if onMac { Image(systemName: "macwindow").font(.caption.weight(.semibold)).foregroundStyle(macBlue).accessibilityLabel("On the Mac’s screen") }
-                    else { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary) }
-                }
-                // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
-                // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
-                // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
-                HStack(spacing: 7) {
-                    if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
-                    figure.lineLimit(1).minimumScaleFactor(symbol == nil ? 1 : 0.7).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
-                    // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
-                    // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
-                    // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
-                    .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
-                }
-                Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
-                if spark.count > 1 {
-                    // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
-                    SparkLine(values: spark, top: top)
-                        .frame(height: 42).padding(.top, 8)
-                }
+    // Held, the Dashboard's tiles offer to put their page on the Mac's screen: a menu from the tile itself. A context menu
+    // lifted the whole grid with it, as the list's row is the grid (CI 68b580c).
+    var showOnMac: (() -> Void)? = nil
+    var face: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 5) {
+                if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18) }
+                // Whole, never "Temperatu…" (CI c4f3c64, folded): a little smaller first.
+                Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+                // The page on the Mac's screen now takes the chevron's place, so the name keeps its room.
+                if onMac { Image(systemName: "macwindow").font(.caption.weight(.semibold)).foregroundStyle(macBlue).accessibilityLabel("On the Mac’s screen") }
+                else { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary) }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+            // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
+            // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
+            // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
+            HStack(spacing: 7) {
+                if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
+                figure.lineLimit(1).minimumScaleFactor(symbol == nil ? 1 : 0.7).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
+                // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
+                // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
+                // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
+                .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
+            }
+            Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            if spark.count > 1 {
+                // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
+                SparkLine(values: spark, top: top)
+                    .frame(height: 42).padding(.top, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+
+    }
+    var body: some View {
+        Group {
+            if let showOnMac {
+                Menu {
+                    Button(action: showOnMac) { Label("Show on the Mac", systemImage: "arrow.up.forward.app") }
+                } label: { face } primaryAction: { open() }
+                .menuStyle(.button)
+            } else {
+                Button(action: open) { face }
+            }
         }
         .buttonStyle(PressStyle())
         .accessibilityElement(children: .combine)

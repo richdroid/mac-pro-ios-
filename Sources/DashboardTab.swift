@@ -50,6 +50,9 @@ struct DashboardTab: View {
     // it is on the Mac's screen, orange while it runs but can't be seen there, grey while it isn't running. Only what the
     // Console itself last said; never a guess.
     var light: (say: String, color: Color) {
+        // A key's refusal is said here, in the status line's own place, for a few seconds: a line of its own under the
+        // keys grew the card and moved every tile below it down and back (CI 68b580c).
+        if let f = remote.fail, ["show", "hide", "display", "glance"].contains(where: { f.key.hasPrefix($0) }) { return (f.text, .red) }
         if remote.unsupported { return ("Not on this Mac yet", .secondary) }
         if !remote.read { return ("Looking at the Mac…", .secondary) }
         if !running { return remote.busy == "show" ? ("Starting on the Mac…", macBlue) : ("Not running", Color(white: 0.45)) }
@@ -72,7 +75,7 @@ struct DashboardTab: View {
                         Text(remote.read ? name : " ").font(.headline).lineLimit(1)
                         HStack(spacing: 6) {
                             Circle().fill(light.color).frame(width: 8, height: 8)
-                            Text(light.say).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
+                            Text(light.say).font(.footnote).foregroundStyle(light.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary)).lineLimit(1).minimumScaleFactor(0.85)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -102,7 +105,6 @@ struct DashboardTab: View {
                 // A key waiting on the Console's answer shows its own wait; the others stay as they are (one command at
                 // a time is the remote's own rule), so nothing greys or flickers under a tap.
                 .disabled(!remote.read || remote.unsupported)
-                if let f = remote.fail, ["show", "hide", "display", "glance"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text) }
             }
             .padding(16)
             .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
@@ -168,22 +170,29 @@ struct DashboardTab: View {
             TileData(id: "processes", title: "Processes", symbol: "cpu", figure: top.map { "\(Int($0.cpu.rounded()))%" }, line: top?.name, page: "processes") { model.processes = .cpu },
             TileData(id: "storage", title: "Storage", symbol: "internaldrive", figure: Format.bytes(s.disk.free), line: "free of \(Format.bytes(s.disk.total))", page: "storage") { model.macPage = .storage },
         ]
-        if let l = links.value { let x = MacConsole.linkSummary(l); t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", figure: x.good ? "All up" : "\(max(1, l.links.filter { !$0.up && $0.state != "off" }.count))", line: x.text, good: x.good, page: nil) { model.macPage = .links }) }
+        // The tiles from the Mac's own pages hold their places from the first draw, a dash until they're read, and go
+        // only for a Mac whose bridge hasn't the feed: arriving a moment late, they moved the tiles after them (CI 68b580c).
+        let linksOpen = { model.macPage = .links }, updatesOpen = { model.macPage = .updates }, startupOpen = { model.macPage = .startup }
+        let tvOpen = { if let u = URL(string: "tvremoteapp://") { openURL(u) } }
+        if let l = links.value {
+            let x = MacConsole.linkSummary(l)
+            t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", figure: x.good ? "All up" : "\(max(1, l.links.filter { !$0.up && $0.state != "off" }.count))", line: x.text, good: x.good, page: nil, open: linksOpen))
+        } else if !links.unsupported { t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", page: nil, open: linksOpen)) }
         if let u = updates.value {
             let waiting = (u.macos.pending ?? []).count + (u.brew?.outdated ?? []).count
-            t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: u.macos.pending == nil ? nil : waiting == 0 ? "Up to date" : "\(waiting)", line: waiting == 0 ? "macOS \(u.macos.current.split(separator: " ").first ?? "")" : "waiting", good: waiting == 0 ? true : nil, page: "updates") { model.macPage = .updates })
-        }
+            t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: u.macos.pending == nil ? nil : waiting == 0 ? "Up to date" : "\(waiting)", line: waiting == 0 ? "macOS \(u.macos.current.split(separator: " ").first ?? "")" : "waiting", good: waiting == 0 ? true : nil, page: "updates", open: updatesOpen))
+        } else if !updates.unsupported { t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", page: "updates", open: updatesOpen)) }
         if let items = startup.value?.items {
             let stopped = StartupView.stopped(items.filter(\.mine)).count
-            t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "All running" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) of his own" : "stopped", good: stopped == 0, page: "startup") { model.macPage = .startup })
-        }
+            t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "All running" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) of his own" : "stopped", good: stopped == 0, page: "startup", open: startupOpen))
+        } else if !startup.unsupported { t.append(TileData(id: "startup", title: "Startup", symbol: "power", page: "startup", open: startupOpen)) }
         // The TV, as the Console's Home has it: what's playing, or whether it's on. A tap opens the TV app.
         if let v = tv.value {
             let ep = v.session?.description?.first, song = v.music?.playing == true ? v.music?.title : nil
             let fig = v.online == false ? "Away" : ep != nil ? (v.session?.playing == false ? "Paused" : "Playing") : song != nil ? "Music" : v.screen == "asleep" ? "Asleep" : v.screen == "on" ? "On" : "Off"
             let line = v.online == false ? "Not answering" : ep.map { [$0, v.session?.description?.dropFirst().first].compactMap { $0 }.joined(separator: " · ") } ?? song.map { [$0, v.music?.artist].compactMap { $0 }.joined(separator: " · ") } ?? "Nothing playing"
-            t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, page: "tv") { if let u = URL(string: "tvremoteapp://") { openURL(u) } })
-        }
+            t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, page: "tv", open: tvOpen))
+        } else if !tv.unsupported { t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", page: "tv", open: tvOpen)) }
         if let w = s.usage.plan?.sevenDay {
             t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, page: "activity") { model.tab = 2 })
         }
@@ -196,16 +205,13 @@ struct DashboardTab: View {
             let cols = size == .regular ? 3 : 2
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: cols), spacing: 12) {
                 ForEach(tileData) { d in
-                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open)
-                        .contextMenu {
-                            if let p = d.page {
-                                Button { remote.send(model, "page:" + p, "page", p) } label: { Label("Show on the Mac", systemImage: "arrow.up.forward.app") }
-                            }
-                        }
+                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open,
+                            showOnMac: d.page.map { p in { remote.send(model, "page:" + p, "page", p) } })
                 }
             }
             .opacity(model.stale ? staleDim : 1)
-        } header: { Text("The Mac") }
+        // Over the cards as the system's own headers sit over theirs (Status's Temperatures, Run on the Mac beside).
+        } header: { Text("The Mac").padding(.leading, 20) }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
 
@@ -231,7 +237,8 @@ struct DashboardTab: View {
         Group {
             Section {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    // Clear of the header above (it was cut to "oards", CI 68b580c).
+                    Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 8)
                     chips {
                         ForEach(ConsolePlace.boards, id: \.id) { b in
                             let on = running && st?.board == b.id
@@ -245,7 +252,7 @@ struct DashboardTab: View {
                         }
                     }
                 }
-            } header: { Text("For the Mac’s screen") }
+            } header: { Text("For the Mac’s screen").padding(.leading, 20) }
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
             // Two settings, as rows of the system's own card, as in Settings.
             Section {
@@ -294,7 +301,7 @@ struct DashboardTab: View {
             }
             Button(role: .destructive) { model.macPage = .restart } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "restart").frame(width: 28)
+                    Image(systemName: "arrow.clockwise").frame(width: 28)
                     Text("Restart the Mac…")
                     Spacer(minLength: 8)
                     RowChevron()

@@ -200,6 +200,14 @@ final class AppModel: ObservableObject {
         pulse.lastFresh = (try? FileManager.default.attributesOfItem(atPath: Self.cacheFile.path)[.modificationDate]) as? Date
     }
 
+    // The Dashboard's Console and its tiles from the Mac's pages, read once as the Mac first answers, in the background,
+    // so the tab opens whole: read only when it opened, the Console card said "Looking at the Mac…" and four tiles
+    // arrived a second late, moving the Claude tile down a row (CI 68b580c).
+    private func prefetchDashboard() {
+        let api = api
+        Task { await ConsoleRemote.shared.refresh(self) }
+        Task { await ConsoleSummary.shared.readAll(api) }
+    }
     // What's on screen is only the last the Mac sent: it can't be reached, or won't answer without its code.
     var stale: Bool { problem != nil || needsSignIn || unreadable }
 
@@ -382,7 +390,7 @@ final class AppModel: ObservableObject {
             Reach.shared.hit()
             if problem != nil, pose != "unreachable" { withAnimation(Motion.quick) { problem = nil } }
             if needsSignIn { withAnimation(Motion.quick) { needsSignIn = false } }
-            func markFresh() { unread = 0; pulse.lastFresh = pose == "unreachable" ? Date().addingTimeInterval(-25) : Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { withAnimation(Motion.quick) { unreadable = pose == "unreadable" } } }
+            func markFresh() { unread = 0; pulse.lastFresh = pose == "unreachable" ? Date().addingTimeInterval(-25) : Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true; prefetchDashboard() }; if unreadable != (pose == "unreadable") { withAnimation(Motion.quick) { unreadable = pose == "unreadable" } } }
             // The build's shot of the Admin key row, in place well before the picture is taken.
             if pose == "api-sheet", !posedSheet {
                 posedSheet = true
