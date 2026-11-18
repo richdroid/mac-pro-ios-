@@ -756,6 +756,7 @@ struct ScreenTimings: Sendable {
     var firstPicture: Double?      // the whole first picture was
     var firstBytes = 0             // what the first picture cost on the wire
     var deep = true                // 32-bit colour (or 16-bit)
+    var video = false              // H.264 from the bridge's helper rather than Screen Sharing's own pictures
     var throughput: Double?        // bytes a second while the first picture streamed in
 }
 
@@ -959,7 +960,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 if videoOn {
                     // Full colour (the pointer's picture comes that way), no picture memory, and nothing asked of the Mac.
                     deep = true
-                    lock.lock(); times.deep = true; lock.unlock()
+                    lock.lock(); times.deep = true; times.video = true; lock.unlock()
                     mark { $0.signedIn = $1 }
                     stage = .messages
                     events.append(.opened(width, height))
