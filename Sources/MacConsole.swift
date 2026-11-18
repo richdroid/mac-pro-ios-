@@ -169,7 +169,10 @@ extension API {
         if code == 404 { return nil }
         if code == 401 || code == 403 { throw APIError.signInNeeded }
         guard code == 200 else { throw APIError.badResponse }
-        return try JSONDecoder().decode(T.self, from: d)
+        let v = try JSONDecoder().decode(T.self, from: d)
+        // Kept, so the page (and the Dashboard's tile) opens on what the Mac last said, then quietly updates.
+        if !path.contains("?") { FeedCache.save(path, d) }
+        return v
     }
     // An action. Only a request that never got an answer throws; a refusal comes back as the Mac's reason.
     func macDo(_ path: String, _ body: [String: Any], timeout: TimeInterval = 60) async throws -> MacActionResult {
@@ -190,6 +193,18 @@ extension API {
 }
 
 // One feed read every few seconds while its page is up: what it last said, when, and whether the Mac has gone quiet.
+// The last answer of each of the Mac's feeds, on disk in Caches (nothing personal beyond what Status's cache holds).
+nonisolated enum FeedCache {
+    static let dir: URL = {
+        let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("feeds", isDirectory: true)
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }()
+    static func file(_ path: String) -> URL { dir.appendingPathComponent(path.replacingOccurrences(of: "/", with: "_") + ".json") }
+    static func save(_ path: String, _ d: Data) { try? d.write(to: file(path), options: .atomic) }
+    static func load(_ path: String) -> Data? { try? Data(contentsOf: file(path)) }
+}
+
 @MainActor
 final class FeedReader<T: Decodable & Equatable>: ObservableObject {
     @Published var value: T?
@@ -200,7 +215,12 @@ final class FeedReader<T: Decodable & Equatable>: ObservableObject {
     @Published var unsupported = false
     let path: String
     private var misses = MissClock()
-    init(_ path: String) { self.path = path }
+    // What the Mac last said, at once: a page or tile drawn with a dash or "Reading…" and filled a second later read as
+    // the app loading (designer gate, 2026-11-18; the 11-11 rule: the last reading at once, refreshed quietly).
+    init(_ path: String) {
+        self.path = path
+        if MacConsole.pose.isEmpty, let d = FeedCache.load(path) { value = try? JSONDecoder().decode(T.self, from: d) }
+    }
     func set(_ v: T) { value = v; lastRead = Date(); away = false }
     func read(_ api: API, query: String = "") async {
         do {

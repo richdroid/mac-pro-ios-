@@ -968,6 +968,38 @@ struct ProcessesOverHistory: ViewModifier {
 private struct OnDashboardKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var onDashboard: Bool { get { self[OnDashboardKey.self] } set { self[OnDashboardKey.self] = newValue } } }
 
+// The Mac's jobs and its restart, on Control with the other things done by hand.
+struct RunOnMacSection: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var summary = ConsoleSummary.shared
+    var body: some View {
+        Section {
+            if summary.mp {
+                Button { model.macPage = .actions } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bolt").foregroundStyle(macBlue).frame(width: 28)
+                        Text("Actions").foregroundStyle(Color.primary)
+                        Spacer(minLength: 8)
+                        Text("Clean, ship, tests").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        RowChevron()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Button(role: .destructive) { model.macPage = .restart } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.clockwise").frame(width: 28)
+                    Text("Restart the Mac…")
+                    Spacer(minLength: 8)
+                    RowChevron()
+                }
+                .contentShape(Rectangle())
+            }
+        } header: { Text("Run on the Mac") }
+    }
+}
+
 struct StateRow: View {
     let label: String; let good: Bool; let value: String
     var body: some View {
@@ -999,12 +1031,8 @@ struct WebTile: View {
         guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
         return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
     }
-    // Held, a Dashboard tile puts its page on the Mac's screen, as Display is held on Status: a tap on touch, a thunk as
-    // the hold completes, and the small screen in the corner once the Console has it. A context menu lifted the whole
-    // grid with it (the list's row is the grid) and an anchored menu didn't open under a hold (CI 68b580c, 64e4a2c).
-    var showOnMac: (() -> Void)? = nil
-    @State private var held = 0
-    @State private var heldNow = false
+    // Shorter second lines, for a detail that won't fit whole (the TV's show without its episode).
+    var details: [String] = []
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1012,9 +1040,10 @@ struct WebTile: View {
                 // Whole, never "Temperatu…" (CI c4f3c64, folded): a little smaller first.
                 Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 0)
-                // The page on the Mac's screen now takes the chevron's place, so the name keeps its room.
-                if onMac { Image(systemName: "macwindow").font(.caption.weight(.semibold)).foregroundStyle(macBlue).accessibilityLabel("On the Mac’s screen") }
-                else { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary) }
+                // The page on the Mac's screen now: the Console light's green dot beside its name (one glyph, one job; the
+                // window glyph is the Show key's and Screen's). The chevron stays: the tile still opens.
+                if onMac { Circle().fill(Color.green).frame(width: 7, height: 7).accessibilityLabel("On the Mac’s screen") }
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
             // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
             // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
@@ -1027,7 +1056,12 @@ struct WebTile: View {
                 // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
                 .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
             }
-            Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            // The longest that fits whole, never cut with an ellipsis.
+            ViewThatFits(in: .horizontal) {
+                ForEach([detail] + details, id: \.self) { d in Text(d).lineLimit(1).fixedSize() }
+                Text(details.last ?? detail).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             if spark.count > 1 {
                 // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                 SparkLine(values: spark, top: top)
@@ -1041,23 +1075,11 @@ struct WebTile: View {
 
     }
     var body: some View {
-        Button {
-            // The hold has done its job; its release is not a tap.
-            if heldNow { heldNow = false; return }
-            open()
-        } label: { face }
+        Button(action: open) { face }
         .buttonStyle(PressStyle())
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
-            guard let showOnMac else { return }
-            heldNow = true; held += 1; showOnMac()
-            // If the release never comes as a tap (the finger slid off), the next tap is a tap again.
-            Task { try? await Task.sleep(nanoseconds: 3_000_000_000); heldNow = false }
-        }, isEnabled: showOnMac != nil)
-        .haptic(.thunk, trigger: held)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("tile." + title)
         .accessibilityAction(named: "Show the past 24 hours", open)
-        .accessibilityAction(named: "Show on the Mac") { showOnMac?() }
     }
 }
 
@@ -2508,7 +2530,8 @@ struct ControlTab: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Circle().fill(v.running ? Color.green : Color.red).frame(width: 9, height: 9)
-                                Text(v.name)
+                                // The bridge's own service is named "Dashboard" on the Mac, beside a tab of that name here.
+                                Text(v.label == "local.mac-dash" ? "Bridge" : v.name)
                                 Spacer()
                                 // Only a service that's down has anything to restart.
                                 if !v.running {
@@ -2531,13 +2554,15 @@ struct ControlTab: View {
                 // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
                 ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.os.isEmpty ? (p.online ? "Connected" : "Offline") : "\(p.os) · \(p.online ? "Connected" : "Offline")") }
                 if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
-            // "Tailscale", not "Remote access": Status has a Remote access card of its own, with other rows (2026-11-18).
-            } header: { Text("Tailscale") } footer: {
+            // Named by what it holds, not "Remote access" (Status has a card of that name with other rows) nor the
+            // plumbing's name (designer, 2026-11-18).
+            } header: { Text("Your devices") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
-            // Connections, fans, updates, storage, startup items, Everything, Actions and Restart the Mac were here too, as
-            // rows into the same pages the Dashboard's tiles open; they live on the Dashboard now (2026-11-18: "the app
-            // is a mess and needs to be streamlined"). Control is for working the Mac by hand.
+            // Connections, fans, updates, storage, startup items and Everything were here too, as rows into the same pages
+            // the Dashboard's tiles open; they live on the Dashboard now (2026-11-18: "the app is a mess and needs to be
+            // streamlined"). What's run by hand stays here: the Mac's jobs and its restart.
+            RunOnMacSection()
         }
     }
 }

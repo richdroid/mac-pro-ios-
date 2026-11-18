@@ -5,7 +5,7 @@ import SwiftUI
 // button for every page, board and setting. Each button says whether the Console did it: the bridge relays the command
 // to the Console and answers with the Console's own ack (API.md "Console remote"), never with what was hoped for.
 
-struct ConsoleState: Decodable, Equatable {
+struct ConsoleState: Codable, Equatable {
     var running: Bool
     var frontmost: Bool?
     var fullscreen: Bool?
@@ -83,8 +83,10 @@ extension API {
 @MainActor
 final class ConsoleRemote: ObservableObject {
     static let shared = ConsoleRemote()
-    @Published var state: ConsoleState?
-    @Published var read = false
+    // The Console as it last said, at once on opening, so the card doesn't sit on "Looking at the Mac…" (designer gate,
+    // 2026-11-18); the first reading replaces it a moment later.
+    @Published var state: ConsoleState? = UserDefaults.standard.data(forKey: "consoleState").flatMap { try? JSONDecoder().decode(ConsoleState.self, from: $0) }
+    @Published var read = UserDefaults.standard.data(forKey: "consoleState") != nil
     @Published var unsupported = false
     // The button waiting for the Console's answer, and what it said when it said no.
     @Published var busy: String?
@@ -101,6 +103,7 @@ final class ConsoleRemote: ObservableObject {
         do {
             let s = try await model.api.consoleState()
             unsupported = s == nil; state = s; read = true
+            if let s, let d = try? JSONEncoder().encode(s) { UserDefaults.standard.set(d, forKey: "consoleState") }
         } catch is CancellationError {
         } catch { read = true }
     }

@@ -1,6 +1,6 @@
-dash-tiles|tap tile.Temperatures;tap Dashboard;tap "tile.Mac Pro";tap Status;tap Dashboard;tap Dashboard|-tab 6
+dash-tiles|tap "tile.Fans & heat";tap Dashboard;tap tile.CPU;tap Status;tap Dashboard;tap Dashboard|-tab 6
 dash-crosstab|tap tile.CPU;tap Dashboard;tap tile.Storage;tap Status;tap Status;tap Dashboard|-tab 0
-dash-hold|longpress tile.Processes 1.0;tap tile.Processes|-tab 6
 dash-keys|tap key.Show;tap key.Glance;tap key.Glance;tap key.Sleep;tap key.Wake|-tab 6 -pose consolebehind
 dash-fail|tap key.Hide|-tab 6 -pose consolefail
 dash-chips|drag 0.5 0.85 0.5 0.3 0.4;tap chip.board.machine;tap chip.board.machine;tap chip.page.storage;tap "Boards take turns"|-tab 6
+dash-back|tap tile.Storage;drag 0.01 0.5 0.75 0.5 0.35;tap "tile.Fans & heat";drag 0.01 0.5 0.75 0.5 0.35|-tab 6

@@ -28,9 +28,9 @@ struct DashboardTab: View {
     var body: some View {
         Group {
             switch side {
-            case .all: screenCard; tiles; showOnMac; runOnMac
+            case .all: screenCard; tiles; showOnMac
             case .left: screenCard; tiles
-            case .right: showOnMac; runOnMac
+            case .right: showOnMac
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
@@ -57,18 +57,22 @@ struct DashboardTab: View {
         if !remote.read { return ("Looking at the Mac…", .secondary) }
         if !running { return remote.busy == "show" ? ("Starting on the Mac…", macBlue) : ("Not running", Color(white: 0.45)) }
         guard let st else { return ("Not running", Color(white: 0.45)) }
-        if st.screenStepAside == true { return ("Stepped aside while Screen is open", .orange) }
-        if st.display == "asleep" { return ("Running · the display is asleep", .orange) }
-        if st.frontmost == false { return ("Running behind other apps", .orange) }
-        if st.fullscreen == false { return ("In a window on the Mac’s screen", .green) }
-        return ("On the Mac’s screen", .green)
+        // The page (or board, or Glance) it shows, then where: green on the Mac's screen; blue while it runs out of sight
+        // (the display asleep is the Mac's usual state, not a fault: orange reads as a warning here and on the tiles).
+        let page = ConsolePlace.name(st).0
+        if st.screenStepAside == true { return ("\(page) · stepped aside for Screen", macBlue) }
+        if st.display == "asleep" { return ("\(page) · the display is asleep", macBlue) }
+        if st.frontmost == false { return ("\(page) · behind other apps", macBlue) }
+        if st.fullscreen == false { return ("\(page) · in a window on the Mac’s screen", .green) }
+        return ("\(page) · on the Mac’s screen", .green)
     }
 
     var screenCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
-                    let (name, symbol) = running ? ConsolePlace.name(st!) : ("Console", "macwindow")
+                    // Always named the Console, so the card says what it is; the page it shows is in the line under it.
+                    let (name, symbol) = ("Console", running ? ConsolePlace.name(st!).1 : "macwindow")
                     Image(systemName: symbol).font(.title3).foregroundStyle(running ? macBlue : .secondary)
                         .frame(width: 44, height: 44).background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     VStack(alignment: .leading, spacing: 3) {
@@ -145,8 +149,15 @@ struct DashboardTab: View {
     struct TileData: Identifiable {
         let id: String, title: String, symbol: String
         var figure: String?, line: String?, good: Bool? = nil
+        var alts: [String] = []    // shorter second lines, the longest that fits whole is shown
         let page: String?          // the Console page it puts on the Mac's screen, held
         let open: () -> Void
+    }
+    // When the Mac last checked every part, said the way Status's chip and Everything's page do: the second line adds.
+    var checkedLine: String {
+        guard let at = s.healthAt, at > 0 else { return "Every part checked" }
+        let m = Int(Date().timeIntervalSince1970 - at / 1000) / 60
+        return m < 1 ? "Checked just now" : m < 60 ? "Checked \(m) min ago" : "Checked \(m / 60) h ago"
     }
     var tileData: [TileData] {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net
@@ -161,11 +172,14 @@ struct DashboardTab: View {
         let top = s.procs.max { $0.cpu < $1.cpu }
         let bad = s.healthBad
         var t: [TileData] = [
-            TileData(id: "mac", title: "Mac Pro", symbol: "gauge.with.dots.needle.67percent", figure: "\(cpu.total)%", line: "CPU · memory \(memPct)%", page: "overview") { model.history = .cpu },
-            TileData(id: "temps", title: "Temperatures", symbol: "thermometer.medium", figure: warmest.map { MacConsole.degrees($0.c) },
+            // CPU and Memory as on Status, each opening its own history by the same name ("Mac Pro" opened a page called CPU).
+            TileData(id: "cpu", title: "CPU", symbol: "gauge.with.dots.needle.67percent", figure: "\(cpu.total)%", line: String(format: "Load %.2f", (store.live?.load ?? s.load).first ?? 0), page: "overview") { model.history = .cpu },
+            TileData(id: "memory", title: "Memory", symbol: "memorychip", figure: "\(memPct)%", line: "\(Format.bytes(mem.used)) of \(Format.bytes(mem.total))", page: "overview") { model.history = .memory },
+            // Named as the page it opens, so the fans are findable from here (Richard, 2026-11-13: "fan speed").
+            TileData(id: "temps", title: "Fans & heat", symbol: "thermometer.medium", figure: warmest.map { MacConsole.degrees($0.c) },
                      line: verdict.map { v in v == "Normal" || near == nil ? warmest.map { "\($0.name), the warmest" } ?? v : "\(v) · \(near!.name) \(MacConsole.degrees(near!.c))" } ?? warmest.map { "\($0.name), the warmest" },
                      good: verdict.map { $0 == "Normal" }, page: "temps") { model.macPage = .fans },
-            TileData(id: "everything", title: "Everything", symbol: "checklist", figure: watch.active ? "Restarting" : bad.map { $0 == 0 ? "All well" : "\($0)" }, line: watch.active ? "Getting everything up" : bad.map { $0 == 0 ? "Every part answering" : $0 == 1 ? "part needs a look" : "parts need a look" }, good: watch.active ? nil : bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
+            TileData(id: "everything", title: "Everything", symbol: "checklist", figure: watch.active ? "Restarting" : bad.map { $0 == 0 ? "All running" : "\($0)" }, line: watch.active ? "Getting everything up" : bad.map { $0 == 0 ? checkedLine : $0 == 1 ? "part needs a look" : "parts need a look" }, good: watch.active ? nil : bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
             TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", page: "overview") { model.history = .download },
             TileData(id: "processes", title: "Processes", symbol: "cpu", figure: top.map { "\(Int($0.cpu.rounded()))%" }, line: top?.name, page: "processes") { model.processes = .cpu },
             TileData(id: "storage", title: "Storage", symbol: "internaldrive", figure: Format.bytes(s.disk.free), line: "free of \(Format.bytes(s.disk.total))", page: "storage") { model.macPage = .storage },
@@ -176,7 +190,7 @@ struct DashboardTab: View {
         let tvOpen = { if let u = URL(string: "tvremoteapp://") { openURL(u) } }
         if let l = links.value {
             let x = MacConsole.linkSummary(l)
-            t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", figure: x.good ? "All up" : "\(max(1, l.links.filter { !$0.up && $0.state != "off" }.count))", line: x.text, good: x.good, page: nil, open: linksOpen))
+            t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", figure: x.good ? "All up" : "\(max(1, l.links.filter { !$0.up && $0.state != "off" }.count))", line: x.good ? "\(l.links.filter(\.up).count) links" : x.text, good: x.good, page: nil, open: linksOpen))
         } else if !links.unsupported { t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", page: nil, open: linksOpen)) }
         if let u = updates.value {
             let waiting = (u.macos.pending ?? []).count + (u.brew?.outdated ?? []).count
@@ -184,14 +198,14 @@ struct DashboardTab: View {
         } else if !updates.unsupported { t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", page: "updates", open: updatesOpen)) }
         if let items = startup.value?.items {
             let stopped = StartupView.stopped(items.filter(\.mine)).count
-            t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "All running" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) of his own" : "stopped", good: stopped == 0, page: "startup", open: startupOpen))
+            t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "None stopped" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) kept running" : "stopped", good: stopped == 0, page: "startup", open: startupOpen))
         } else if !startup.unsupported { t.append(TileData(id: "startup", title: "Startup", symbol: "power", page: "startup", open: startupOpen)) }
         // The TV, as the Console's Home has it: what's playing, or whether it's on. A tap opens the TV app.
         if let v = tv.value {
             let ep = v.session?.description?.first, song = v.music?.playing == true ? v.music?.title : nil
             let fig = v.online == false ? "Away" : ep != nil ? (v.session?.playing == false ? "Paused" : "Playing") : song != nil ? "Music" : v.screen == "asleep" ? "Asleep" : v.screen == "on" ? "On" : "Off"
             let line = v.online == false ? "Not answering" : ep.map { [$0, v.session?.description?.dropFirst().first].compactMap { $0 }.joined(separator: " · ") } ?? song.map { [$0, v.music?.artist].compactMap { $0 }.joined(separator: " · ") } ?? "Nothing playing"
-            t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, page: "tv", open: tvOpen))
+            t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, alts: [ep ?? song].compactMap { $0 }, page: "tv", open: tvOpen))
         } else if !tv.unsupported { t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", page: "tv", open: tvOpen)) }
         if let w = s.usage.plan?.sevenDay {
             t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, page: "activity") { model.tab = 2 })
@@ -205,13 +219,12 @@ struct DashboardTab: View {
             let cols = size == .regular ? 3 : 2
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: cols), spacing: 12) {
                 ForEach(tileData) { d in
-                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open,
-                            showOnMac: d.page.map { p in { remote.send(model, "page:" + p, "page", p) } })
+                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open, details: d.alts)
                 }
             }
             .opacity(model.stale ? staleDim : 1)
         // Over the cards as the system's own headers sit over theirs (Status's Temperatures, Run on the Mac beside).
-        } header: { Text("The Mac").padding(.leading, 20) }
+        } header: { Text("The Mac").padding(.leading, 20).padding(.bottom, 6) }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
 
@@ -238,21 +251,22 @@ struct DashboardTab: View {
             Section {
                 VStack(alignment: .leading, spacing: 12) {
                     // Clear of the header above (it was cut to "oards", CI 68b580c).
-                    Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 8)
+                    // In line with the headings, clear of the card's rounded corner (it cut "Boards" to "3oards", CI 64e4a2c).
+                    Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20)
                     chips {
                         ForEach(ConsolePlace.boards, id: \.id) { b in
                             let on = running && st?.board == b.id
                             chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: "board." + b.id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
                         }
                     }
-                    Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
+                    Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 4)
                     chips {
                         ForEach(ConsolePlace.pages, id: \.id) { p in
                             chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: "page." + p.id) { remote.send(model, "page:" + p.id, "page", p.id) }
                         }
                     }
                 }
-            } header: { Text("For the Mac’s screen").padding(.leading, 20) }
+            } header: { Text("For the Mac’s screen").padding(.leading, 20).padding(.top, 5).padding(.bottom, 6) }
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
             // Two settings, as rows of the system's own card, as in Settings.
             Section {
@@ -276,38 +290,10 @@ struct DashboardTab: View {
         .opacity(running ? 1 : 0.4)
     }
     // A row of chips that scrolls sideways out to the display's edges, its first chip lined up with the cards.
+    // The first chip in line with the headings; the row fades out at its end rather than cutting a chip in half.
     func chips<C: View>(@ViewBuilder _ content: () -> C) -> some View {
         ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content() } }
-            .scrollClipDisabled()
-    }
-
-    // The jobs the Mac can run, and its restart: Control's This Mac and Health cards were the Dashboard's tiles again,
-    // so they live here now, beside the tiles that open the same pages (2026-11-18, "the app is a mess and needs to be
-    // streamlined").
-    var runOnMac: some View {
-        Section {
-            if summary.mp {
-                Button { model.macPage = .actions } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "bolt").foregroundStyle(macBlue).frame(width: 28)
-                        Text("Actions").foregroundStyle(Color.primary)
-                        Spacer(minLength: 8)
-                        Text("Clean, ship, tests").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                        RowChevron()
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            Button(role: .destructive) { model.macPage = .restart } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.clockwise").frame(width: 28)
-                    Text("Restart the Mac…")
-                    Spacer(minLength: 8)
-                    RowChevron()
-                }
-                .contentShape(Rectangle())
-            }
-        } header: { Text("Run on the Mac") }
+            .contentMargins(.horizontal, 20, for: .scrollContent)
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
     }
 }
