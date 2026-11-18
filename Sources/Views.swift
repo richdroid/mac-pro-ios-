@@ -499,7 +499,7 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("root body")
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
                 // Back to the tab's own start. With a page open on it, the page goes back the way Back takes it, the
                 // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
                 // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
@@ -1273,12 +1273,13 @@ struct QuickActions: View {
     @State private var done: Set<String> = []
     @State private var fails: [String: String] = [:]
     @State private var successes = 0
+    @State private var failures = 0
     func succeed(_ id: String) {
         fails[id] = nil; done.insert(id); successes += 1
         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); done.remove(id) }
     }
     func fail(_ id: String, _ text: String) {
-        fails[id] = text
+        fails[id] = text; failures += 1
         Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if fails[id] == text { fails[id] = nil } }
     }
     func button(_ id: String, _ icon: String, _ title: String, waits: Bool? = nil, _ action: @escaping () -> Void) -> some View {
@@ -1339,7 +1340,9 @@ struct QuickActions: View {
         .padding(.vertical, 10)
         .animation(Motion.fade, value: fails)
         .animation(Motion.fade, value: done)
-        .sensoryFeedback(trigger: successes) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
+        // Done when the Mac has done it, warn when it hasn't (the shared vocabulary).
+        .haptic(.done, trigger: successes)
+        .haptic(.warn, trigger: failures)
         .task {
             // The build's shot of a success: the tick, held long enough to be photographed.
             guard model.pose == "quickdone" else { return }

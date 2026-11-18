@@ -36,8 +36,8 @@ struct DashboardTab: View {
         // Control's This Mac rows were; read once only, they went stale under him.
         .task(id: side) { if side != .right { await ConsoleSummary.shared.loop(model) } }
         // Done when the Console answers yes, warn when it says no or can't be reached: once per tap, on the answer.
-        .sensoryFeedback(trigger: remote.answered) { _, _ in MacPrefs.haptics && side != .right ? .success : nil }
-        .sensoryFeedback(trigger: remote.refused) { _, _ in MacPrefs.haptics && side != .right ? .warning : nil }
+        .haptic(.done, trigger: remote.answered) { _, _ in side != .right }
+        .haptic(.warn, trigger: remote.refused) { _, _ in side != .right }
         // Back from one of its pages (an update installed, a startup item started), the tiles read the Mac again.
         .onReceive(model.nav.$dashPage.dropFirst()) { p in if p == nil, side != .right, model.pose.isEmpty { Task { await ConsoleSummary.shared.readAll(model.api) } } }
     }
