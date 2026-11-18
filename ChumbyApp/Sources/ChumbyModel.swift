@@ -489,6 +489,15 @@ final class ChumbyModel: ObservableObject {
         failureClear = Task { [weak self] in try? await Task.sleep(nanoseconds: 6_000_000_000); if !Task.isCancelled { withAnimation(.snappy) { self?.failure = nil } } }
     }
     func failed(_ id: String) -> String? { kept[id] ?? (failure?.id == id ? failure?.text : nil) }
+    func clearFail(_ id: String) { if failure?.id == id { withAnimation(.snappy) { failure = nil } } }
+    // Nothing that reloads the Chumby's channel goes while an alarm rings, snoozes or is a minute or two from ringing (a
+    // channel's reload under a ring can cut it off; Richard, 2026-11-18). Nil when it's clear, else what's in the way, for
+    // the note: "Not while an alarm is ringing."
+    var alarmBusy: String? {
+        if let r = sys.ringing { return r.snoozed ? "an alarm is snoozing" : "an alarm is ringing" }
+        if let n = state.nextRing(), n.at.timeIntervalSinceNow < 150, n.at.timeIntervalSinceNow > -60 { return "the \(n.at.formatted(date: .omitted, time: .shortened)) alarm is about to ring" }
+        return nil
+    }
     func hold(_ seconds: Double = 8) { let until = Date().addingTimeInterval(seconds); sysHold = until; stateHold = until; sysBytes = Data(); stateBytes = Data() }
     func tick() {
         #if canImport(UIKit)
@@ -512,6 +521,8 @@ final class ChumbyModel: ObservableObject {
         }
     }
     func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) {
+        // The ones that reload or switch the channel wait out an alarm (alarmBusy).
+        if ["channel", "shuffle", "widget", "reload"].contains(c), let why = alarmBusy { fail(id, "Not while \(why)."); return }
         tick()
         hold(holdFor)
         Task {
@@ -523,6 +534,7 @@ final class ChumbyModel: ObservableObject {
     struct ChannelChoice: Equatable { let name: String; let at: Date }
     @Published var chosenChannel: ChannelChoice?
     func playChannel(_ name: String, id: String) {
+        if let why = alarmBusy { fail(id, "Not while \(why)."); return }
         state.channel = name
         let choice = ChannelChoice(name: name, at: Date())
         chosenChannel = choice
