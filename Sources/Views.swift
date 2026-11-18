@@ -999,9 +999,12 @@ struct WebTile: View {
         guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
         return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
     }
-    // Held, the Dashboard's tiles offer to put their page on the Mac's screen: a menu from the tile itself. A context menu
-    // lifted the whole grid with it, as the list's row is the grid (CI 68b580c).
+    // Held, a Dashboard tile puts its page on the Mac's screen, as Display is held on Status: a tap on touch, a thunk as
+    // the hold completes, and the small screen in the corner once the Console has it. A context menu lifted the whole
+    // grid with it (the list's row is the grid) and an anchored menu didn't open under a hold (CI 68b580c, 64e4a2c).
     var showOnMac: (() -> Void)? = nil
+    @State private var held = 0
+    @State private var heldNow = false
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1038,20 +1041,23 @@ struct WebTile: View {
 
     }
     var body: some View {
-        Group {
-            if let showOnMac {
-                Menu {
-                    Button(action: showOnMac) { Label("Show on the Mac", systemImage: "arrow.up.forward.app") }
-                } label: { face } primaryAction: { open() }
-                .menuStyle(.button)
-            } else {
-                Button(action: open) { face }
-            }
-        }
+        Button {
+            // The hold has done its job; its release is not a tap.
+            if heldNow { heldNow = false; return }
+            open()
+        } label: { face }
         .buttonStyle(PressStyle())
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+            guard let showOnMac else { return }
+            heldNow = true; held += 1; showOnMac()
+            // If the release never comes as a tap (the finger slid off), the next tap is a tap again.
+            Task { try? await Task.sleep(nanoseconds: 3_000_000_000); heldNow = false }
+        }, isEnabled: showOnMac != nil)
+        .haptic(.thunk, trigger: held)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("tile." + title)
         .accessibilityAction(named: "Show the past 24 hours", open)
+        .accessibilityAction(named: "Show on the Mac") { showOnMac?() }
     }
 }
 

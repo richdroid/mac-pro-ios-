@@ -1,6 +1,6 @@
 dash-tiles|tap tile.Temperatures;tap Dashboard;tap "tile.Mac Pro";tap Status;tap Dashboard;tap Dashboard|-tab 6
 dash-crosstab|tap tile.CPU;tap Dashboard;tap tile.Storage;tap Status;tap Status;tap Dashboard|-tab 0
-dash-hold|longpress tile.Storage 1.2;tap "Show on the Mac"|-tab 6
+dash-hold|longpress tile.Processes 1.0;tap tile.Processes|-tab 6
 dash-keys|tap key.Show;tap key.Glance;tap key.Glance;tap key.Sleep;tap key.Wake|-tab 6 -pose consolebehind
 dash-start|tap key.Start|-tab 6 -pose consoleoff
 dash-fail|tap key.Hide|-tab 6 -pose consolefail
