@@ -276,7 +276,7 @@ enum TVIsland {
     // listen(), as an app-made card's does, so its pushes keep it true and end it. Begun at every launch, background
     // launches included, as iOS asks.
     private static var startsWatched = false
-    @MainActor private static var latestStart = ""
+    nonisolated(unsafe) private static var latestStart = ""
     static func watchStarts() {
         // Not for the build's staged launches (an address or a pose given on launch): no Mac there to hand a token to.
         let args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
