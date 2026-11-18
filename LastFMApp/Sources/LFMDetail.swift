@@ -79,17 +79,27 @@ struct StoryFigures: View {
     let story: Story?
     let noun: String               // "artists", "albums", "tracks"
     var extra: [(String, String)] = []
+    // The big "your plays" alone, the grid alone, or both (beside a cover upright the grid goes under it, full width).
+    enum Part { case all, hero, grid }
+    var part: Part = .all
     var body: some View {
         let st = story
         VStack(alignment: .leading, spacing: S.inner) {
+            if part != .grid { hero(st) }
+            if part != .hero { grid(st) }
+        }
+    }
+    @ViewBuilder private func hero(_ st: Story?) -> some View {
             VStack(alignment: .leading, spacing: S.pair) {
                 // Its place held until known, never a big dash (review 2026-11-14, item 4); none yet is a first listen.
                 Text(st.map { $0.plays > 0 ? number($0.plays) : "first listen" } ?? "0").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
-                    .lineLimit(1).minimumScaleFactor(0.6).contentTransition(.numericText())
+                    .lineLimit(1).minimumScaleFactor(0.6)
                 Text(st?.plays == 1 ? "your play" : "your plays").font(.title3.weight(.light)).foregroundStyle(S.soft).opacity(st?.plays == 0 ? 0 : 1)
             }
             .opacity(st == nil ? 0 : 1).animation(.easeOut(duration: 0.2), value: st == nil)
             .accessibilityElement(children: .combine)
+    }
+    @ViewBuilder private func grid(_ st: Story?) -> some View {
             if let st, st.plays > 0 {
                 FigureGrid(items: [
                     st.rank.map { ("#\(number($0))", "of your \(number(st.of)) \(noun)") },
@@ -100,7 +110,6 @@ struct StoryFigures: View {
             } else if !extra.isEmpty {
                 FigureGrid(items: extra)
             }
-        }
     }
 }
 
@@ -120,9 +129,17 @@ struct PageHead<Byline: View>: View {
             HubTitle(text: title, size: 72)
             Group {
                 if wide && !pane {
-                    HStack(alignment: .top, spacing: S.figures) {
-                        BigCover(ref: ref, zoom: nil).frame(width: 280)
-                        VStack(alignment: .leading, spacing: S.inner) { byline(); figures }
+                    // Beside the cover: what it is and his plays; under it, the rest across the page's width (one
+                    // column of seven beside it left 300 pt of nothing under the cover; review 2026-11-14, item 10).
+                    VStack(alignment: .leading, spacing: S.section) {
+                        HStack(alignment: .top, spacing: S.figures) {
+                            BigCover(ref: ref, zoom: nil).frame(width: 280)
+                            VStack(alignment: .leading, spacing: S.inner) {
+                                byline()
+                                StoryFigures(story: story, noun: noun, extra: extra, part: .hero)
+                            }
+                        }
+                        StoryFigures(story: story, noun: noun, extra: extra, part: .grid)
                     }
                 } else {
                     VStack(alignment: .leading, spacing: S.inner) {

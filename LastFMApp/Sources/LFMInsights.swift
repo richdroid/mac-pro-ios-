@@ -397,6 +397,52 @@ struct DiscoveriesSection: View {
 
 // MARK: - Month by month, against his median
 
+// The months as bars, the last three years in view and the rest a scroll back.
+private struct MonthBars: View {
+    let all: [(m: Int, n: Int)]
+    let first: Int
+    let median: Int
+    private struct Bar: Identifiable { let id: Int; let x0: Double; let x1: Double; let n: Int; let above: Bool }
+    var body: some View {
+        // A month is a span on a continuous axis: a ratio width there has no unit to be a ratio of and draws nothing
+        // (run 26 showed only the usual line), so each bar is its own 0.7-month span.
+        let bars = all.map { x -> Bar in
+            let c = Double(x.m - first)
+            return Bar(id: x.m, x0: c - 0.35, x1: c + 0.35, n: x.n, above: x.n >= median)
+        }
+        let years: [Double] = all.filter { $0.m % 12 == 0 }.map { Double($0.m - first) }
+        let count = Double(all.count)
+        let shown = Double(min(36, all.count))
+        let start = Double(max(0, all.count - 36)) - 0.5
+        return Chart {
+            ForEach(bars) { b in
+                RectangleMark(xStart: .value("Month", b.x0), xEnd: .value("Month", b.x1), yStart: .value("Plays", 0), yEnd: .value("Plays", b.n))
+                    .foregroundStyle(b.above ? S.accent : S.accent.opacity(0.45))
+                    .cornerRadius(2)
+            }
+            RuleMark(y: .value("Usual", median))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [3, 4]))
+        }
+        .chartScrollableAxes(.horizontal)
+        .chartXScale(domain: -0.5...(count - 0.5))
+        .chartXVisibleDomain(length: shown)
+        .chartScrollPosition(initialX: start)
+        .chartXAxis {
+            AxisMarks(values: years) { v in
+                AxisValueLabel { Text(yearLabel(v.as(Double.self))).font(.caption2.weight(.medium)).foregroundStyle(S.soft) }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
+                AxisGridLine().foregroundStyle(.white.opacity(0.08))
+                AxisValueLabel().foregroundStyle(S.soft).font(.caption2)
+            }
+        }
+    }
+    private func yearLabel(_ v: Double?) -> String { String((first + Int((v ?? 0).rounded())) / 12) }
+}
+
 struct VolumeCard: View {
     private var store: Store { Store.shared }
     var body: some View {
@@ -413,22 +459,7 @@ struct VolumeCard: View {
                         if let b = busiest { Figure(value: String(format: "%.1f×", Double(b.n) / Double(d.median)), label: "busiest, \(monthShort(b.m))", size: 30) }
                         Spacer(minLength: 0)
                     }
-                    Chart {
-                        ForEach(all, id: \.m) { x in
-                            BarMark(x: .value("Month", x.m - first), y: .value("Plays", x.n), width: .ratio(0.7))
-                                .foregroundStyle(x.n >= d.median ? S.accent : S.accent.opacity(0.45)).cornerRadius(2)
-                        }
-                        RuleMark(y: .value("Usual", d.median)).foregroundStyle(.white.opacity(0.7)).lineStyle(StrokeStyle(lineWidth: 1.2, dash: [3, 4]))
-                    }
-                    .chartScrollableAxes(.horizontal)
-                    .chartXVisibleDomain(length: min(36, all.count))
-                    .chartScrollPosition(initialX: max(0, all.count - 36))
-                    .chartXAxis {
-                        AxisMarks(values: all.filter { $0.m % 12 == 0 }.map { $0.m - first }) { v in
-                            AxisValueLabel { Text(String((first + (v.as(Int.self) ?? 0)) / 12)).font(.caption2.weight(.medium)).foregroundStyle(S.soft) }
-                        }
-                    }
-                    .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(.white.opacity(0.08)); AxisValueLabel().foregroundStyle(S.soft).font(.caption2) } }
+                    MonthBars(all: all, first: first, median: d.median)
                     .frame(height: 160)
                     .accessibilityLabel("Plays each month. Your usual month is \(d.median) plays.")
                     HStack(spacing: 16) {

@@ -23,23 +23,26 @@ struct StartTab: View {
                         VStack(alignment: .leading, spacing: S.head) { HubTitle(text: ProfileHead.name, size: 80, least: 0.3); stats(wide: false) }.padding(.top, S.head)
                     }
                 } right: {
-                    Pager(.panorama, page: Binding(get: { max(page, 1) }, set: { page = $0 }), top: top,
+                    Pager(.pivot, page: Binding(get: { max(page, 1) }, set: { page = $0 }), top: top,
                           panels: [nowPanel(.stage), lately, story])
                 }
             } else {
-                Pager(.panorama, title: ProfileHead.name, page: $page, top: top,
-                      panels: [Panel(0, "") { stats(wide: size == .regular && !sideways) }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
+                // A pivot, its four names across the top, his own first: every section one tap away, as Charts and
+                // Library are (it was a panorama whose other sections only a swipe could find; Richard, 2026-11-18:
+                // "its almost impossible to use in its current state").
+                Pager(.pivot, page: $page, top: top,
+                      panels: [Panel(0, ProfileHead.name) { stats(wide: size == .regular && !sideways, strip: true) }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
         .onChange(of: links.panel) { _, p in if let p { page = p; links.panel = nil } }
     }
 
-    private func stats(wide: Bool) -> some View {
+    private func stats(wide: Bool, strip: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: S.section) {
             ProfileHead().padding(.horizontal, S.margin)
-            // The first read, high on the page while it runs: the moment the app is reading his years.
-            if !sync.complete { YearsSection() }
+            // What's on (or the last song) the moment the app opens, a tap from the rest of today.
+            if strip { NowStrip { withAnimation(.snappy(duration: 0.4)) { page = 1 } }.padding(.horizontal, S.margin) }
             if wide {
                 // Open upright there's room beside the count: today so far and who's on repeat (it was one number in
                 // half a page; review 2026-11-14, item 21).
@@ -53,6 +56,8 @@ struct StartTab: View {
                 Totals().padding(.horizontal, S.margin)
             }
             StreakCard().padding(.horizontal, S.margin)
+            // The first read, while it runs, under his figures rather than over them: his stats come first.
+            if !sync.complete { YearsSection() }
             PaceCard().padding(.horizontal, S.margin)
             MilestoneCard().padding(.horizontal, S.margin)
             TimeCard()
@@ -109,6 +114,44 @@ struct StartTab: View {
                 VolumeCard()
                 CarryCard()
             }
+        }
+    }
+}
+
+// The song on now, or the last one, in a line under his face: what he most often opens the app to see, without a
+// swipe. Tapping it goes to the rest of today (the hero, his day, every play).
+struct NowStrip: View {
+    let go: () -> Void
+    private var store: Store { Store.shared }
+    var body: some View {
+        if let s = store.hero {
+            Button(action: go) {
+                HStack(spacing: S.gap) {
+                    ArtView(s.art, px: 156, corner: 6).frame(width: S.art, height: S.art)
+                    VStack(alignment: .leading, spacing: S.pair / 2) {
+                        HStack(spacing: 6) {
+                            if s.nowPlaying {
+                                Image(systemName: "waveform").symbolEffect(.variableColor.iterative, options: .repeating)
+                                Text("Now playing")
+                            } else {
+                                Image(systemName: "clock.arrow.circlepath")
+                                Text("Played \(when(s.date))")
+                            }
+                        }
+                        .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                        Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
+                }
+                .padding(.vertical, 10).padding(.horizontal, 12)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(Press())
+            .accessibilityElement(children: .combine)
+            .accessibilityHint("Shows today")
         }
     }
 }

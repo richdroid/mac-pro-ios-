@@ -71,8 +71,9 @@ struct Pager: View {
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     if look == .pivot {
-                        PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw) { i in
-                            withAnimation(.snappy(duration: 0.4)) { position = i }
+                        PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw,
+                                     current: panels.firstIndex { $0.id == page } ?? 0) { i in
+                            withAnimation(.snappy(duration: 0.4)) { position = panels[i].id }
                         }
                         // The names run on to the right and fade out before the page's edge: never a word cut at the
                         // side bar or lying under the camera (review 2026-11-14, item 7).
@@ -249,40 +250,43 @@ private struct PanoramaTitle: View {
     }
 }
 
-// A pivot's names across the top: the one he's on at the margin, full white; the rest after it, dimmed, running off the
-// edge. They slide as the pages do, each name reaching the margin as its page lands. Tapping one goes to it.
+// A pivot's names across the top: the one he's on full white, the rest dimmed, every one of them a button that stays
+// where he can reach it. They used to slide so the current name sat at the margin and the ones passed faded to nothing,
+// which left no way back but a swipe and hid "all time" and "loved" off the edge (Richard, 2026-11-18: "its almost
+// impossible to use in its current state"). Now the row scrolls on its own to keep the name he's on in view, with the
+// one before it still showing at the left, and runs off the right edge with a fade when there are more.
 private struct PivotHeaders: View {
     let names: [String]
     let motion: PagerMotion
     let pw: CGFloat
+    let current: Int
     let choose: (Int) -> Void
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     var body: some View {
         let size = 40 * min(max(k, 0.9), 1.2)
-        let gap: CGFloat = 20
-        let widths = names.map { textWidth($0, size: size, tracking: -0.8, weight: -0.4) }
-        let starts = widths.indices.map { i in widths.prefix(i).reduce(0, +) + gap * CGFloat(i) }
         let f = max(0, min(CGFloat(names.count - 1), motion.x / pw))
-        let i0 = Int(f.rounded(.down)), i1 = min(i0 + 1, names.count - 1)
-        let t = f - CGFloat(i0)
-        let shift = starts[i0] * (1 - t) + starts[i1] * t
-        HStack(alignment: .firstTextBaseline, spacing: gap) {
-            ForEach(names.indices, id: \.self) { i in
-                let near = max(0, 1 - abs(CGFloat(i) - f))
-                // The ones already passed fade as they leave, so no half a word waits at the left edge.
-                let gone = CGFloat(i) < f ? min(1, f - CGFloat(i)) : 0
-                Button { choose(i) } label: {
-                    Text(names[i]).font(.system(size: size, weight: .light)).tracking(-0.8).fixedSize()
-                        .foregroundStyle(.white.opacity((0.36 + 0.6 * near) * (1 - gone)))
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 22) {
+                    ForEach(names.indices, id: \.self) { i in
+                        let near = max(0, 1 - abs(CGFloat(i) - f))
+                        Button { choose(i) } label: {
+                            Text(names[i]).font(.system(size: size, weight: .light)).tracking(-0.8).fixedSize()
+                                .foregroundStyle(.white.opacity(0.42 + 0.56 * near))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(i)
+                        .accessibilityAddTraits(i == current ? .isSelected : [])
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(near > 0.5 ? .isSelected : [])
+                .padding(.leading, S.margin - 3).padding(.trailing, 48)
             }
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled(false)
+            .onAppear { proxy.scrollTo(max(0, current - 1), anchor: .leading) }
+            .onChange(of: current) { _, i in withAnimation(.snappy(duration: 0.35)) { proxy.scrollTo(max(0, i - 1), anchor: .leading) } }
         }
-        .fixedSize()
-        .offset(x: S.margin - 3 - shift)
-        // Both bounds: with only a maximum the row took its own width and widened the pivot past the display.
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        .frame(height: ceil(size * 1.2))
+        .frame(height: ceil(size * 1.25))
     }
 }

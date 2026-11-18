@@ -214,19 +214,15 @@ struct CollageBody: View {
                     ForEach(0..<5, id: \.self) { i in
                         let c = i < entry.week.count ? entry.week[i] : nil
                         Link(destination: c.map { LinkScheme.album($0.artist, $0.album) } ?? LinkScheme.charts("week")) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                ZStack(alignment: .bottomLeading) {
-                                    WArt(cover: c, data: entry.image(c), corner: 6).aspectRatio(1, contentMode: .fit)
-                                        .overlay(alignment: .bottomLeading) {
-                                            // A dark corner under the numeral, so it reads on any cover.
-                                            RadialGradient(colors: [.black.opacity(0.5), .clear], center: .bottomLeading, startRadius: 0, endRadius: 46)
-                                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                        }
-                                    Text("\(i + 1)").font(.system(size: 30, weight: .light)).foregroundStyle(.white)
-                                        .shadow(color: .black.opacity(0.6), radius: 4).offset(x: 5, y: -1).widgetAccentable()
+                            // The rank off the cover, beside his plays under it: a thin numeral over busy art could
+                            // not be read ("3" on the dots; review 2026-11-14, item 8, still so in run 26).
+                            VStack(alignment: .leading, spacing: 5) {
+                                WArt(cover: c, data: entry.image(c), corner: 6).aspectRatio(1, contentMode: .fit)
+                                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                    Text("\(i + 1)").font(.system(size: 17, weight: .semibold)).monospacedDigit().foregroundStyle(.white).widgetAccentable()
+                                    Text(c.map { "\($0.plays)" } ?? " ").font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(WS.soft)
                                 }
-                                Text(c.map { "\($0.plays)" } ?? " ").font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(WS.soft)
-                                    .padding(.top, 4)
+                                .lineLimit(1)
                             }
                         }
                     }

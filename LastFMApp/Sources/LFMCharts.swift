@@ -303,7 +303,7 @@ struct ChartsTab: View {
                 HStack(alignment: .lastTextBaseline, spacing: S.figures) {
                     VStack(alignment: .leading, spacing: S.pair) {
                         Text(number(s.plays)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
-                            .lineLimit(1).minimumScaleFactor(0.6).contentTransition(.numericText())
+                            .lineLimit(1).minimumScaleFactor(0.6)
                         Text("plays").font(.title3.weight(.light)).foregroundStyle(S.soft)
                     }
                     if let c = s.change {

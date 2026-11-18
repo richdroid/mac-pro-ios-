@@ -73,35 +73,18 @@ func textWidth(_ s: String, size: CGFloat, tracking: CGFloat = 0, weight: CGFloa
     return ceil((s as NSString).size(withAttributes: [.font: f, .kern: tracking]).width)
 }
 
-// A figure that counts up to itself the first time it's shown after launch (never again on a return, so a tab come
-// back to is exactly as it was), and rolls to a new value when one arrives.
+// A figure, shown at its value at once. It used to count up the first time it was shown and roll when it changed;
+// Richard, 2026-11-18: "i hate the running total scrobble thing how the number goes up". A new value simply replaces
+// the old one. (The key is kept so every call site reads the same.)
 struct Counting: View {
     let value: Int
     let key: String
     var format: (Int) -> String = number
-    @State private var shown: Double
-    @MainActor static var counted: Set<String> = []
     init(_ value: Int, key: String, format: @escaping (Int) -> String = number) {
         self.value = value; self.key = key; self.format = format
-        // Counted up over its last tenth, never from nothing: a first frame caught mid-count must not read "0 scrobbles",
-        // a zero he doesn't have (review 2026-11-14, item 3).
-        _shown = State(initialValue: Counting.counted.contains(key) ? Double(value) : (Double(value) * 0.9).rounded(.down))
     }
     var body: some View {
-        Rolling(value: shown, format: format)
-            .onAppear {
-                guard !Counting.counted.contains(key) else { shown = Double(value); return }
-                Counting.counted.insert(key)
-                withAnimation(.timingCurve(0.16, 0.8, 0.3, 1, duration: 1.15).delay(0.1)) { shown = Double(value) }
-            }
-            .onChange(of: value) { _, v in withAnimation(.smooth(duration: 0.6)) { shown = Double(v) } }
-            .accessibilityLabel(format(value))
-    }
-    private struct Rolling: View, Animatable {
-        var value: Double
-        let format: (Int) -> String
-        var animatableData: Double { get { value } set { value = newValue } }
-        var body: some View { Text(format(Int(value.rounded()))) }
+        Text(format(value)).transaction { $0.animation = nil }
     }
 }
 

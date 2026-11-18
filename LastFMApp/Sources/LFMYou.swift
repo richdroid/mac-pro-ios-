@@ -347,11 +347,11 @@ struct YearsSection: View {
                         trailing: sync.complete ? nil : "\(Int((sync.fraction * 100).rounded(.down)))%")
             VStack(alignment: .leading, spacing: S.inner) {
                 if !sync.complete {
-                    VStack(alignment: .leading, spacing: S.pair) {
-                        Text(number(sync.read)).font(.system(size: 34, weight: .light)).monospacedDigit().foregroundStyle(.white).contentTransition(.numericText())
-                        Text(sync.total > 0 ? "of \(number(sync.total)) scrobbles, newest first" : "scrobbles").font(.subheadline).foregroundStyle(S.soft)
-                    }
-                    .animation(.snappy, value: sync.read)
+                    // No running count: a number ticking up through a few minutes of reading is noise (Richard,
+                    // 2026-11-18: "i hate the running total scrobble thing how the number goes up"). How far back it
+                    // has reached, in words, and the percentage in the head.
+                    Text(reached <= last ? "Read back to \(reached) so far, newest first." : "Starting with your newest plays.")
+                        .font(.subheadline).foregroundStyle(S.soft)
                     if let since = sync.stuckSince, Date().timeIntervalSince(since) > 25 {
                         Text("Waiting for Last.fm to answer. It carries on by itself.").font(.subheadline).foregroundStyle(.white.opacity(0.85))
                     }
@@ -383,7 +383,7 @@ struct YearsSection: View {
                         }
                     }
                     .frame(height: g.size.height, alignment: .bottom)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.8), value: sync.read)
+                    .animation(.easeOut(duration: 0.3), value: reached)
                     .animation(.snappy(duration: 0.18), value: held)
                     .holdToScrub { pt in
                         guard let pt else { held = nil; return }

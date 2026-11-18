@@ -333,13 +333,20 @@ final class MockLastFM: @unchecked Sendable {
             while start + 604800 <= nowUts { list.append(["from": "\(start)", "to": "\(start + 604800)"]); start += 604800 }
             return ["weeklychartlist": ["chart": list]]
         case "user.getlovedtracks":
-            var seen = Set<Int>(), list: [[String: Any]] = []
+            // Loved soon after he first heard it (its first play plus a few days), newest love first, as Last.fm lists
+            // them: dated by the latest play every row read "Today" (run 26), which real loves never would.
+            var first: [Int: Play] = [:]
             for p in plays where loved(p) {
                 let key = p.artist * 4096 + p.album * 64 + p.track
-                guard seen.insert(key).inserted else { continue }
-                let a = artists[p.artist], al = a.albums[p.album]
-                list.append(["name": al.tracks[p.track], "artist": ["name": a.name], "image": image(al.art), "date": ["uts": "\(p.uts)"]])
+                if let f = first[key], f.uts <= p.uts { continue }
+                first[key] = p
             }
+            let list: [[String: Any]] = first.values.map { p -> (Int, Play) in (min(nowUts - 3600, p.uts + (p.track % 9) * 86400 + 5400), p) }
+                .sorted { $0.0 > $1.0 }
+                .map { (when, p) in
+                    let a = artists[p.artist], al = a.albums[p.album]
+                    return ["name": al.tracks[p.track], "artist": ["name": a.name], "image": image(al.art), "date": ["uts": "\(when)"]]
+                }
             let (pg, limit) = page(params)
             let slice = Array(list.dropFirst((pg - 1) * limit).prefix(limit))
             return ["lovedtracks": ["track": slice, "@attr": ["total": "\(list.count)", "totalPages": "\(max(1, (list.count + limit - 1) / limit))", "page": "\(pg)"]]]
