@@ -930,11 +930,11 @@ struct HomeTab: View {
     var octLift: CGFloat { 58 * k + 15 }
     // The snooze ring stands this far above the octopus's top: its extra size, its 2 pt lift and half its 5 pt stroke.
     var ringRise: CGFloat { ringSize - octHeight + 2 + 2.5 }
-    // Snoozed, the octopus and device drop just enough that the ring's top keeps the same 6 pt clear of the wordmark.
-    // Read straight from the ring, so the drop moves in the very transaction (and spring) that changed it, with the card's
-    // buttons, rather than starting a frame later from an onChange.
+    // The room the snooze ring needs above the octopus is always kept, so the ring comes and goes over a still stage: it
+    // used to be made only while snoozed, and the octopus, device and caption dropped about 20 pt on Snooze and came back
+    // on Stop (gate, 11-18). The ring's top keeps the same 6 pt clear of the wordmark.
     var snoozeK: CGFloat { snoozing ? 1 : 0 }
-    var snoozeRoom: CGFloat { max(0, ringRise + Self.clearance - restGap) * snoozeK }
+    var snoozeRoom: CGFloat { max(0, ringRise + Self.clearance - restGap) }
     // From the octopus's top up to the wordmark's foot.
     var wordGap: CGFloat { restGap + snoozeRoom }
     // How high a bubble may rise, from the octopus's centre: fully gone 8 pt below the wordmark's foot (the y's tail
@@ -1297,7 +1297,7 @@ struct HomeTab: View {
                             // Level with the device, not the wordmark: the controls are the Chumby's, so they start where its
                             // picture does, and the two panes read as one (Richard, 2026-11-09, open flat: "the stuff on the
                             // right side is like too far up"). The same sum as the stage's top padding, at rest.
-                            Color.clear.frame(height: Self.wordTop + Self.wordHeight + restGap + octLift)
+                            Color.clear.frame(height: Self.wordTop + Self.wordHeight + wordGap + octLift)
                             controls
                             more.padding(.top, Self.sectionGap)
                         }.padding(.horizontal, 12)
