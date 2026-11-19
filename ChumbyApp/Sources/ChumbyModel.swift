@@ -586,7 +586,7 @@ final class ChumbyModel: ObservableObject {
         withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Stopping…" }
         guard let api else { ringWorking = nil; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
+            let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
             hold(0)
             withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
             switch out {
@@ -620,7 +620,7 @@ final class ChumbyModel: ObservableObject {
         hold(RingDesk.patience + 2)
         guard let api else { ringWorking = nil; withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
+            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
             hold(0)
             // "Snoozing…" giving way and the card turning snoozed are one change in the card's one spring, so Stop widens
             // into Snooze's room with it rather than in a frame (gate, 11-18).

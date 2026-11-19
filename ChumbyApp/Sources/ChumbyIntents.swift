@@ -331,7 +331,9 @@ enum ChumbyRingCard {
     }
     // Stop or Snooze pressed on this phone and taken: the Mac is told, so it doesn't put a "Snoozed" or "over" notice in
     // place of the one this phone has already put away (push.js, ringRestate). Only a signed build knows the Mac.
-    static func handled() async {
+    static func handled() async { await post(["kind": "ring-handled"]) }
+    static func diag(_ fields: [String: Any]) async { await post(fields.merging(["kind": "ring-diag"]) { a, _ in a }) }
+    private static func post(_ fields: [String: Any]) async {
         guard let bundle = Bundle.main.bundleIdentifier, let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String,
               let base = URL(string: mac), let host = base.host,
               let url = URL(string: mac.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/push/token") else { return }
@@ -339,7 +341,7 @@ enum ChumbyRingCard {
         r.setValue("\(base.scheme ?? "https")://\(host)\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash")
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        r.httpBody = try? JSONSerialization.data(withJSONObject: ["app": "chumby", "bundle": bundle, "kind": "ring-handled"])
+        r.httpBody = try? JSONSerialization.data(withJSONObject: fields.merging(["app": "chumby", "bundle": bundle]) { a, _ in a })
         _ = try? await URLSession.shared.data(for: r)
     }
     // The ring's notification, by what the Mac marked it with (its identifier is Apple's to choose).
@@ -367,6 +369,7 @@ enum ChumbyRingCard {
 #else
 enum ChumbyRingCard {
     static func handled() async {}
+    static func diag(_ fields: [String: Any]) async {}
     static func over() async {}
     static func show(_ s: ChumbyRingAttributes.ContentState) async {}
     static func change(_ edit: (inout ChumbyRingAttributes.ContentState) -> Void) async {}
@@ -394,10 +397,17 @@ enum RingOutcome: Equatable {
 }
 actor RingDesk {
     static let shared = RingDesk()
+    // What's ringing, read for a confirmation: the Chumby's own a=ring (answers at once, never kept by the Mac; 11-18),
+    // or, from a Chumby without it, a=sys. Both carry the hook's line as "ring".
+    struct RingLine: Decodable { let ring: String }
+    static func ringLine(_ api: ChumbyAPI) async throws -> (data: Data, age: Double) {
+        if let r = try? await api.raw("ring"), (try? JSONDecoder().decode(RingLine.self, from: r.data)) != nil { return r }
+        return try await api.raw("sys")
+    }
     enum Kind: String { case stop = "ringoff", snooze = "ringsnooze" }
     private var running: (kind: Kind, at: Date, id: UUID, task: Task<RingOutcome, Never>)?
-    // How long the Chumby is given to show the change: its hook notes a stop or snooze within 2 s, and a reading takes it 3
-    // to 5 s (the Mac's copy is marked old by the press and read again).
+    // How long the Chumby is given to show the change: its hook notes a stop or snooze within 2 s, and a=ring answers in
+    // well under a second on either route (measured 11-18: 0.2 s at home, 0.5 s through the Mac).
     static let patience: TimeInterval = 14
     // `send` and `read` default to the routes every intent uses; the app's own page passes its own connection.
     func press(_ kind: Kind, send: (@Sendable (String) async throws -> Void)? = nil, read: (@Sendable () async throws -> (data: Data, age: Double))? = nil) async -> RingOutcome {
@@ -410,7 +420,7 @@ actor RingDesk {
             // snooze has landed (it ends the snooze for good) or not (it stops the ring).
         }
         let send = send ?? { c in try await chumbyTry { try await $0.cmd(c) } }
-        let read = read ?? { try await chumbyTry { try await $0.raw("sys") } }
+        let read = read ?? { try await chumbyTry { try await RingDesk.ringLine($0) } }
         let id = UUID(), task = Task { await Self.run(kind, send: send, read: read) }
         running = (kind, Date(), id, task)
         let out = await task.value
@@ -423,8 +433,9 @@ actor RingDesk {
         catch ChumbyError.message("not delivered") { return .nothingRinging }
         catch { return .failed(AlarmWriter.explain(error)) }
         while Date().timeIntervalSince(sent) < patience {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard let r = try? await read(), let sys = try? JSONDecoder().decode(Sys.self, from: r.data) else { continue }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard let r = try? await read(), let line = try? JSONDecoder().decode(RingLine.self, from: r.data) else { continue }
+            var sys = Sys(); sys.ring = line.ring
             // Only a reading taken after the press says anything about it.
             guard r.age < Date().timeIntervalSince(sent) - 0.5 else { continue }
             switch (kind, sys.ringing) {
@@ -444,9 +455,19 @@ actor RingDesk {
 // confirmed, is said on the card with the keys back. Each answers nil when done, or why not.
 enum ChumbyRingActions {
     static let noticeID = "chumby-ring"
-    @discardableResult static func stop() async -> String? {
+    // Where a press came from and how it ended, to the Mac's log ("ring: phone ..."), so a press on the Lock Screen that
+    // never arrives, or arrives and fails, can be told apart (Richard, 11-18: "i dont want to have to unlock").
+    static func report(_ from: String, _ kind: String, _ out: RingOutcome, since: Date) async {
+        let how: String
+        switch out { case .confirmed: how = "confirmed"; case .nothingRinging: how = "nothing ringing"; case .unconfirmed: how = "unconfirmed"; case .failed(let w): how = "failed: " + w }
+        await ChumbyRingCard.diag(["from": from, "press": kind, "outcome": how, "ms": Int(Date().timeIntervalSince(since) * 1000)])
+    }
+    @discardableResult static func stop(from: String = "card") async -> String? {
+        let began = Date()
         await ChumbyRingCard.change { $0.working = "Stopping…"; $0.problem = nil }
-        switch await RingDesk.shared.press(.stop) {
+        let out = await RingDesk.shared.press(.stop)
+        await report(from, "stop", out, since: began)
+        switch out {
         case .confirmed, .nothingRinging:
             await ChumbyRingCard.over()
             await ChumbyRingCard.handled()
@@ -460,9 +481,12 @@ enum ChumbyRingActions {
             return why
         }
     }
-    @discardableResult static func snooze() async -> String? {
+    @discardableResult static func snooze(from: String = "card") async -> String? {
+        let began = Date()
         await ChumbyRingCard.change { $0.working = "Snoozing…"; $0.problem = nil }
-        switch await RingDesk.shared.press(.snooze) {
+        let out = await RingDesk.shared.press(.snooze)
+        await report(from, "snooze", out, since: began)
+        switch out {
         case .confirmed(let until):
             // Until when: the Chumby's own time; failing that, this alarm's snooze length from now (9 minutes is the
             // Chumby's usual), and the Mac's next word carries the panel's time.

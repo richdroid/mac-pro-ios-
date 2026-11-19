@@ -137,8 +137,10 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
         let over = (info["ring"] as? [String: Any])?["over"] != nil
         if id == ChumbyRingActions.noticeID, !(over && response.actionIdentifier == UNNotificationDefaultActionIdentifier) {
             switch response.actionIdentifier {
-            case Self.ringStop: Task { await self.ringAnswered(ChumbyRingActions.stop(), stop: true); done() }
-            case Self.ringSnooze: Task { await self.ringAnswered(ChumbyRingActions.snooze(), stop: false); done() }
+            // Pressed on a locked phone, the app runs only as long as iOS allows a notification's action; the press asks for
+            // the time a Chumby answer can take (up to ~15 s for its confirmation), so it isn't cut off half way.
+            case Self.ringStop: Task { let t = await Self.keepAwake(); await self.ringAnswered(ChumbyRingActions.stop(from: "notification"), stop: true); done(); await Self.letSleep(t) }
+            case Self.ringSnooze: Task { let t = await Self.keepAwake(); await self.ringAnswered(ChumbyRingActions.snooze(from: "notification"), stop: false); done(); await Self.letSleep(t) }
             case UNNotificationDismissActionIdentifier: done()
             default:
                 // Kept until the page's host is there to take it: a tap that launched the app arrives before any view listens.
@@ -152,6 +154,13 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
         DispatchQueue.main.async { NotificationCenter.default.post(name: Self.opened, object: id) }
         done()
     }
+    #if canImport(UIKit)
+    @MainActor static func keepAwake() -> UIBackgroundTaskIdentifier { UIApplication.shared.beginBackgroundTask(withName: "Chumby ring press") {} }
+    @MainActor static func letSleep(_ t: UIBackgroundTaskIdentifier) { if t != .invalid { UIApplication.shared.endBackgroundTask(t) } }
+    #else
+    static func keepAwake() -> Int { 0 }
+    static func letSleep(_ t: Int) {}
+    #endif
     static let opened = Notification.Name("chumbyOpenedNotification")
     static let openedRing = Notification.Name("chumbyOpenedRing")
     struct RingTap { var hint: ChumbyRingAttributes.ContentState? }

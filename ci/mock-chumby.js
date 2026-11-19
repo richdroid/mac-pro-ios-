@@ -632,6 +632,8 @@ function chumbyScene(q, s) {
     if (a === 'sys') { const n = Math.floor(Date.now() / 1000); return json(scene === 'live' ? { ...live.sys, up: live.sys.up + n % 100000, load: 0.3 + (n % 7) / 10, memFree: live.sys.memFree - (n % 5) * 400, wifi: 60 + (n * 7) % 31 } : live.sys); }
     if (a === 'state') return json(stateNow(live.state));
     if (a === 'chlist' && live.chlist) return json(live.chlist);
+    // The hook's ringing line alone, as the Chumby's a=ring answers it (chumby 11-18).
+    if (a === 'ring') return json({ ok: true, ring: live.sys.ring });
     return false;
   }
   if (scene === 'slow') {
