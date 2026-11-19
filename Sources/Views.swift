@@ -492,49 +492,91 @@ struct RootView: View {
     @ObservedObject private var ota = OTAInstaller.shared
     // His apps, set only when they change: the root never redraws for a reading (StatusStore).
     @ObservedObject private var seeds: SeedStore
-    init(seeds: SeedStore) { _seeds = ObservedObject(wrappedValue: seeds) }
+    init(seeds: SeedStore) {
+        _seeds = ObservedObject(wrappedValue: seeds)
+        // Launched on its side, the rail is there from the first frame, not swapped in for the system's bar after it.
+        #if canImport(UIKit)
+        if let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow ?? ($0 as? UIWindowScene)?.windows.first }).first {
+            _sideways = State(initialValue: Self.isSideways(w.bounds.size))
+        }
+        #endif
+    }
     private var updateCount: Int { seeds.seed.map { UpdatesSection.updates($0).count } ?? 0 }
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
+    // Folded on its side: wider than tall and short (466 pt; open flat is 669 pt, whose system rail holds all six).
+    @State private var sideways = false
+    static func isSideways(_ s: CGSize) -> Bool { s.width > s.height && s.height < 600 }
+    // The tabs, in order, for the system's bar and for the rail drawn on its side alike.
+    // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
+    // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went behind the
+    // gear on Status to keep the bar at six. Dashboard: the Mac's Console on the phone, its screen's keys folded in
+    // (Richard, 2026-11-14: "a version of the dashboard on my phone ... consolidate console into it"). It took the Console
+    // tab's place.
+    static let railItems: [RailItem] = [
+        RailItem(value: 0, title: "Status", symbol: "gauge.with.dots.needle.33percent"),
+        RailItem(value: 1, title: "Apps", symbol: "square.grid.2x2"),
+        RailItem(value: 2, title: "Claude", asset: "ClaudeTab"),
+        RailItem(value: 4, title: "macOS", symbol: "arrow.up.circle"),
+        RailItem(value: 5, title: "Control", symbol: "display"),
+        RailItem(value: 6, title: "Dashboard", symbol: "rectangle.3.group"),
+    ]
+    @ViewBuilder func screen(_ t: Int) -> some View {
+        switch t {
+        case 0: Screen(tab: 0, title: "Status") { StatusTab($0, side: $1) }.id(key(0))
+        case 1: Screen(tab: 1, title: "Apps") { AppsTab($0, side: $1) }.id(key(1))
+        case 2: Screen(tab: 2, title: "Claude") { ClaudeTab($0, side: $1) }.id(key(2))
+        case 4: Screen(tab: 4, title: "macOS", listed: false) { UpgradeTab($0, side: $1) }.id(key(4))
+        case 5: Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5))
+        case 6: Screen(tab: 6, title: "Dashboard") { DashboardTab($0, side: $1) }.id(key(6))
+        default: EmptyView()
+        }
+    }
+    private var tabBinding: Binding<Int> {
+        TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
+            // Back to the tab's own start. With a page open on it, the page goes back the way Back takes it, the
+            // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
+            // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
+            // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
+            let n = model.nav
+            let open = (t == 0 && (n.history != nil || n.processes != nil || n.settingsOpen)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
+                || (t == 6 && (n.dashHistory != nil || n.dashProcesses != nil || n.dashPage != nil))
+            if open {
+                if t == 0 { n.history = nil; n.processes = nil; n.settingsOpen = false }
+                if t == 1 { n.appHistory = nil }
+                if t == 2 { n.sessionScreen = nil }
+                if t == 5 { n.macPage = nil }
+                // The Dashboard's page goes back the way Back takes it; rebuilt instead, its stack lost the page with
+                // no motion and pushed it again at once, as the page was still asked for.
+                if t == 6 { n.dashHistory = nil; n.dashProcesses = nil; n.dashPage = nil }
+            } else {
+                resets[t, default: 0] += 1
+            }
+        }
+    }
     var body: some View {
         let _ = SwipeLog.mark("root body")
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
-                // Back to the tab's own start. With a page open on it, the page goes back the way Back takes it, the
-                // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
-                // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
-                // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
-                let n = model.nav
-                let open = (t == 0 && (n.history != nil || n.processes != nil || n.settingsOpen)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
-                    || (t == 6 && (n.dashHistory != nil || n.dashProcesses != nil || n.dashPage != nil))
-                if open {
-                    if t == 0 { n.history = nil; n.processes = nil; n.settingsOpen = false }
-                    if t == 1 { n.appHistory = nil }
-                    if t == 2 { n.sessionScreen = nil }
-                    if t == 5 { n.macPage = nil }
-                    // The Dashboard's page goes back the way Back takes it; rebuilt instead, its stack lost the page with
-                    // no motion and pushed it again at once, as the page was still asked for.
-                    if t == 6 { n.dashHistory = nil; n.dashProcesses = nil; n.dashPage = nil }
+            Group {
+                // Folded and turned on its side, the system's rail along the edge holds four tabs and puts the rest under
+                // "More" (Dashboard and Control went there). He wants every tab one tap away in every posture (Richard,
+                // 2026-11-19: "never more tabs thing"), so on its side the app draws the rail itself, the system's look
+                // (a glass capsule of icons, the tab in front in the accent colour), all six in it. Every other posture
+                // keeps the system's own bar, which fits all six.
+                if sideways {
+                    SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { $0 == 1 ? updateCount : 0 }) { screen($0) }
                 } else {
-                    resets[t, default: 0] += 1
+                    TabView(selection: tabBinding) {
+                        // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
+                        // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
+                        // elements r squished tg looks ugly").
+                        ForEach(Self.railItems) { it in
+                            Tab(value: it.value) { screen(it.value) } label: { it.label }
+                                // The updates waiting, as a number on the tab, the App Store's way.
+                                .badge(it.value == 1 ? updateCount : 0)
+                        }
+                    }
                 }
-            }) {
-                // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
-                // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
-                // elements r squished tg looks ugly").
-                Tab(value: 0) { Screen(tab: 0, title: "Status") { StatusTab($0, side: $1) }.id(key(0)) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
-                Tab(value: 1) { Screen(tab: 1, title: "Apps") { AppsTab($0, side: $1) }.id(key(1)) } label: { tabLabel("Apps", "square.grid.2x2") }
-                    // The updates waiting, as a number on the tab, the App Store's way.
-                    .badge(updateCount)
-                Tab(value: 2) { Screen(tab: 2, title: "Claude") { ClaudeTab($0, side: $1) }.id(key(2)) } label: { tabLabel("Claude", asset: "ClaudeTab") }
-                // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
-                Tab(value: 4) { Screen(tab: 4, title: "macOS", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("macOS", "arrow.up.circle") }
-                Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
-                // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went
-                // behind the gear on Status to keep the bar at six.
-                // Dashboard: the Mac's Console on the phone, its screen's keys folded in (Richard, 2026-11-14: "a version of the
-                // dashboard on my phone ... consolidate console into it"). It took the Console tab's place.
-                Tab(value: 6) { Screen(tab: 6, title: "Dashboard") { DashboardTab($0, side: $1) }.id(key(6)) } label: { tabLabel("Dashboard", "rectangle.3.group") }
             }
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
@@ -543,6 +585,8 @@ struct RootView: View {
                 Task { await model.refresh() }
             }
         }
+        // The whole window, keyboard or not, so typing never reads as a turn.
+        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { Self.isSideways($0.size) } action: { sideways = $0 } }
         .onAppear { MacPrefs.shareWithWidgets(); AppBadge.set(updateCount) }
         // And on the app's icon on the home screen, like the App Store's.
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }
@@ -892,6 +936,8 @@ struct Screen<Content: View>: View {
                     else { page(.all) }
                 }
             }
+            // Clear of the rail drawn on its side (SideRailTabs); nothing with the system's bar.
+            .railRoom()
             .modifier(TabBarFade())
             .modifier(StatusBarFade())
             .background(groupedBackground.ignoresSafeArea())
@@ -931,17 +977,17 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
-            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6) }
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom() }
             // Settings, behind the gear beside Status's name.
-            .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true) }
+            .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true).railRoom() }
             // All processes, from the tab itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
-            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom() }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom() }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom() }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
             .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 6 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
-                switch p {
+                Group { switch p {
                 case .health: MacHealthView(model: model)
                 case .restart: MacRestartView(model: model)
                 // The Mac as a control surface (MacConsole.swift).
@@ -951,7 +997,8 @@ struct StackPages: ViewModifier {
                 case .storage: StorageView(model: model)
                 case .startup: StartupView(model: model)
                 case .actions: MacActionsView(model: model)
-                }
+                } }
+                .railRoom()
             }
     }
 }
@@ -961,7 +1008,7 @@ struct ProcessesOverHistory: ViewModifier {
     @ObservedObject var nav: NavStore
     @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model) }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom() }
     }
 }
 // A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.

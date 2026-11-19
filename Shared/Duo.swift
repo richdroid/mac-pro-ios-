@@ -496,6 +496,114 @@ func tabLabel(_ title: String, asset: String, fit: CGFloat = 25) -> some View {
     }
 }
 
+// A tab, for the system's bar and for the rail an app draws itself where the system's would overflow into "More".
+struct RailItem: Identifiable {
+    let value: Int
+    let title: String
+    var symbol: String? = nil
+    var asset: String? = nil
+    var id: Int { value }
+    @ViewBuilder var label: some View {
+        if let asset { tabLabel(title, asset: asset) } else { tabLabel(title, symbol ?? "circle") }
+    }
+    // The icon alone, fitted the same as in the system's bar.
+    var icon: Image {
+        #if canImport(UIKit)
+        if let asset { return Image(uiImage: cachedIcon(asset, fit: 25) { UIImage(named: asset) }) }
+        let name = symbol ?? "circle"
+        return Image(uiImage: cachedIcon(name, fit: 25) { UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 60, weight: .regular)) })
+        #else
+        return asset.map { Image($0) } ?? Image(systemName: symbol ?? "circle")
+        #endif
+    }
+}
+
+// How far in from the trailing edge a page keeps clear for the rail SideRailTabs draws (0 with the system's bar).
+private struct SideRailKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues { var sideRail: CGFloat { get { self[SideRailKey.self] } set { self[SideRailKey.self] = newValue } } }
+// A page clear of the drawn rail: its trailing safe area made up to the rail's column, on top of whatever the system
+// already keeps there (a pushed page's Back strip), never twice.
+struct RailRoom: ViewModifier {
+    @Environment(\.sideRail) private var rail
+    @State private var has: CGFloat = 0
+    func body(content: Content) -> some View {
+        if rail > 0 {
+            content
+                .safeAreaPadding(.trailing, max(0, rail - has))
+                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
+        } else {
+            content
+        }
+    }
+}
+extension View { func railRoom() -> some View { modifier(RailRoom()) } }
+
+// Tabs with the rail drawn along the trailing edge, for where the system's own would hold too few and put the rest
+// under "More" (the Duo folded on its side holds four). Never a More list: every tab is in the rail, one tap away.
+// The system's look: a glass capsule of icons at the foot of the side column (the top kept for a pushed page's Back),
+// the tab in front in the accent colour on a soft disc. Tapping the tab in front hands its value back, as TabView does,
+// so TabReset takes it to its start. Each tab once shown is kept, as TabView keeps them, so coming back finds it as left.
+struct SideRailTabs<Content: View>: View {
+    @Binding var selection: Int
+    let items: [RailItem]
+    let badge: (Int) -> Int
+    @ViewBuilder let content: (Int) -> Content
+    @State private var shown: Set<Int> = []
+    @State private var edge: CGFloat = 0
+    @Environment(\.colorScheme) private var scheme
+    static var cell: CGFloat { 44 }
+    static var inset: CGFloat { 5 }
+    static var margin: CGFloat { 10 }
+    var body: some View {
+        ZStack {
+            ForEach(items) { it in
+                let front = it.value == selection
+                if front || shown.contains(it.value) {
+                    content(it.value)
+                        .opacity(front ? 1 : 0)
+                        .allowsHitTesting(front)
+                        .accessibilityHidden(!front)
+                        .zIndex(front ? 1 : 0)
+                }
+            }
+        }
+        .environment(\.sideRail, edge + Self.margin * 2 + Self.cell + Self.inset * 2)
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
+        .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        .overlay(alignment: .bottomTrailing) { rail.padding(.trailing, Self.margin).padding(.bottom, Self.margin + 2) }
+    }
+    private var rail: some View {
+        VStack(spacing: 2) {
+            ForEach(items) { it in
+                let front = it.value == selection
+                Button { selection = it.value } label: {
+                    it.icon
+                        .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                        .frame(width: Self.cell, height: Self.cell)
+                        .background { if front { Circle().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)) } }
+                        .overlay(alignment: .topTrailing) {
+                            let n = badge(it.value)
+                            if n > 0 {
+                                Text("\(n)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+                                    .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
+                                    .background(Color.red, in: Capsule())
+                                    .offset(x: 2, y: 1)
+                            }
+                        }
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(it.title)
+                .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
+                .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        .padding(Self.inset)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .animation(.snappy(duration: 0.25), value: selection)
+    }
+}
+
 // Reading a value off a chart that sits in a scrolling page: rest a finger on it for a moment, then slide. It's the
 // system's own long press, which never holds up the page: a finger that moves before the moment is up was scrolling,
 // and the page has it at once. Once it's held, the page stays still while the finger slides.
