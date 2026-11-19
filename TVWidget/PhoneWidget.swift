@@ -47,7 +47,10 @@ struct PhoneShelfProvider: TimelineProvider {
 
 struct PhoneShelfView: View {
     let entry: PhoneShelfEntry
-    @Environment(\.widgetFamily) private var family
+    // The CI sheet's family (ci/gallery-tv/PhoneSheets.swift): WidgetKit's own can't be set outside a widget.
+    var sheetFamily: WidgetFamily? = nil
+    @Environment(\.widgetFamily) private var widgetFamily
+    private var family: WidgetFamily { sheetFamily ?? widgetFamily }
     static func link(_ i: PhoneShelfEntry.Item) -> URL? {
         var c = URLComponents(); c.scheme = "tvremoteapp"; c.host = "phone"
         c.queryItems = [.init(name: "type", value: i.type), .init(name: "id", value: i.imdb), .init(name: "video", value: i.video), .init(name: "name", value: i.name)]

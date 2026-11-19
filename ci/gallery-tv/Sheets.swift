@@ -172,6 +172,7 @@ struct TVSheets: View {
             writeSheet("tv-lock", scale: 3, lock); names.append("tv-lock")
             writeSheet("tv-standby", standby); names.append("tv-standby")
             writeSheet("tv-controls", controls); names.append("tv-controls")
+            names += PhoneSheets.write()
             print("sheets done")
         }
     }
