@@ -302,7 +302,7 @@ final class RemoteScreen: ObservableObject {
     }
 
     func disconnect() {
-        running = false
+        running = false; macWaking = false   // a wake said on a session that ended never carries into the next open (designer, 11-19)
         liveCheck?.cancel()
         stopMeasuring()
         flushTimer = nil
