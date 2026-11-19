@@ -350,7 +350,7 @@ struct YearsSection: View {
                     // No running count: a number ticking up through a few minutes of reading is noise (Richard,
                     // 2026-11-18: "i hate the running total scrobble thing how the number goes up"). How far back it
                     // has reached, in words, and the percentage in the head.
-                    Text(reached <= last ? "Read back to \(reached) so far, newest first." : "Starting with your newest plays.")
+                    Text(verbatim: reached <= last ? "Read back to \(String(reached)) so far, newest first." : "Starting with your newest plays.")
                         .font(.subheadline).foregroundStyle(S.soft)
                     if let since = sync.stuckSince, Date().timeIntervalSince(since) > 25 {
                         Text("Waiting for Last.fm to answer. It carries on by itself.").font(.subheadline).foregroundStyle(.white.opacity(0.85))
