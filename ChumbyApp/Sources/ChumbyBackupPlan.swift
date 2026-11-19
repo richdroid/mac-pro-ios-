@@ -4,7 +4,7 @@ import Foundation
 // rings; if nothing has stopped or snoozed that ring a few minutes later, the iPhone's own alarm goes off. ChumbyBackupAlarm
 // does the AlarmKit calls; every decision about which rings get a backup, when, and what to cancel or move is made here.
 enum BackupPlan {
-    static let horizon: TimeInterval = 36 * 3600
+    static let horizon: TimeInterval = 7 * 24 * 3600   // a week, so a phone left unopened is still covered
     static let delays = [3, 5, 10]
     static let defaultDelay = 5
 
@@ -20,12 +20,12 @@ enum BackupPlan {
     }
 
     // The rings the Chumby will really make within the horizon (skips and calendar days already worked out by ring(of:)).
-    // Nap and Catch-up are the Chumby's own helpers, which the app treats apart everywhere (isHelper): no backup.
+    // A Nap is a wake-up too and is backed up; Catch-up (the Chumby re-ringing one it missed) is not.
     static func rings(in s: ChumbyState, now: Date, horizon: TimeInterval = BackupPlan.horizon) -> [Ring] {
         var out: [Ring] = []
-        for a in s.alarms where a.isOn && !a.isHelper && !a.isPlaceholder {
+        for a in s.alarms where a.isOn && a.name != "Catch-up" && !a.isPlaceholder {
             var from = now
-            for _ in 0..<4 {
+            for _ in 0..<16 {
                 guard let d = s.ring(of: a, after: from), d <= now.addingTimeInterval(horizon) else { break }
                 out.append(Ring(at: d, name: a.name))
                 from = d.addingTimeInterval(60)

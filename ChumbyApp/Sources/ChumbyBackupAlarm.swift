@@ -26,8 +26,8 @@ private enum Kit {
     static func cancel(_ id: UUID) { try? AlarmManager.shared.cancel(id: id) }
     static var ids: [UUID] { ((try? AlarmManager.shared.alarms) ?? []).map(\.id) }
     static func schedule(_ e: BackupPlan.Entry) async throws {
-        let name = String(BackupPlan.shown(e.name).prefix(40))
-        let title = name.isEmpty ? "Chumby alarm backup" : "Chumby alarm backup: \(name)"
+        let name = BackupPlan.shown(e.name)
+        let title = name.isEmpty ? "Backup alarm" : "Backup alarm · \(name)"
         let alert: AlarmPresentation.Alert
         if #available(iOS 26.1, *) {
             alert = AlarmPresentation.Alert(title: LocalizedStringResource(stringLiteral: title))
@@ -55,6 +55,8 @@ final class ChumbyBackupAlarm: ObservableObject {
 
     enum Status { case off, notAsked, denied, on }
     @Published private(set) var status: Status = .off
+    // the next backup armed, for the setting's line
+    @Published private(set) var next: Date?
 
     var enabled: Bool { UserDefaults.standard.object(forKey: Self.onKey) as? Bool ?? true }
     var delay: Int {
@@ -100,13 +102,16 @@ final class ChumbyBackupAlarm: ObservableObject {
     // What the bridge's quiet push said (see BackupPlan.signal).
     func push(_ userInfo: [AnyHashable: Any]) {
         switch BackupPlan.signal(userInfo, now: Date()) {
-        case .over?: handled()
+        // A ring that's gone is not a ring he dealt with: 11-19 it died after a few beeps. Only his own Stop (in this
+        // app) takes the backup away; the Mac can't tell a Stop on the Chumby from a ring that failed.
+        case .over?: break
         case .snoozed(let name, let until)?: snoozed(name: name, until: until)
         case nil: break
         }
     }
 
     func refreshStatus() {
+        next = entries.map(\.fireAt).filter { $0 > Date() }.min()
         guard enabled else { status = .off; return }
         switch Kit.state {
         case .authorized: status = .on
@@ -141,7 +146,10 @@ final class ChumbyBackupAlarm: ObservableObject {
             do { try await Kit.schedule(e) } catch { kept.removeAll { $0.id == e.id } }
         }
         entries = kept
+        next = kept.map(\.fireAt).filter { $0 > Date() }.min()
     }
+    // Waits for what's queued (a background refresh must finish before iOS suspends the app).
+    func settle() async { await tail?.value }
 }
 
 // Tinker's "iPhone backup alarm": a switch and how long to wait, in Notifications' style.
@@ -152,12 +160,12 @@ struct BackupAlarmSettings: View {
     var denied: Bool { enabled && backup.status == .denied }
     var body: some View {
         Section {
-            Toggle(isOn: $enabled) { TwoLine("iPhone backup alarm", "Rings through Silent if the Chumby alarm isn’t stopped.") }
+            Toggle(isOn: $enabled) { TwoLine("iPhone backup alarm", backup.next.map { "Next: \($0.formatted(date: .omitted, time: .shortened))" } ?? "Rings through Silent if the Chumby alarm isn’t stopped.") }
                 .padding(.trailing, 2)
                 .onChange(of: enabled) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
                 .soloCard(on: !enabled && !denied)
             if enabled {
-                MenuRow(title: "Ring the iPhone after", note: "Minutes after the Chumby alarm starts, or after a snooze ends.", selection: $delay) {
+                MenuRow(title: "Ring the iPhone after", note: "After the Chumby rings, or a snooze ends.", selection: $delay) {
                     ForEach(BackupPlan.delays, id: \.self) { Text("\($0) min").tag($0) }
                 }
                 .onChange(of: delay) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
@@ -169,5 +177,9 @@ struct BackupAlarmSettings: View {
             #endif
         } header: { SectionHead(icon: "alarm.fill", text: "Backup") }
         .task { ChumbyBackupAlarm.shared.refreshStatus() }
+        #if canImport(UIKit)
+        // back from Settings having allowed it: the link goes at once
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in ChumbyBackupAlarm.shared.refreshStatus() }
+        #endif
     }
 }

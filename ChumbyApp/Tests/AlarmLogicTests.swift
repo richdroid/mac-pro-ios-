@@ -394,8 +394,12 @@ do {
     let nap = alarm("Nap", "once", mins(at(2026, 11, 11, 10)))
     let offA = alarm("Weekend", "daily", "480", on: false)
     let far = once("Later", at(2026, 11, 14, 8))
-    let rs = BackupPlan.rings(in: state([daily, cal, nap, offA, far]), now: now)
-    expect(rs.map(\.at) == [at(2026, 11, 11, 13), at(2026, 11, 12, 7)], "36 hours of real rings; nap, off and far-off alarms get none")
+    let rs = BackupPlan.rings(in: state([daily, cal, offA, far]), now: now, horizon: 36 * 3600)
+    expect(rs.map(\.at) == [at(2026, 11, 11, 13), at(2026, 11, 12, 7)], "rings within the horizon; off and far-off alarms get none")
+    let week = BackupPlan.rings(in: state([daily, cal, nap, offA, far, alarm("Catch-up", "once", mins(at(2026, 11, 11, 14)))]), now: now)
+    expect(week.filter { $0.name == "Work" }.count == 7, "a week of a daily alarm: covered while the app stays closed")
+    expect(week.contains { $0.name == "Later" } && !week.contains { $0.name == "Catch-up" }, "a ring days off is covered; Catch-up is not")
+    expect(week.contains { $0.name == "Nap" } == (at(2026, 11, 11, 10) > now), "a nap is a wake-up too")
     let ids = (1...9).map { UUID(uuidString: "00000000-0000-0000-0000-00000000000\($0)")! }
     var n = 0; func mk() -> UUID { n += 1; return ids[n - 1] }
     let r1 = BackupPlan.reconcile(kept: [], wanted: rs, delay: 5, now: now, makeID: mk)

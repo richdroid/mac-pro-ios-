@@ -313,10 +313,10 @@ final class ChumbyModel: ObservableObject {
             // An alarm just ended: what it woke him to goes into Pandora's history song by song, so "Woke up to" (and its
             // widget) reads it again soon after and a few times more, rather than waiting out the usual five minutes.
             if sys.ringing != nil, s.ringing == nil { songsAfterRing() }
-            // Stopped or snoozed on the Chumby, seen fresh: the phone's backup for that ring goes or moves with it.
+            // Snoozed on the Chumby, seen fresh: the phone's backup for that ring moves with it. A ring that's gone keeps
+            // its backup: it may have died rather than been stopped (11-19), and only a Stop here cancels it.
             if fresh {
-                if sys.ringing != nil, s.ringing == nil { ChumbyBackupAlarm.shared.handled(name: sys.ringing?.name) }
-                else if let r = s.ringing, r.snoozed, sys.ringing?.snoozed != true {
+                if let r = s.ringing, r.snoozed, sys.ringing?.snoozed != true {
                     let mins = Double(state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
                     let until = state.ringingNow?.until.flatMap { $0 > Date().timeIntervalSince1970 ? Date(timeIntervalSince1970: $0) : nil } ?? Date().addingTimeInterval(mins * 60)
                     ChumbyBackupAlarm.shared.snoozed(name: r.name, until: until)
