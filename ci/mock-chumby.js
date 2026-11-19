@@ -601,6 +601,8 @@ function chumbyScene(q, s) {
         }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
+        // The volume, applied by the panel about two seconds after the command, as on the real Chumby (11-18).
+        if (a === 'cmd' && qs.get('c') === 'volume') { const v = +qs.get('v'); setTimeout(() => { live.sys.vol = v; }, 2000); }
         // A channel's list saved: kept, and the channel reloaded as the Chumby does (about half a minute, with its readings
         // of what's playing blank for the first seconds), so a film shows the list holding still through it.
         if (a === 'chedit') {
@@ -632,6 +634,8 @@ function chumbyScene(q, s) {
     if (a === 'sys') { const n = Math.floor(Date.now() / 1000); return json(scene === 'live' ? { ...live.sys, up: live.sys.up + n % 100000, load: 0.3 + (n % 7) / 10, memFree: live.sys.memFree - (n % 5) * 400, wifi: 60 + (n * 7) % 31 } : live.sys); }
     if (a === 'state') return json(stateNow(live.state));
     if (a === 'chlist' && live.chlist) return json(live.chlist);
+    // The hook's ringing line alone, as the Chumby's a=ring answers it (chumby 11-18).
+    if (a === 'ring') return json({ ok: true, ring: live.sys.ring });
     return false;
   }
   if (scene === 'slow') {

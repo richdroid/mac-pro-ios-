@@ -270,6 +270,14 @@ final class ChumbyModel: ObservableObject {
             // A copy taken before a Stop the Chumby has since taken still says "ringing": it isn't believed (the Mac's
             // copy can be ten seconds old, twice the hold a Stop puts on readings).
             if s.ringing != nil, let stopped = ringStoppedAt, Date().addingTimeInterval(-r.age) < stopped.addingTimeInterval(2) { s.ring = "" }
+            // A level he just set holds until a reading taken after it says so (Richard, 11-18: "system volume control
+            // doesnt work"): the Mac's copy, read again 0.3 s after the press and kept 10 s, still had the old level, and
+            // the slider sprang back to it once the press's 5 s hold ran out.
+            if let p = volumeSent {
+                if s.vol == p.level { volumeSent = nil }
+                else if Date().timeIntervalSince(p.at) < 15 { s.vol = p.level }
+                else { volumeSent = nil }
+            }
             readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
@@ -525,6 +533,18 @@ final class ChumbyModel: ObservableObject {
             }
         }
     }
+    // The Chumby's volume, set from the phone (Sounds and Home's Playing card, the mute key): shown at once, held until the
+    // Chumby reports it, never sent under an alarm (the ring sets its own volume and puts his back after).
+    private var volumeSent: (level: Int, at: Date)?
+    // False when it wasn't sent (an alarm is ringing): the caller's slider goes back to the Chumby's level.
+    @discardableResult func setVolume(_ v: Int, id: String) -> Bool {
+        let level = min(max(v, 0), 100)
+        if let why = alarmBusy, sys.ringing != nil { fail(id, "Not while \(why)."); return false }
+        volumeSent = (level, Date())
+        if sys.vol != level { sys.vol = level }
+        cmd("volume", String(level), id: id, holdFor: 2)
+        return true
+    }
     // True once the Chumby took it, for a caller that says so.
     @discardableResult func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) -> Task<Bool, Never> {
         // The ones that reload or switch the channel wait out an alarm (alarmBusy).
@@ -586,7 +606,7 @@ final class ChumbyModel: ObservableObject {
         withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Stopping…" }
         guard let api else { ringWorking = nil; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
+            let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
             hold(0)
             withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
             switch out {
@@ -620,7 +640,7 @@ final class ChumbyModel: ObservableObject {
         hold(RingDesk.patience + 2)
         guard let api else { ringWorking = nil; withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
+            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
             hold(0)
             // "Snoozing…" giving way and the card turning snoozed are one change in the card's one spring, so Stop widens
             // into Snooze's room with it rather than in a frame (gate, 11-18).
