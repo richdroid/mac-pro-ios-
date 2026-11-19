@@ -247,16 +247,12 @@ struct SessionTerminal: View {
     // so they sit flush with the answers above and the box below (designer gate, 2026-11-19: a fixed two-row grid ran
     // 16 pt wider than the box folded upright, and past a narrow pane under the rail on its side).
     var keyRows: some View {
-        ViewThatFits(in: .horizontal) {
-            keyGrid(12)
-            keyGrid(6)
-            keyGrid(4)
-        }
-        // 4 pt in each side: the grid's bordered keys drew about 8 pt wider than the answers and the box, folded and on
-        // its side (designer gate 4, 2026-11-19); inset, their edges meet the answers' and the box's.
-        .padding(.horizontal, 4)
-        .frame(maxWidth: .infinity)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        // How many across is chosen from the column's measured width, not by ViewThatFits: the bordered keys' smallest
+        // width (about 54 pt for "esc") let a twelve-across grid overhang the column by 8 pt, and the whole controls stack
+        // shifted right off the terminal's edges (designer gates 4 and 5, 2026-11-19). 56 pt a key leaves no overhang.
+        keyGrid(width >= 12 * 56 + 66 ? 12 : width >= 6 * 56 + 30 ? 6 : 4)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
     func keyGrid(_ across: Int) -> some View {
         let rows = stride(from: 0, to: Self.keys.count, by: across).map { Array(Self.keys[$0..<min($0 + across, Self.keys.count)]) }
