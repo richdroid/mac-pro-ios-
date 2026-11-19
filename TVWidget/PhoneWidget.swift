@@ -62,20 +62,16 @@ struct PhoneShelfView: View {
             if entry.items.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Image(systemName: "play.rectangle").font(.title2).foregroundStyle(TVLook.accent)
-                    Text("Nothing played on this iPhone yet").font(.subheadline.weight(.semibold)).lineLimit(3).minimumScaleFactor(0.85)
-                    Text("Play on iPhone from any film or show.").font(.caption).foregroundStyle(.secondary).lineLimit(2).minimumScaleFactor(0.85)
+                    Text("Nothing played on this iPhone yet").font(.subheadline.weight(.semibold))
+                    Text("Play on iPhone from any film or show.").font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else if family == .systemSmall, let i = entry.items.first {
                 tile(i, big: true).widgetURL(Self.link(i))
             } else {
-                // Always three places: one or two played so far keep a poster's width, not the whole widget's.
                 HStack(spacing: 10) {
-                    ForEach(0..<3, id: \.self) { n in
-                        if entry.items.indices.contains(n) {
-                            let i = entry.items[n]
-                            Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) { tile(i, big: false) }
-                        } else { Color.clear }
+                    ForEach(Array(entry.items.prefix(family == .systemSmall ? 1 : 3).enumerated()), id: \.offset) { _, i in
+                        Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) { tile(i, big: false) }
                     }
                 }
             }
@@ -84,13 +80,9 @@ struct PhoneShelfView: View {
     }
     func tile(_ i: PhoneShelfEntry.Item, big: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            // The poster fills the room the tile is given, never more: loose in the ZStack, a poster filled to the tile's
-            // width came out taller than the tile and pushed its name and time off the bottom (a still, wider, ran into
-            // the tile beside it).
             ZStack(alignment: .bottom) {
                 Color.white.opacity(0.1)
-                    .overlay { if let p = i.poster { Image(tv: p).resizable().widgetAccentedRenderingMode(.fullColor).scaledToFill() } else { Image(systemName: "film").foregroundStyle(.white.opacity(0.5)) } }
-                    .clipped()
+                if let p = i.poster { Image(tv: p).resizable().scaledToFill() } else { Image(systemName: "film").foregroundStyle(.white.opacity(0.5)) }
                 GeometryReader { g in
                     ZStack(alignment: .leading) { Color.white.opacity(0.3); TVLook.accent.frame(width: g.size.width * min(max(i.progress, 0), 1)) }
                 }
