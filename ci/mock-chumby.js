@@ -209,6 +209,8 @@ http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9012, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, true));
 // And that Mac sitting idle: after the 2 x 2 answer nothing on it changes, so it sends nothing until asked again.
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9013, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, 'idle'));
+// The Screen as video (mp-screen): the bridge's H.264 path, replayed from a stream its own helper made.
+http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(9014, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, false, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
@@ -1085,7 +1087,32 @@ function tvReal(q, s, path, query, json) {
 // `slow`, it behaves as the real Mac does over his link (2026-11-07): the whole screen as one ZRLE rectangle, a busy
 // wallpaper so it's about as big as the Mac's, and everything sent at 358 KB/s, the speed his sessions showed.
 // With `sleepy`, the first whole-screen request gets a 2 x 2 rectangle, as from a Mac whose display was asleep.
-function mockScreen(req, sock, slow = false, sleepy = false) {
+// With `video` and a phone that asks ?video=1, it answers as the bridge does with its video helper running: {"video":true}
+// before the Mac's first words, then a stream the real helper made (mac-dash's screen-video.test.js against its own
+// stand-in Mac at 350 KB/s and 45 ms: a page scrolling, a rest, a window dragged, a rest), sent at the times it was
+// sent there and played again from its key picture for as long as the film runs (ci/screen-video.rfb and .json).
+function videoReplay() {
+  if (videoReplay.msgs !== undefined) return videoReplay.msgs;
+  videoReplay.msgs = null;
+  try {
+    const fs = require('fs'), path = require('path');
+    const b = fs.readFileSync(path.join(__dirname, 'screen-video.rfb')), when = new Map(JSON.parse(fs.readFileSync(path.join(__dirname, 'screen-video.json'), 'utf8')));
+    const msgs = [{ at: 0, data: b.subarray(0, 24 + b.readUInt32BE(20)), init: true }];
+    let o = msgs[0].data.length, last = 0;
+    while (o + 16 <= b.length) {
+      const enc = b.readInt32BE(o + 12), w = b.readUInt16BE(o + 8), h = b.readUInt16BE(o + 10);
+      const n = enc === 0x48323634 ? 28 + b.readUInt32BE(o + 24) : enc === -239 ? 16 + w * h * 4 + ((w + 7) >> 3) * h : 16;
+      if (o + n > b.length) break;
+      if (enc === 0x48323634) last = when.get(b.readUInt32BE(o + 16)) ?? last;
+      msgs.push({ at: last, data: b.subarray(o, o + n), key: enc === 0x48323634 && (b[o + 20] & 1) === 1 });
+      o += n;
+    }
+    videoReplay.msgs = msgs;
+    console.log(`mock screen video: ${msgs.length} messages, ${(last / 1000).toFixed(1)} s`);
+  } catch (e) { console.log('mock screen video: no recording,', e.message); }
+  return videoReplay.msgs;
+}
+function mockScreen(req, sock, slow = false, sleepy = false, video = false) {
   // When each step happens, against the film's own launch time in the log, to tell the phone's wait from the stand-in's.
   const opened = Date.now();
   const stamp = what => console.log(`mock screen ${slow ? 'slow' : sleepy || 'plain'} ${what} at ${Date.now()} (+${Date.now() - opened} ms)`);
@@ -1218,7 +1245,21 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
   let ticks = 0;
   const tick = setInterval(() => { if (!slow && sleepy !== 'idle' && (!sleepy || ++ticks % 12 === 0)) scroll += 3; answer(); }, 16);
   const report = setInterval(() => { if (count) console.log(`mock screen: ${Math.round(count / 2)} pictures a second`); count = 0; }, 2000);
-  const stop = () => { clearInterval(tick); clearInterval(report); if (pump) clearInterval(pump); sock.destroy(); };
+  const replay = video && /[?&]video=1/.test(req.url) ? videoReplay() : null;
+  let replayTimer = null;
+  const play = () => {
+    // From the first key picture each time round, at the recorded times, a second's rest between rounds.
+    const from = replay.findIndex(m => m.key), t0 = Date.now() - replay[from].at;
+    let i = from;
+    const next = () => {
+      if (sock.destroyed) return;
+      while (i < replay.length && replay[i].at <= Date.now() - t0) frame(replay[i++].data);
+      if (i >= replay.length) { replayTimer = setTimeout(play, 1000); return; }
+      replayTimer = setTimeout(next, Math.max(1, replay[i].at - (Date.now() - t0)));
+    };
+    next();
+  };
+  const stop = () => { clearInterval(tick); clearInterval(report); clearTimeout(replayTimer); if (pump) clearInterval(pump); sock.destroy(); };
   sock.on('close', stop); sock.on('error', stop);
   later(Buffer.from('RFB 003.008\n'));
   const fromApp = d => {
@@ -1229,6 +1270,14 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       if (stage === 2) {
         if (msgs.length < 1) return;
         msgs = msgs.subarray(1); stage = 3;
+        if (replay) {
+          setTimeout(() => {
+            const said = Buffer.from(JSON.stringify({ video: true }));
+            if (!sock.destroyed) { sock.write(Buffer.from([0x81, said.length])); sock.write(said); }
+            frame(replay[0].data); stamp('server init (video)'); play();
+          }, LAG);
+          continue;
+        }
         const init = Buffer.alloc(28);
         init.writeUInt16BE(W, 0); init.writeUInt16BE(H, 2);
         Buffer.from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).copy(init, 4);
@@ -1242,11 +1291,11 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
         // 250 and 251 are the app's own messages to the bridge (a smooth scroll, and its hello). Read as one byte each,
         // the hello's three zero bytes began a 20-byte message that swallowed every request after it, three bytes out
         // of step for good: the stand-in sent the first four pictures and then nothing, in every film since 2026-11-05.
-        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : t === 250 ? 8 : t === 251 ? 4 : 1;
+        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : t === 250 ? 8 : t === 251 ? 4 : t === 252 ? 8 : 1;
       if (msgs.length < need) return;
       const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
       if (t === 0) bpp = m[4] === 16 ? 16 : 32;
-      if (t === 3) {
+      if (t === 3 && !replay) {
         if (m[1] === 0 && dozing) { dozing = false; if (sleepy === 'idle') sent = scroll; update(0, 0, 2, 2, scroll); }
         else if (m[1] === 0) { count++; sent = scroll; stamp('whole asked'); update(0, 0, W, H, scroll); }
         else { pending++; answer(); }
