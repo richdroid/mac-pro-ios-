@@ -1,0 +1,30 @@
+name: Chumby ring backup compile check
+# Branch-only (chumby-ring-backup-ci): builds Chumby and its widget for the simulator and runs the alarm logic tests.
+# Never merged to main.
+on:
+  push:
+    branches: [chumby-ring-backup-ci]
+permissions:
+  contents: read
+concurrency:
+  group: chumby-ring-backup-ci
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Alarm logic tests
+        run: ci/chumby-tests.sh
+      - name: Build Chumby for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*(RingBackup|backupAfter|ChumbyRingKey)|BUILD" | tail -40
