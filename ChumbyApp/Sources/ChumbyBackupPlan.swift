@@ -106,6 +106,14 @@ enum BackupPlan {
         return Result(entries: entries.filter { $0.id != e.id }, cancel: [e], add: [])
     }
 
+    // Stopped on the Chumby, as the Mac reports it: only the backup of the ring that began at `at` (within 2 minutes, which
+    // a snooze doesn't change) and still ahead goes. No time, or no such backup: nothing is cancelled.
+    static func stoppedRing(_ entries: [Entry], now: Date, at: Date?) -> Result {
+        guard let at, let e = entries.first(where: { abs($0.ringAt.timeIntervalSince(at)) <= 120 && $0.fireAt > now })
+        else { return Result(entries: entries, cancel: [], add: []) }
+        return Result(entries: entries.filter { $0.id != e.id }, cancel: [e], add: [])
+    }
+
     // He snoozed it until `until`: its backup moves to then plus the delay.
     static func snoozed(_ entries: [Entry], now: Date, name: String?, until: Date, delay: Int, makeID: () -> UUID = UUID.init) -> Result {
         guard let e = current(entries, now: now, name: name) else { return Result(entries: entries, cancel: [], add: []) }
@@ -120,13 +128,15 @@ enum BackupPlan {
     // `until` (Unix seconds; else the alarm's snooze minutes, `snooze`, else 9) is a snooze, anything else is still ringing.
     // `stopped`: the ring is over and the Chumby logged a Stop for it (its own Stop key or the phone's), so the backup goes;
     // a plain `over` (a ring that died, played out, or a restart) keeps it.
-    enum Signal: Equatable { case over, stopped(name: String?), snoozed(name: String?, until: Date) }
+    // `at`: when that ring began, so only its own backup goes, however late iOS hands the push over (gate, 11-19).
+    enum Signal: Equatable { case over, stopped(name: String?, at: Date?), snoozed(name: String?, until: Date) }
     static func signal(_ userInfo: [AnyHashable: Any], now: Date) -> Signal? {
         guard let raw = userInfo["ring"] else { return nil }
         guard let r = raw as? [String: Any] else { return raw is NSNull ? .over : nil }
         if (r["over"] as? Bool) == true || (r["over"] as? NSNumber)?.boolValue == true {
             let stopped = (r["stopped"] as? Bool) == true || (r["stopped"] as? NSNumber)?.boolValue == true
-            return stopped ? .stopped(name: r["name"] as? String) : .over
+            let at = ((r["at"] as? NSNumber)?.doubleValue).flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0) : nil }
+            return stopped ? .stopped(name: r["name"] as? String, at: at) : .over
         }
         guard (r["snoozed"] as? NSNumber)?.boolValue == true else { return nil }
         let name = r["name"] as? String
