@@ -1887,20 +1887,9 @@ struct ChannelsTab: View {
     // sliding in from the row's end, is the half-swiped row he ruled out ("looks fucked", 11-05), so there's no swipe either.
     func widgetRow(_ w: EditorRow) -> some View {
         HStack(alignment: .center, spacing: 16) {
-            // Always in the row, opening from no width as Edit comes in: the disc slides and fades in step with the name
-            // moving over, in the same spring, never drawn whole over the name for a frame (gate, 11-18). A 44 pt target
-            // laid out as the 21 pt disc, so the row is no taller and the name no further in than the disc needs.
-            Button { model.tick(); remove(w.id) } label: {
-                Circle().fill(ChumbyPalette.remove(scheme == .dark)).frame(width: 21, height: 21)
-                    .overlay { Capsule().fill(.white).frame(width: 10, height: 2.5) }
-                    .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .frame(width: reordering ? 44 : 0, alignment: .trailing).clipped()
-            .opacity(reordering ? 1 : 0)
-            .padding(.vertical, -11.5).padding(.trailing, reordering ? -23 : -16)
-            .allowsHitTesting(reordering).accessibilityHidden(!reordering)
-            .accessibilityLabel("Remove \(w.name) from \(pickedTitle)")
+            // The app's one remove control while editing (LeadingRemove), sliding in with the name in the same spring.
+            LeadingRemove(editing: reordering, label: "Remove \(w.name) from \(pickedTitle)") { remove(w.id) }
+                .padding(.trailing, reordering ? -23 : -16)
             // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
             Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
@@ -2616,6 +2605,7 @@ struct SoundsTab: View {
 // fun"). Nothing here is taken away by a swipe: a swipe slid the row's time off the card and left a square Delete inside
 // the rounded card ("looks fucked", 2026-11-05), so every removal is a control in the row itself.
 struct TinkerTab: View {
+    @State private var editingX = false
     @Environment(\.paneLayout) private var wide
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
@@ -2671,11 +2661,17 @@ struct TinkerTab: View {
         Section {
             ForEach(model.sys.tw, id: \.self) { h in
                 HStack(spacing: 12) {
+                    LeadingRemove(editing: editingX, label: "Stop showing @\(h)") {
+                        saveAccounts(model.sys.tw.filter { $0 != h })
+                        if model.sys.tw.count <= 1 { withAnimation(.snappy) { editingX = false } }
+                    }
+                    .padding(.trailing, editingX ? -19 : -12)
                     Text("@" + h).lineLimit(1)
                     Spacer(minLength: 8)
-                    RowRemove(label: "Stop showing @\(h)") { saveAccounts(model.sys.tw.filter { $0 != h }) }
                 }
+                .frame(minHeight: 30)
                 .padding(.vertical, 4)
+                .animation(.snappy, value: editingX)
             }
             // The same icon column and accent as every add row; the prompt is the field itself.
             Label {
@@ -2691,7 +2687,7 @@ struct TinkerTab: View {
             }
             .pickerStyle(.menu)
             if let f = model.failed("xorder") { FailNote(text: f) }
-        } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark), small: true) }
+        } header: { EditHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark), small: true, editing: $editingX, shown: !model.sys.tw.isEmpty) }
         // Said only for an order that isn't the usual one; the usual one needs no footnote.
         footer: { if model.sys.xorder != "latest" { SectionFoot(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") } }
     }
@@ -2826,6 +2822,51 @@ struct RowRemove: View {
     }
 }
 
+// Every list in the app deletes the same way, the iOS way (Richard, 2026-11-18: "the right side minus sign for delete
+// ... makes no sense"; this supersedes the 11-09/11-10 ⊖ at the row's end for Night times and X accounts): Edit in the
+// section's header, and while editing a red disc at each row's start, one tap and the row is gone. Out of editing, no
+// mark at all, and never a swipe (11-05). Always in the row, opening from no width, so it slides and fades in step with
+// the row's words; a 44 pt target laid out as the 21 pt disc.
+struct LeadingRemove: View {
+    let editing: Bool
+    let label: String
+    let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        Button { Haptic.fire(.tick); action() } label: {
+            Circle().fill(ChumbyPalette.remove(scheme == .dark)).frame(width: 21, height: 21)
+                .overlay { Capsule().fill(.white).frame(width: 10, height: 2.5) }
+                .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .frame(width: editing ? 44 : 0, alignment: .trailing).clipped()
+        .opacity(editing ? 1 : 0)
+        .padding(.vertical, -11.5)
+        .allowsHitTesting(editing).accessibilityHidden(!editing)
+        .accessibilityLabel(label)
+    }
+}
+// A section's heading with Edit / Done at its end, the system's words, Done in bold.
+struct EditHead: View {
+    let icon: String, text: String
+    var color: Color?
+    var small = false
+    @Binding var editing: Bool
+    var shown = true
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            SectionHead(icon: icon, text: text, color: color, small: small)
+            Spacer()
+            if shown || editing {
+                Button(editing ? "Done" : "Edit") { withAnimation(.snappy) { editing.toggle() } }
+                    .font(.body.weight(editing ? .semibold : .regular)).foregroundStyle(.tint).textCase(nil)
+            }
+        }
+        // For the build's shot: Tinker's lists in Edit.
+        .task { if ChumbyModel.pose == "tinkeredit" { try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { editing = true } } }
+    }
+}
+
 // The Chumby's live screen, asked for about once a second while the page showing it is up: Home's device, and Channels'
 // screen open flat. One cadence for both, and only one page at a time (they're on different tabs), so the picture is never
 // asked for twice over (screenshots were blamed for AirPlay stutter, 2026-10-22).
@@ -2881,6 +2922,7 @@ struct ScreenRow: View {
 // saying they run with the phone away; he found the Alarms tab confusing (2026-11-05), so they live here now.
 struct NightSettings: View {
     @EnvironmentObject var model: ChumbyModel
+    @State private var editingTimes = false
     @Environment(\.colorScheme) private var scheme
     @AppStorage("nightKind") private var kind = "on"
     // Each time says what happens then, in words. Night here is always the chosen style, so a time set to Night never
@@ -2929,6 +2971,13 @@ struct NightSettings: View {
             .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
             ForEach($model.state.schedule) { $e in
                 HStack(spacing: 12) {
+                    // Taking a time out (Richard, 2026-11-09: "i should be able to delete an entry for the night time
+                    // thing"): Edit's disc at the row's start, as every list in the app (11-18).
+                    LeadingRemove(editing: editingTimes, label: "Remove the \(words(e).lowercased()) time") {
+                        remove(e.id)
+                        if model.state.schedule.count <= 1 { withAnimation(.snappy) { editingTimes = false } }
+                    }
+                    .padding(.trailing, editingTimes ? -19 : -12)
                     Image(systemName: e.cmd == "night" ? (e.val == "off" ? "sun.max.fill" : "moon.fill") : e.cmd == "screen" ? "sun.min" : "tv")
                         .font(.body.weight(.semibold)).frame(width: 24)
                         .foregroundStyle(e.cmd == "night" && e.val == "off" ? ChumbyPalette.hex(0xe59a2e) : ChumbyPalette.hex(0xa4b7d6))
@@ -2946,8 +2995,8 @@ struct NightSettings: View {
                         }
                         .accessibilityElement(children: .contain)
                     Spacer(minLength: 8)
-                    // What happens at that time. Taking the time out is the mark at the row's end alone (Richard,
-                    // 2026-11-10: keep the ⊖, not "Remove this time" in the menu too).
+                    // What happens at that time. Taking the time out is Edit's disc alone (11-18; not "Remove this time" in
+                    // the menu too, 11-10).
                     Menu {
                         // As Sounds' capsules: the anchor's words (and the row's glyph) change once the menu has gone. The
                         // row is found again by what it held, since a time's place can move in the meantime.
@@ -2978,9 +3027,6 @@ struct NightSettings: View {
                         .layoutPriority(1)
                     }
                     .accessibilityLabel("At \(e.time): \(words(e))")
-                    // Taking a time out is a control he can see in the row, as on the X widget's rows (Richard, 2026-11-09:
-                    // "i should be able to delete an entry for the night time thing").
-                    RowRemove(label: "Remove the \(words(e).lowercased()) time") { remove(e.id) }
                 }
                 .padding(.vertical, 4)
                 .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
@@ -2993,7 +3039,7 @@ struct NightSettings: View {
             if let f = model.failed("schedule") { FailNote(text: f) }
         // Named for all it holds: the night style, and the times the Chumby switches night, day, screen and channel by
         // itself. Headed "Night", a 7:00 AM "Day starts" or a channel switch read as being in the wrong section.
-        } header: { SectionHead(icon: "moon.fill", text: "Day and night", color: ChumbyPalette.sub(scheme == .dark)) }
+        } header: { EditHead(icon: "moon.fill", text: "Day and night", color: ChumbyPalette.sub(scheme == .dark), editing: $editingTimes, shown: !model.state.schedule.isEmpty) }
     }
     static func date(_ s: String) -> Date {
         let p = s.split(separator: ":").compactMap { Int($0) }

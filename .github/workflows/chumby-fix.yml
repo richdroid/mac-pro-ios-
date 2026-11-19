@@ -84,6 +84,7 @@ jobs:
             shot alarms$2 $1 9 $M -tab 2
             shot sounds$2 $1 9 $M -tab 3
             shot tinker$2 $1 9 $M -tab 4
+            shot tinker-edit$2 $1 9 $M -tab 4 -pose tinkeredit
             shot channels$2 $1 10 $M -tab 1
             shot channels-edit$2 $1 10 $M -tab 1 -pose chedit
             shot once$2 $1 12 $M -tab 0 -pose justonce
