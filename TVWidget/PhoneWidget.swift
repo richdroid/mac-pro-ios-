@@ -165,13 +165,13 @@ struct WholeWords<Below: View>: View {
         ViewThatFits(in: axis) {
             ForEach(Array(runs.dropLast().enumerated()), id: \.offset) { _, r in
                 if axis == .horizontal { Text(r).lineLimit(1).fixedSize() } else {
-                    VStack(alignment: .leading, spacing: Self.gap) { Text(r).fixedSize(horizontal: false, vertical: true); below }
+                    VStack(alignment: .leading, spacing: Self.gap) { Text(r).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true); below }
                 }
             }
             // The last resort: one line across, or two lines down at full size; it shrinks only when a single word is
             // wider than the room.
             if axis == .horizontal { Text(runs.last ?? text).lineLimit(1).minimumScaleFactor(0.5) } else {
-                VStack(alignment: .leading, spacing: Self.gap) { Text(runs.last ?? text).lineLimit(2).minimumScaleFactor(0.5); below }
+                VStack(alignment: .leading, spacing: Self.gap) { Text(runs.last ?? text).multilineTextAlignment(.leading).lineLimit(2).minimumScaleFactor(0.5); below }
             }
         }
     }
