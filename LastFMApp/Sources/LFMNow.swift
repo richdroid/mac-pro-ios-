@@ -161,6 +161,15 @@ struct NowHero: View {
                 }
                 .padding(.horizontal, S.margin)
             }
+            // Zune HD's Now Playing: the artist's name huge and faint behind the song, drifting while it plays, running
+            // off both edges of the display; the cover passes in front of it. Gone when nothing plays.
+            .background(alignment: .bottomLeading) {
+                if playing {
+                    MixName(text: s.artist, size: layout == .wide ? 150 : 120, moving: true)
+                        .offset(y: layout == .wide ? 24 : 18)
+                        .id(s.artist).transition(.opacity)
+                }
+            }
             .animation(.smooth(duration: 0.5), value: s.id)
             .animation(.easeOut(duration: 0.3), value: depth)
             .task(id: "\(s.id)|\(HistorySync.shared.complete)") {

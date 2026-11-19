@@ -41,6 +41,7 @@ struct StartTab: View {
     private func stats(wide: Bool, strip: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: S.section) {
             ProfileHead().padding(.horizontal, S.margin)
+            if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
             // What's on (or the last song) the moment the app opens, a tap from the rest of today.
             if strip { NowStrip { withAnimation(.snappy(duration: 0.4)) { page = 1 } }.padding(.horizontal, S.margin) }
             if wide {
@@ -55,6 +56,8 @@ struct StartTab: View {
             } else {
                 Totals().padding(.horizontal, S.margin)
             }
+            // Zune's Quickplay: his week's albums as a mosaic of covers, the most played the big tile.
+            RotationMosaic().padding(.horizontal, S.margin)
             StreakCard().padding(.horizontal, S.margin)
             // The first read, while it runs, under his figures rather than over them: his stats come first.
             if !sync.complete { YearsSection().id("reading") }
@@ -71,6 +74,8 @@ struct StartTab: View {
             VStack(alignment: .leading, spacing: S.section) {
                 if playing {
                     NowHero(layout: layout == .stage ? .column : layout, titled: false)
+                    // Zune's Mixview: the artist on now ringed by the artists like them, his plays as the lines.
+                    if let s = store.nowPlaying { MixView(artist: s.artist, center: s.art).padding(.horizontal, S.margin) }
                 } else {
                     VStack(alignment: .leading, spacing: S.section) {
                         TodayFigures()

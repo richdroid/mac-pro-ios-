@@ -233,7 +233,10 @@ struct ArtistPage: View {
             topTracks
             if let st = story { Panorama(title: "your albums", items: st.albums) }
             about
-            Panorama(title: "similar", items: similar) { e in e.plays > 0 ? "You: \(plays(e.plays))" : "New to you" }
+            // Zune's Mixview, where it began: the artist in the middle, the eight most like them around, his plays as the
+            // lines; the rest of Last.fm's list after it, so nothing the row showed is lost.
+            MixView(artist: name, center: ref).padding(.horizontal, S.margin)
+            Panorama(title: similar.count >= 3 ? "more like them" : "similar", items: similar.count >= 3 ? Array(similar.dropFirst(MixView.most)) : similar) { e in e.plays > 0 ? "You: \(plays(e.plays))" : "New to you" }
             WaysOut(apple: apple, lastfm: info?.url.flatMap(URL.init(string:))).padding(.horizontal, S.margin)
         }
         .task(id: name) { await load() }
