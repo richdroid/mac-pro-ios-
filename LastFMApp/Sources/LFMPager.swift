@@ -94,7 +94,10 @@ struct Pager: View {
                         }
                         .scrollTargetLayout()
                     }
-                    .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
+                    // The system's own paging: a light flick turns the page (Richard, 2026-11-15: "too much like weight
+                    // with swipes"; view-aligned snapping held one page at a time and wanted a long drag). Every use is a
+                    // pivot now, a page the pager's full width, so a page is exactly one section.
+                    .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $position, anchor: .leading)
                     // The last section comes to rest at the margin like the others, not pushed back by the peek.
                     .contentMargins(.trailing, peek, for: .scrollContent)

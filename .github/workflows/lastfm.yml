@@ -14,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 140
+    timeout-minutes: 210
     steps:
       - uses: actions/checkout@v4
         with:
@@ -264,6 +264,14 @@ jobs:
           # stopped the whole publish in run 27, and the shots and status never went up.
           set +e
           (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          # The shots, the apps and the status first, before the films are re-encoded: run 29 reached the job's time
+          # limit while re-encoding, and nothing of it was published.
+          (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || zip -q ../apps.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }} run $GITHUB_RUN_NUMBER" > status.txt
+          gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
+          for f in shots.zip apps.zip status.txt; do
+            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
+          done
           # The films at the simulator's full size came to too much for one release asset (films.zip never arrived, runs 2
           # to 20): each is re-encoded within 1280x720, frame rate kept; one that won't re-encode is kept only if small;
           # and they go up as three zips, by posture, each well inside a release asset's limit. What happened is logged.
@@ -282,6 +290,7 @@ jobs:
           (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || zip -q ../apps.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }} run $GITHUB_RUN_NUMBER" > status.txt
           gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
-          for f in shots.zip films.zip films-upright.zip films-flat.zip apps.zip status.txt; do
+          echo "$GITHUB_SHA films run $GITHUB_RUN_NUMBER" > films.txt
+          for f in films.zip films-upright.zip films-flat.zip films.txt; do
             for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
           done
