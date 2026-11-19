@@ -14,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 210
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,7 +42,8 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 105
+        # Run 32 reached 105 minutes in the flat films and lost the rest of them.
+        timeout-minutes: 140
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -61,6 +62,11 @@ jobs:
           xcrun simctl terminate "$DEVICE" local.macpro.GalleryLastFM || true
           ls dist | grep -c lfm-widgets || echo "NO WIDGET SHEETS"
           APP=local.macpro.LastFM
+          # Each film is shrunk as soon as it's filmed, in the background while the next one runs (see ci/lfm-shrink.swift):
+          # the films as filmed came to 1.7 GB and never went up (films.txt Not Found, runs 27 to 32).
+          swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
+          mkdir -p small
+          SHRINKS=""
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
@@ -129,7 +135,9 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" $APP || true
-            if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
+            if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; return; fi
+            [ -x /tmp/lfm-shrink ] && { /tmp/lfm-shrink dist/lfm-$name.mp4 small/lfm-$name.mp4 || echo "shrink failed: $name"; } &
+            SHRINKS="$SHRINKS $!"
           }
           # The shots so far, published while the rest is still being taken, so a pass can be looked at before the run ends.
           early() {
@@ -159,7 +167,7 @@ jobs:
             # States the first rounds never showed: the other shelves, a 5×5 of artists, a year of tracks.
             shot loved$x $d 9 -tab 2 -shelf 3
             shot tracks$x $d 9 -tab 2 -shelf 2
-            shot charts-5x5$x $d 10 -tab 1 -grid 5 -kind 0
+            shot charts-5x5$x $d 10 -tab 1 -grid 5 -kind 0 -pose collage
             shot charts-year$x $d 11 -tab 1 -period 4 -kind 2
             # A long user name with no real name set: whole on the first section, small and whole over the others.
             shot name$x $d 9 -tab 0 -mockName midnightsignal
@@ -174,6 +182,10 @@ jobs:
           shot discover-first 1 20 -tab 3
           everything "" 1
           shot scrub 1 9 -tab 0 -panel 1 -pose scrub
+          # Last.fm gone: every call fails; the note shows once it has been away a while (25 s), over what it last said.
+          shot down 1 36 -tab 0 -mockDown YES
+          shot now-down 1 36 -tab 0 -panel 1 -mockDown YES
+          shot charts-down 1 36 -tab 1 -mockDown YES
           early folded
           # The panorama: across Start's four sections and back (a slow drag, then flicks), the title sliding behind.
           STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pan-start 1 28 -tab 0
@@ -253,6 +265,8 @@ jobs:
           date
           # How long each launch took to its first frame, step by step (-launchLog).
           C=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) && cp "$C/Library/Caches/launch-log.txt" dist/launch.log 2>/dev/null
+          for p in $SHRINKS; do wait $p; done
+          ls small | wc -l
           cat dist/launch.log 2>/dev/null | head -80
           ls dist
       - name: Publish
@@ -275,10 +289,15 @@ jobs:
           # The films at the simulator's full size came to too much for one release asset (films.zip never arrived, runs 2
           # to 20): each is re-encoded within 1280x720, frame rate kept; one that won't re-encode is kept only if small;
           # and they go up as three zips, by posture, each well inside a release asset's limit. What happened is logged.
+          # Most were shrunk while filming; any the shots step didn't get to (it timed out, a shrink failed) are shrunk here,
+          # by the same tool, else avconvert's smaller preset; one that won't shrink is kept only if small.
           mkdir -p small
+          [ -x /tmp/lfm-shrink ] || swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
           for f in dist/*.mp4; do
             n=$(basename "$f")
-            avconvert -p Preset1280x720 -s "$f" -o "small/$n" --replace > /dev/null 2>&1 || true
+            [ -s "small/$n" ] && continue
+            [ "$(stat -f %z "$f")" -lt 20000 ] && continue
+            /tmp/lfm-shrink "$f" "small/$n" > /dev/null 2>&1 || avconvert -p Preset960x540 -s "$f" -o "small/$n" --replace > /dev/null 2>&1 || true
             if [ ! -s "small/$n" ]; then
               if [ "$(stat -f %z "$f")" -lt 40000000 ]; then cp "$f" small/; echo "kept as filmed: $n" >> dist/publish.log; else echo "dropped (too large, no re-encode): $n" >> dist/publish.log; fi
             fi
@@ -290,7 +309,12 @@ jobs:
           (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || zip -q ../apps.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }} run $GITHUB_RUN_NUMBER" > status.txt
           gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
-          echo "$GITHUB_SHA films run $GITHUB_RUN_NUMBER" > films.txt
-          for f in films.zip films-upright.zip films-flat.zip films.txt; do
+          (echo "$GITHUB_SHA films run $GITHUB_RUN_NUMBER"; cd small && ls -la *.mp4 2>/dev/null) > films.txt
+          for f in films.zip films-upright.zip films-flat.zip; do
+            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
+          done
+          # The films' log and the publish log last, so a gate knows these films are this run's.
+          (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || true)
+          for f in films.txt apps.zip; do
             for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
           done
