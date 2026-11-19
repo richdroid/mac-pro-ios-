@@ -235,13 +235,20 @@ struct ChumbyStatusIntent: AppIntent {
 }
 // The ringing alarm's own Stop, from Control Center or Siri: the same as pressing it on the Chumby, through the same desk
 // as the card's keys, and answered when the Chumby confirms. Allowed on a locked phone, as the card's keys are.
-struct ChumbyStopAlarmIntent: AppIntent {
+// ChumbyRingKey (LiveActivityIntent on iOS) so Control Center's button, which lives in the widget, runs this in the app,
+// where the backup alarm is (11-19).
+struct ChumbyStopAlarmIntent: ChumbyRingKey {
     static var title: LocalizedStringResource = "Stop Chumby Alarm"
     static var description = IntentDescription("Stops the alarm that’s ringing or snoozing.")
     static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     static var supportedModes: IntentModes { .background }
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        switch await RingDesk.shared.press(.stop) {
+        let name = ChumbyRingCard.name, began = Date()
+        let out = await RingDesk.shared.press(.stop)
+        let backup = await ChumbyRingActions.backupAfter(out, stop: true, name: name)
+        // waited for: nothing else holds the app awake once this answers (gate, 11-19)
+        await ChumbyRingActions.report("siri or control", "stop", out, since: began, backup: backup)
+        switch out {
         case .confirmed:
             await ChumbyRingCard.over(); await ChumbyRingCard.handled()
             return .result(dialog: "Stopped.")
@@ -253,13 +260,17 @@ struct ChumbyStopAlarmIntent: AppIntent {
 }
 // The ringing alarm's own Snooze, by voice from bed: the same as pressing it on the Chumby. Says when it rings again,
 // by the Chumby's own clock.
-struct ChumbySnoozeAlarmIntent: AppIntent {
+struct ChumbySnoozeAlarmIntent: ChumbyRingKey {
     static var title: LocalizedStringResource = "Snooze Chumby Alarm"
     static var description = IntentDescription("Snoozes the alarm that’s ringing.")
     static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     static var supportedModes: IntentModes { .background }
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        switch await RingDesk.shared.press(.snooze) {
+        let name = ChumbyRingCard.name, began = Date()
+        let out = await RingDesk.shared.press(.snooze)
+        let backup = await ChumbyRingActions.backupAfter(out, stop: false, name: name)
+        await ChumbyRingActions.report("siri or control", "snooze", out, since: began, backup: backup)
+        switch out {
         case .confirmed(let until):
             await ChumbyRingCard.handled()
             let at = until.map { Date(timeIntervalSince1970: $0).formatted(date: .omitted, time: .shortened) }
@@ -315,6 +326,11 @@ extension ChumbyRingAttributes: ActivityAttributes {}
 
 // The cards themselves. There is only ever one ring, so every card this phone holds is that ring's.
 enum ChumbyRingCard {
+    // The ringing alarm's name as the card has it, for the backup alarm (nil with no card).
+    static var name: String? { all.first?.content.state.name }
+    // When the card says a snooze rings again, and this alarm's snooze length.
+    static var again: Date? { all.first?.content.state.again }
+    static var snooze: Int? { all.first?.content.state.snooze }
     static var all: [Activity<ChumbyRingAttributes>] { Activity<ChumbyRingAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale } }
     static func over() async {
         for a in Activity<ChumbyRingAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
@@ -368,6 +384,9 @@ enum ChumbyRingCard {
 }
 #else
 enum ChumbyRingCard {
+    static var name: String? { nil }
+    static var again: Date? { nil }
+    static var snooze: Int? { nil }
     static func handled() async {}
     static func diag(_ fields: [String: Any]) async {}
     static func over() async {}
@@ -377,6 +396,26 @@ enum ChumbyRingCard {
     static func sweep(asOf: Date) async {}
 }
 #endif
+
+// The iPhone's own backup alarm (ChumbyBackupAlarm) is in the app alone, and this file is the widget's too, so the app
+// hands it in at launch (ChumbyApp.init); a press here then reaches it, and is waited for, before iOS suspends the app.
+// 11-19: only the app's own ringing page told it. A Stop on the Lock Screen card, the notification or Siri left the
+// backup armed, so the phone rang 5 minutes after a Stop the Chumby had confirmed; a Snooze there left it at the first
+// ring's time (the Mac sends no snooze notice for a press made on the phone), so it rang during the snooze.
+// Each answers what it did, for the Mac's log; "no backup here" means the press ran outside the app (the widget's own
+// process), which would leave the backup armed.
+enum RingBackup {
+    @MainActor static var stopped: (@MainActor @Sendable (String?) async -> String)?
+    @MainActor static var snoozed: (@MainActor @Sendable (String?, Date) async -> String)?
+    @MainActor static var stopSent: (@MainActor @Sendable (String?) -> Void)?
+    static func stop(_ name: String?) async -> String { if let f = await stopped { return await f(name) }; return "no backup here" }
+    static func snooze(_ name: String?, until: Date) async -> String { if let f = await snoozed { return await f(name, until) }; return "no backup here" }
+    static func unconfirmed(_ name: String?) async -> String {
+        guard let f = await stopSent else { return "no backup here" }
+        await MainActor.run { f(name) }
+        return "backup kept until the Chumby says it stopped"
+    }
+}
 
 // Stop and Snooze, from wherever they're pressed (the card, the notification, the app's ringing page, Siri), all go
 // through one desk (Richard, 2026-11-18: "stop or snooze looks good but doesnt work all the way through and is a bit
@@ -457,17 +496,33 @@ enum ChumbyRingActions {
     static let noticeID = "chumby-ring"
     // Where a press came from and how it ended, to the Mac's log ("ring: phone ..."), so a press on the Lock Screen that
     // never arrives, or arrives and fails, can be told apart (Richard, 11-18: "i dont want to have to unlock").
-    static func report(_ from: String, _ kind: String, _ out: RingOutcome, since: Date) async {
+    static func report(_ from: String, _ kind: String, _ out: RingOutcome, since: Date, backup: String) async {
         let how: String
         switch out { case .confirmed: how = "confirmed"; case .nothingRinging: how = "nothing ringing"; case .unconfirmed: how = "unconfirmed"; case .failed(let w): how = "failed: " + w }
-        await ChumbyRingCard.diag(["from": from, "press": kind, "outcome": how, "ms": Int(Date().timeIntervalSince(since) * 1000)])
+        await ChumbyRingCard.diag(["from": from, "press": kind, "outcome": how + ", " + backup, "ms": Int(Date().timeIntervalSince(since) * 1000)])
+    }
+    // What a press does to the phone's backup alarm, the same from every door. Stop: confirmed or nothing ringing, he is
+    // awake and it goes (as on the app's page); unconfirmed, it goes once the Mac reports the ring over. Snooze: confirmed,
+    // it moves to the snooze's end (the Chumby's own time) plus the delay. Anything else leaves it.
+    static func backupAfter(_ out: RingOutcome, stop: Bool, name: String?) async -> String {
+        switch (out, stop) {
+        case (.confirmed, true), (.nothingRinging, true): return await RingBackup.stop(name)
+        case (.unconfirmed, true): return await RingBackup.unconfirmed(name)
+        case (.confirmed(let until), false):
+            // the Chumby's own time; else the card's, if it is still ahead (one left from an earlier snooze is not); else the length
+            let card = ChumbyRingCard.again.flatMap { $0 > Date() ? $0 : nil }
+            let at = until.map { Date(timeIntervalSince1970: $0) } ?? card ?? Date().addingTimeInterval(Double(ChumbyRingCard.snooze ?? 9) * 60)
+            return await RingBackup.snooze(name, until: at)
+        default: return "backup kept"
+        }
     }
     @discardableResult static func stop(from: String = "card") async -> String? {
-        let began = Date()
+        let began = Date(), name = ChumbyRingCard.name
         await ChumbyRingCard.change { $0.working = "Stopping…"; $0.problem = nil }
         let out = await RingDesk.shared.press(.stop)
-        // The card first; the report to the Mac goes on its own, never holding the card (gate, 11-18).
-        Task.detached { await report(from, "stop", out, since: began) }
+        let backup = await backupAfter(out, stop: true, name: name)
+        // The card next; the report to the Mac goes on its own, never holding the card (gate, 11-18).
+        Task.detached { await report(from, "stop", out, since: began, backup: backup) }
         switch out {
         case .confirmed, .nothingRinging:
             await ChumbyRingCard.over()
@@ -483,10 +538,11 @@ enum ChumbyRingActions {
         }
     }
     @discardableResult static func snooze(from: String = "card") async -> String? {
-        let began = Date()
+        let began = Date(), name = ChumbyRingCard.name
         await ChumbyRingCard.change { $0.working = "Snoozing…"; $0.problem = nil }
         let out = await RingDesk.shared.press(.snooze)
-        Task.detached { await report(from, "snooze", out, since: began) }
+        let backup = await backupAfter(out, stop: false, name: name)
+        Task.detached { await report(from, "snooze", out, since: began, backup: backup) }
         switch out {
         case .confirmed(let until):
             // Until when: the Chumby's own time; failing that, this alarm's snooze length from now (9 minutes is the

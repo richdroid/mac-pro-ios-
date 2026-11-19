@@ -11,7 +11,13 @@ struct ChumbyApp: App {
     #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(ChumbyPushDelegate.self) private var pushDelegate
     #endif
-    init() { ChumbyNotify.shared.install() }
+    init() {
+        ChumbyNotify.shared.install()
+        // Stop and Snooze pressed outside the app's page (Lock Screen card, notification, Siri) reach the backup alarm too.
+        RingBackup.stopped = { name in await ChumbyBackupAlarm.shared.stopNow(name: name) }
+        RingBackup.snoozed = { name, until in await ChumbyBackupAlarm.shared.snoozeNow(name: name, until: until) }
+        RingBackup.stopSent = { name in ChumbyBackupAlarm.shared.stopUnconfirmed(name: name) }
+    }
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model)

@@ -7,9 +7,10 @@ import AlarmKit
 #endif
 
 // The last line (Richard, 2026-11-19: "I need to be woken up by any means necessary"): for each ring the Chumby will
-// make, this iPhone keeps an alarm of its own a few minutes later, which sounds through Silent and Focus. Stopping or
-// snoozing the ring (here, on the Chumby, or as the Mac reports it) takes it away or moves it; a ring that ends with
-// nothing reaching the phone is exactly the one it is for. The rules are in ChumbyBackupPlan; this is the AlarmKit end.
+// make, this iPhone keeps an alarm of its own a few minutes later, which sounds through Silent and Focus. A Stop pressed on
+// this phone (the app's page, the Lock Screen card, the notification, Siri or Control Center) takes it away; a Snooze
+// anywhere moves it (the Mac reports one made on the Chumby). A ring that ends any other way keeps it, a Stop on the
+// Chumby itself included (the Mac can't tell that from a ring that died): that is exactly the one it is for. The rules are in ChumbyBackupPlan; this is the AlarmKit end.
 #if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
 struct ChumbyBackupMeta: AlarmMetadata {}
 #endif
@@ -91,20 +92,58 @@ final class ChumbyBackupAlarm: ObservableObject {
             await commit(r)
         }
     }
-    // The ring in progress was snoozed until `until`.
+    // The ring in progress was snoozed until `until`. The new time is set before the old one goes, and should iOS refuse it
+    // the old one stays: a backup at the first ring's time beats none during a snooze.
     func snoozed(name: String? = nil, until: Date) {
         queue { [self] in
             let r = BackupPlan.snoozed(entries, now: Date(), name: name, until: until, delay: delay)
-            await commit(r)
+            await commit(r, keepOldOnFail: true)
         }
     }
+
+    // For a press made outside the app's page: the same, waited for, and said in words for the Mac's log ("ring: phone").
+    private var said = ""
+    func stopNow(name: String?) async -> String {
+        queue { [self] in
+            let r = BackupPlan.handled(entries, now: Date(), name: name)
+            await commit(r)
+            said = r.cancel.first.map { "backup " + Self.clock($0.fireAt) + " cancelled" } ?? "no backup live"
+        }
+        await settle()
+        return said
+    }
+    func snoozeNow(name: String?, until: Date) async -> String {
+        queue { [self] in
+            let r = BackupPlan.snoozed(entries, now: Date(), name: name, until: until, delay: delay)
+            await commit(r, keepOldOnFail: true)
+            if let n = r.add.first { said = entries.contains(n) ? "backup moved to " + Self.clock(n.fireAt) : "backup move refused, kept" }
+            else { said = BackupPlan.current(entries, now: Date(), name: name).map { "backup at " + Self.clock($0.fireAt) } ?? "no backup live" }
+        }
+        await settle()
+        return said
+    }
+    // A Stop the Chumby hadn't confirmed when the press gave up waiting: should the Mac report the ring over within
+    // 3 minutes, that was his Stop, and the backup goes then.
+    private static let stopSentKey = "backupStopSent"
+    func stopUnconfirmed(name: String?) {
+        UserDefaults.standard.set(["at": Date().timeIntervalSince1970, "name": name ?? ""], forKey: Self.stopSentKey)
+    }
+    // the name pressed on ("" when unknown), or nil with no unconfirmed Stop in the last 3 minutes
+    private func takeStopSent() -> String? {
+        guard let d = UserDefaults.standard.dictionary(forKey: Self.stopSentKey), let at = d["at"] as? Double else { return nil }
+        UserDefaults.standard.removeObject(forKey: Self.stopSentKey)
+        guard Date().timeIntervalSince1970 - at < 180 else { return nil }
+        return d["name"] as? String ?? ""
+    }
+    private static func clock(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
 
     // What the bridge's quiet push said (see BackupPlan.signal).
     func push(_ userInfo: [AnyHashable: Any]) {
         switch BackupPlan.signal(userInfo, now: Date()) {
-        // A ring that's gone is not a ring he dealt with: 11-19 it died after a few beeps. Only his own Stop (in this
-        // app) takes the backup away; the Mac can't tell a Stop on the Chumby from a ring that failed.
-        case .over?: break
+        // A ring that's gone is not a ring he dealt with: 11-19 it died after a few beeps. Only his own Stop on this
+        // phone takes the backup away; the Mac can't tell a Stop on the Chumby from a ring that failed. One pressed here
+        // in the last 3 minutes that the Chumby hadn't confirmed in time is his.
+        case .over?: if let n = takeStopSent() { handled(name: n.isEmpty ? nil : n) }
         case .snoozed(let name, let until)?: snoozed(name: name, until: until)
         case nil: break
         }
@@ -140,12 +179,18 @@ final class ChumbyBackupAlarm: ObservableObject {
         for id in Kit.ids where !known.contains(id) { Kit.cancel(id) }
     }
 
-    private func commit(_ r: BackupPlan.Result) async {
-        for e in r.cancel { Kit.cancel(e.id) }
+    private func commit(_ r: BackupPlan.Result, keepOldOnFail: Bool = false) async {
         var kept = r.entries
+        var failed = false
         for e in r.add {
-            do { try await Kit.schedule(e) } catch { kept.removeAll { $0.id == e.id } }
+            do { try await Kit.schedule(e) } catch { kept.removeAll { $0.id == e.id }; failed = true }
         }
+        // a move that iOS refused: the old alarm stays, as it was
+        if failed && keepOldOnFail {
+            for e in r.add where kept.contains(where: { $0.id == e.id }) { Kit.cancel(e.id) }
+            return      // nothing was cancelled, so what was kept before still stands
+        }
+        for e in r.cancel { Kit.cancel(e.id) }
         entries = kept
         next = kept.map(\.fireAt).filter { $0 > Date() }.min()
     }
