@@ -113,6 +113,9 @@ jobs:
           }
           # Folded first (the outer display), then open upright, then open flat.
           dash 1 ""
+          # A session page turned from folded upright onto its side and back with the keyboard up (the box tapped first):
+          # the screen and the controls go to two panes, clear of the rail, and the box keeps its focus.
+          film session-turn 1 5 'tap "Message the session";rotate 1;rotate 3' -tab 2 -pose session
           # Folded on its side (one right turn), which CI had never shot: the Dashboard, a session page, a history page,
           # Apps and Control. Then back upright before opening.
           $D "$DEVICE" rotate 1; sleep 5
