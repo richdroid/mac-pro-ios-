@@ -320,13 +320,28 @@ struct DashboardTab: View {
     // The row follows what's lit: the page on the Mac's screen was a blue sliver cut by the pane's edge when it was the
     // fourth chip or later (CI 7809d95, open flat; designer gate 2026-11-19). In place as the row appears, glided after.
     func chips<C: View>(shown: String?, @ViewBuilder _ content: () -> C) -> some View {
-        let row = content()
-        return ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { row } }
-                .contentMargins(.horizontal, 20, for: .scrollContent)
-                .onAppear { if let shown { proxy.scrollTo(shown, anchor: .center) } }
-                .onChange(of: shown) { _, to in if let to { withAnimation(Motion.quick) { proxy.scrollTo(to, anchor: .center) } } }
-        }
+        ChipRow(shown: shown, content: content())
+    }
+}
+
+// The chip row's scroll, following the lit chip: scrollTo in onAppear ran before the List had laid the row out, and the
+// change never fired, so the lit page stayed out of view (designer gate, 2026-11-19). Its position is the row's own state,
+// set after a turn of the run loop: in place the first time, glided on every change after.
+struct ChipRow<C: View>: View {
+    let shown: String?
+    let content: C
+    @State private var position: String?
+    @State private var placed = false
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content }.scrollTargetLayout() }
+            .contentMargins(.horizontal, 20, for: .scrollContent)
+            .scrollPosition(id: $position, anchor: .center)
+            .task(id: shown) {
+                guard let shown else { return }
+                await Task.yield()
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                if placed { withAnimation(Motion.quick) { position = shown } } else { position = shown; placed = true }
+            }
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
     }
 }

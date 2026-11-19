@@ -248,10 +248,15 @@ struct SessionTerminal: View {
             if width >= 520 {
                 HStack(spacing: 6) { ForEach(Self.keys, id: \.0) { keyButton($0.0, $0.1, $0.2) } }
             } else {
-                HStack(spacing: 6) { ForEach(Self.keys.prefix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
-                HStack(spacing: 6) { ForEach(Self.keys.suffix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
+                // A grid, so the two rows' keys share their columns and both rows one leading edge (designer gate,
+                // 2026-11-19: two HStacks of different widths were each centred).
+                Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+                    GridRow { ForEach(Self.keys.prefix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
+                    GridRow { ForEach(Self.keys.suffix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
+                }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
     var composer: some View {
@@ -289,10 +294,12 @@ struct SessionTerminal: View {
     }
     // The page's two halves: the screen (with what the session wants under the title), and the controls, which read from
     // the foot up: the box, the keys, then the menu's choices.
-    var terminalColumn: some View {
+    // `titleLead`: what puts the name 20 pt from the display's edge, on the tabs' title line, whatever the column's own
+    // margin (12 in one column, 14 in a pane put it at 13 to 15; designer gate, 2026-11-19). The screen keeps its width.
+    func terminalColumn(titleLead: CGFloat) -> some View {
         VStack(spacing: 8) {
             // The name heads the screen's column (its pane open flat), as on every pushed page.
-            PaneHeading(title: session.name)
+            PaneHeading(title: session.name).padding(.leading, titleLead)
             stateChip.opacity(stale ? staleDim : 1)
             if stale { StaleLine(lastRead: lastRead) }
             screen.opacity(stale ? staleDim : 1).onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
@@ -343,10 +350,10 @@ struct SessionTerminal: View {
                 let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
                 return .panes(seam: min(max(crease?.midX ?? w / 2, w * 0.3), w * 0.7), gutter: min(max(24, (crease?.width ?? 0) / 2 + 4), 40))
             }
-            if onItsSide(w) { return .panes(seam: (w * 0.6).rounded(), gutter: 12) }
+            if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.6).rounded(), gutter: 12) }
             return .column
         }
-        if onItsSide(w) { return .panes(seam: (w * 0.6).rounded(), gutter: 12) }
+        if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.6).rounded(), gutter: 12) }
         #endif
         return panes ? .panes(seam: w / 2, gutter: 24) : .column
     }
@@ -354,6 +361,29 @@ struct SessionTerminal: View {
     // a few lines over them (fewer still with the keyboard up), so the screen takes the left and the controls the right,
     // as open flat. Judged from the window, not this page, whose height the keyboard takes: open upright with the
     // keyboard up is shorter than it is wide too, and stays one column.
+    // Folded on its side the tab rail stands over the page's trailing strip without taking it from the page's safe area,
+    // and the keys and the box ran under it (designer gate, 2026-11-19): how much of this page it covers, from the window.
+    static func rail(_ g: GeometryProxy) -> CGFloat {
+        #if os(iOS)
+        guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return 0 }
+        let page = g.frame(in: .global)
+        var found: CGFloat = 0
+        func look(_ v: UIView) {
+            guard !v.isHidden, v.alpha > 0.01 else { return }
+            let name = String(describing: type(of: v))
+            if v is UITabBar || name.contains("TabBar") || name.contains("TabSidebar") {
+                let f = v.convert(v.bounds, to: win)
+                // Upright along the trailing edge: the rail, not the bar along the foot.
+                if f.height > f.width * 2, f.width < 160, f.midX > win.bounds.midX { found = max(found, page.maxX - f.minX); return }
+            }
+            v.subviews.forEach(look)
+        }
+        look(win)
+        return min(max(found, g.safeAreaInsets.trailing), page.width / 3)
+        #else
+        return 0
+        #endif
+    }
     func onItsSide(_ w: CGFloat) -> Bool {
         #if os(iOS)
         guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first?.bounds.size else { return false }
@@ -370,8 +400,8 @@ struct SessionTerminal: View {
         GeometryReader { g in
             let live = arrangement(g)
             let mode = NavTransit.shared.inFlight ? (heldMode ?? live) : live
-            SessionFoldLayout(mode: mode) {
-                terminalColumn
+            SessionFoldLayout(mode: mode, trail: onItsSide(g.size.width) && !panes ? Self.rail(g) : 0) {
+                terminalColumn(titleLead: { if case .panes = mode { return 20 - SessionFoldLayout.outer } else { return 20 - SessionFoldLayout.side } }())
                 controls(lead: { if case .panes = mode { return screenTop } else { return 0 } }())
             }
             // The parts move to their new places in the Screen's own spring as the hinge moves.
@@ -405,6 +435,8 @@ struct SessionTerminal: View {
 struct SessionFoldLayout: Layout {
     enum Mode: Equatable { case column, stacked(above: CGFloat, below: CGFloat), panes(seam: CGFloat, gutter: CGFloat) }
     var mode: Mode
+    // Folded on its side, the width the tab rail covers at the trailing edge: the right pane stops short of it.
+    var trail: CGFloat = 0
     // The page's own margins: the sides, the foot, the gap between the parts, and the display's bare outer edge open
     // flat, where the left pane gets the same air FoldSplit gives it.
     static let side: CGFloat = 12, foot: CGFloat = 8, gap: CGFloat = 8, outer: CGFloat = 14
@@ -431,7 +463,7 @@ struct SessionFoldLayout: Layout {
             } else { column() }
         case .panes(let seam, let gutter):
             screen = CGRect(x: Self.outer, y: 0, width: max(seam - gutter - Self.outer, 0), height: max(h - Self.foot, 0))
-            controls = CGRect(x: seam + gutter, y: 0, width: max(w - seam - gutter - Self.side, 0), height: max(h - Self.foot, 0))
+            controls = CGRect(x: seam + gutter, y: 0, width: max(w - trail - seam - gutter - Self.side, 0), height: max(h - Self.foot, 0))
         }
         subviews[0].place(at: CGPoint(x: b.minX + screen.minX, y: b.minY + screen.minY), proposal: ProposedViewSize(screen.size))
         subviews[1].place(at: CGPoint(x: b.minX + controls.minX, y: b.minY + controls.minY), proposal: ProposedViewSize(controls.size))
