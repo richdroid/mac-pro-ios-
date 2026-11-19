@@ -601,6 +601,8 @@ function chumbyScene(q, s) {
         }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
+        // The volume, applied by the panel about two seconds after the command, as on the real Chumby (11-18).
+        if (a === 'cmd' && qs.get('c') === 'volume') { const v = +qs.get('v'); setTimeout(() => { live.sys.vol = v; }, 2000); }
         // A channel's list saved: kept, and the channel reloaded as the Chumby does (about half a minute, with its readings
         // of what's playing blank for the first seconds), so a film shows the list holding still through it.
         if (a === 'chedit') {

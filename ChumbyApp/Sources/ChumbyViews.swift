@@ -2250,6 +2250,8 @@ struct NowPlaying: View {
             }
         }
         .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { volume = Double(model.sys.vol) } }
+        // For the build's film: the volume set to 60 from here, on a stand-in that applies it two seconds later.
+        .task { if ChumbyModel.pose == "voldemo", tab == model.tab { try? await Task.sleep(nanoseconds: 3_500_000_000); set(60) } }
         .task(id: model.tab == tab && model.state.musicPlaying) {
             while model.tab == tab && !Task.isCancelled {
                 await model.loadSongs(force: model.state.musicPlaying)

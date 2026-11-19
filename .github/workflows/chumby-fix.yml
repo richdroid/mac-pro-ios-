@@ -1,0 +1,137 @@
+name: Chumby fix checks (branch)
+# The chumby-fix branch's own short run (never main): Stop and Snooze through the one desk (the Home card's film on a
+# live stand-in Chumby: ring, snooze, stop), the ringing page, the Lock Screen card's states as the gallery draws them
+# (Stopping…, Snoozing…, not confirmed), Channels with Edit's delete controls and grips, and the one-ring sheet; folded,
+# open flat and open portrait. Published to the chumby-fix release. Temporary: goes when the branch merges.
+on:
+  push:
+    branches: [chumby-fix2]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chumby-fix2
+  cancel-in-progress: true
+jobs:
+  quick:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          for APP in Chumby GalleryChumby; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | grep -E "error:|warning: unre|BUILD" | tail -40
+          done
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
+          node ci/mock-chumby.js & MOCK=$!
+          sleep 2
+          M=http://127.0.0.1:9000
+          # The live scenes keep what a film did (a ring stopped, a list saved): a fresh stand-in before each film.
+          remock() { kill $MOCK 2>/dev/null; wait $MOCK 2>/dev/null; node ci/mock-chumby.js & MOCK=$!; sleep 2; }
+          shot() { # name, display, wait, address, args
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/fix-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          film() { # name, display, seconds, address, args (records while the app runs; a still every 1.5 s)
+            local name=$1 display=$2 secs=$3 address=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/fix-$name.mp4 > /dev/null 2>&1 &
+            local rec=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            local i=0
+            while [ $i -lt $secs ]; do sleep 1.5; i=$((i + 1)); [ $((i % 2)) = 0 ] && xcrun simctl io "$DEVICE" screenshot --display=$display dist/fix-$name-$i.png; done
+            kill -INT $rec; wait $rec
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          gallery() { # page, display, name
+            xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $1
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$2 dist/fix-$3.png
+            xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby || true
+          }
+          set_() { # display, suffix
+            shot screen$2 $1 9 $M/ringing -tab 0 -pose ringscreen
+            shot screen-snoozed$2 $1 9 $M/snoozed -tab 0 -pose ringscreen
+            shot screen-fail$2 $1 9 $M/ringing -tab 0 -pose ringfail
+            shot home-ringing$2 $1 9 $M/ringing -tab 0
+            shot home$2 $1 9 $M -tab 0
+            shot alarms$2 $1 9 $M -tab 2
+            shot sounds$2 $1 9 $M -tab 3
+            shot tinker$2 $1 9 $M -tab 4
+            shot channels$2 $1 10 $M -tab 1
+            shot channels-edit$2 $1 10 $M -tab 1 -pose chedit
+            shot once$2 $1 12 $M -tab 0 -pose justonce
+            shot once-moved$2 $1 12 $M/moved -tab 0 -pose justoncemoved
+            # Ring, Snooze (3.5 s in), Stop (4 s later) on a stand-in Chumby that answers as the real one does.
+            remock; film ringdemo$2 $1 14 $M/liveringing -tab 0 -pose ringdemo
+            # Channels: Edit, the last widget moved to the top, one taken out, Done; the stand-in reloads its channel.
+            remock; film cheditdemo$2 $1 18 $M/live -tab 1 -pose cheditdemo
+            # Jump to a widget (the channel's own rotation, said once taken), and Add widgets: picker, one added, back.
+            remock; film jumpdemo$2 $1 8 $M/live -tab 1 -pose jumpdemo
+            remock; film chdemo$2 $1 12 $M/live -tab 1 -pose chdemo
+            # The volume set from Sounds on a stand-in that applies it 2 s later, as the real one does: it must hold.
+            remock; film voldemo$2 $1 8 $M/live -tab 3 -pose voldemo
+          }
+          xcrun simctl ui "$DEVICE" appearance light
+          set_ 1 ""
+          gallery 4 1 card
+          gallery 5 1 island
+          gallery 6 1 card-working
+          xcrun simctl ui "$DEVICE" appearance dark
+          shot screen-dark 1 9 $M/ringing -tab 0 -pose ringscreen
+          shot channels-edit-dark 1 10 $M -tab 1 -pose chedit
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          $D "$DEVICE" pose open; sleep 5
+          xcrun simctl ui "$DEVICE" appearance light
+          set_ 3 "-open"
+          $D "$DEVICE" rotate 1; sleep 5
+          set_ 3 "-portrait"
+          # Jump to a widget's menu open, open upright.
+          remock
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/live -tab 1 -pose jumprow; sleep 6
+          $D "$DEVICE" tap "Jump to a widget" || echo "jump menu tap failed"; sleep 2
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/fix-jumpmenu-portrait.png
+          xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          xcrun simctl ui "$DEVICE" appearance dark
+          shot screen-dark-portrait 3 9 $M/ringing -tab 0 -pose ringscreen
+          shot channels-edit-dark-portrait 3 10 $M -tab 1 -pose chedit
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../fix.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../fix.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-fix2 >/dev/null 2>&1 || gh release create chumby-fix2 --prerelease --title "Chumby fix checks" --notes "Work in progress: shots and logs from the chumby-fix branch."
+          for f in fix.zip status.txt; do
+            for i in 1 2 3; do gh release upload chumby-fix2 "$f" --clobber && break; sleep 15; done
+          done
