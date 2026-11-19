@@ -194,7 +194,8 @@ struct Pager: View {
 
     private func place(_ reader: ScrollViewProxy) async {
         guard start > 0, start < panels.count else { placed = true; return }
-        for _ in 0..<20 {
+        // Up to 10 s: on a busy first launch 2.4 s wasn't enough and Now opened on his page (run 34, lfm-now folded).
+        for _ in 0..<80 {
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { reader.scrollTo(panels[start].id, anchor: .leading) }
             try? await Task.sleep(nanoseconds: 120_000_000)

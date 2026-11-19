@@ -318,11 +318,12 @@ struct RecordsSection: View {
         return Opens(route: route, zoom: "record|\(r.id)") {
             ZStack(alignment: .bottomLeading) {
                 ArtView(ref, px: 700, corner: 0).frame(width: 250, height: 250).zoomSource("record|\(r.id)")
-                // The shade reaches up behind the figure: the thin "155" on a busy cover was hard to read (run 33).
-                LinearGradient(stops: [.init(color: .black.opacity(0.1), location: 0), .init(color: .black.opacity(0.6), location: 0.3), .init(color: .black.opacity(0.9), location: 1)], startPoint: .top, endPoint: .bottom)
+                // The shade reaches up behind the figure, dark from a quarter down, and the figure is a weight heavier: the
+                // thin "155" on a dotted cover was hard to read (runs 33, 34).
+                LinearGradient(stops: [.init(color: .black.opacity(0.2), location: 0), .init(color: .black.opacity(0.75), location: 0.25), .init(color: .black.opacity(0.92), location: 1)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: S.pair) {
-                    Text(number(r.plays)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.5), radius: 8)
+                    Text(number(r.plays)).font(.system(size: 64, weight: .light)).monospacedDigit().foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.8), radius: 10)
                     Text(what).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                     Text(name).font(.subheadline).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
                     Text(LocalDay.date(r.day).formatted(.dateTime.month(.wide).day().year())).font(.subheadline).foregroundStyle(.white.opacity(0.7))

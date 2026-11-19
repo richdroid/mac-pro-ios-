@@ -106,8 +106,10 @@ struct TroubleNote: View {
             Image(systemName: "wifi.exclamationmark").foregroundStyle(S.soft)
             Text("Last.fm isn't answering. Showing what it last said.").font(.subheadline).foregroundStyle(.white)
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, S.inner).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Two lines in a capsule pinched at the ends; the cards' rounded rectangle (run 34).
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: S.corner, style: .continuous))
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
@@ -174,7 +176,7 @@ struct NowHero: View {
                 // always whole in its pane. Gone when nothing plays.
                 if playing {
                     let size: CGFloat = layout == .wide ? 110 : 84
-                    MixName(text: s.artist, size: size, moving: true)
+                    MixName(text: s.artist, size: size, moving: !store.trouble)
                         .padding(.top, bandDrop(ceil(size * 1.2)) - S.pair)
                         .id(s.artist).transition(.opacity)
                 }
@@ -256,9 +258,13 @@ struct NowHero: View {
     private func words(_ s: Scrobble, _ playing: Bool, line: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: S.pair) {
             HStack(spacing: 7) {
-                if playing {
+                if playing, !store.trouble {
                     Image(systemName: "waveform").symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
                     Text("Now playing")
+                } else if playing {
+                    // Last.fm gone: what it last said was playing, not live bars over a song that may have ended (run 34).
+                    Image(systemName: "clock.arrow.circlepath")
+                    Text("Last heard")
                 } else {
                     Image(systemName: "clock.arrow.circlepath")
                     Text("Played \(when(s.date))")

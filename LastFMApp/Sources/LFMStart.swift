@@ -72,6 +72,8 @@ struct StartTab: View {
         let playing = store.nowPlaying != nil || store.hero == nil
         return Panel(1, playing ? "now playing" : "today") {
             VStack(alignment: .leading, spacing: S.section) {
+                // First, as on his own page: under the hero it sat below the first screen folded (run 34).
+                if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
                 if playing {
                     NowHero(layout: layout == .stage ? .column : layout, titled: false)
                     // Zune's Mixview: the artist on now ringed by the artists like them, his plays as the lines.
@@ -83,7 +85,6 @@ struct StartTab: View {
                     }
                     .padding(.horizontal, S.margin)
                 }
-                if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
                 DaySection(lead: !playing).id("day")
                 RecentSection(skipFirst: !playing && !store.recent.isEmpty)
             }
@@ -135,9 +136,13 @@ struct NowStrip: View {
                     ArtView(s.art, px: 156, corner: 6).frame(width: S.art, height: S.art)
                     VStack(alignment: .leading, spacing: S.pair / 2) {
                         HStack(spacing: 6) {
-                            if s.nowPlaying {
+                            if s.nowPlaying, !store.trouble {
                                 Image(systemName: "waveform").symbolEffect(.variableColor.iterative, options: .repeating)
                                 Text("Now playing")
+                            } else if s.nowPlaying {
+                                // Last.fm gone: what it last said was playing, not live.
+                                Image(systemName: "clock.arrow.circlepath")
+                                Text("Last heard")
                             } else {
                                 Image(systemName: "clock.arrow.circlepath")
                                 Text("Played \(when(s.date))")
