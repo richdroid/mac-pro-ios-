@@ -419,5 +419,39 @@ do {
     expect(BackupPlan.signal(["ring": ["snoozed": false, "name": "Work"]], now: now) == nil && BackupPlan.signal([:], now: now) == nil, "a ringing push or none says nothing")
 }
 
+// MARK: The volume he sets sticks
+section("volume hold")
+do {
+    let t0 = now, sent = VolumeHold(level: 30, sentAt: t0)
+    func sec(_ x: Double) -> Date { t0.addingTimeInterval(x) }
+    var r = VolumeHold.shown(reported: 7, takenAt: sec(-5), hold: sent, now: sec(12))
+    expect(r.vol == 30 && r.hold != nil, "a copy taken before the send (the Mac's, served 17 s old) never puts the old level back")
+    r = VolumeHold.shown(reported: 7, takenAt: sec(1), hold: sent, now: sec(11))
+    expect(r.vol == 30 && r.hold != nil, "nor does one taken before the panel could apply it")
+    r = VolumeHold.shown(reported: 30, takenAt: sec(2), hold: sent, now: sec(2.5))
+    expect(r.vol == 30 && r.hold == nil, "a reading with his level confirms it and lets go")
+    r = VolumeHold.shown(reported: -1, takenAt: sec(6), hold: sent, now: sec(6))
+    expect(r.vol == 30 && r.hold != nil, "an unknown level isn't a no")
+    r = VolumeHold.shown(reported: 7, takenAt: sec(6), hold: sent, now: sec(6))
+    expect(r.vol == 30 && r.hold?.doubtedAt != nil, "one late reading that says otherwise is doubted, not believed")
+    let again = VolumeHold.shown(reported: 7, takenAt: sec(6), hold: r.hold, now: sec(8))
+    expect(again.vol == 30 && again.hold != nil, "the same copy served twice is one reading")
+    let second = VolumeHold.shown(reported: 7, takenAt: sec(9), hold: r.hold, now: sec(9))
+    expect(second.vol == 7 && second.hold == nil, "a second one is believed: the Chumby really is elsewhere")
+    r = VolumeHold.shown(reported: 7, takenAt: sec(-1), hold: sent, now: sec(21))
+    expect(r.vol == 7 && r.hold == nil, "after 20 s the Chumby's word goes, whatever its age")
+    // Mute then unmute: 30, 0 at 0 s, 30 again at 1 s. A copy from before the unmute says 30 and must not let go, or
+    // the next reading (0, the mute landing) would drop the slider.
+    let unmute = VolumeHold(level: 30, sentAt: sec(1))
+    r = VolumeHold.shown(reported: 30, takenAt: sec(-2), hold: unmute, now: sec(1.5))
+    expect(r.vol == 30 && r.hold != nil, "an old 30 doesn't confirm the unmute's 30")
+    r = VolumeHold.shown(reported: 0, takenAt: sec(1.5), hold: r.hold, now: sec(2.5))
+    expect(r.vol == 30 && r.hold != nil, "the mute landing just after doesn't drop the slider")
+    r = VolumeHold.shown(reported: 30, takenAt: sec(3), hold: r.hold, now: sec(4))
+    expect(r.vol == 30 && r.hold == nil, "a 30 read after the unmute confirms it")
+    r = VolumeHold.shown(reported: 12, takenAt: sec(30), hold: nil, now: sec(30))
+    expect(r.vol == 12 && r.hold == nil, "with nothing held, the reading is shown")
+}
+
 print(failures == 0 ? "ok: \(checks) checks" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

@@ -410,6 +410,43 @@ actor ChumbyAPI {
     func cmd(_ c: String, _ v: String? = nil) async throws {
         try await post("cmd", extra: "&c=\(c)" + (v.map { "&v=" + ChumbyAPI.enc($0) } ?? ""))
     }
+    // The one way the Chumby's listening volume (0-100, its /psp/volume) is set, from the app, Shortcuts and Control
+    // Center alike. Never under an alarm: the ring sets its own volume and puts his back after, so a level sent then is
+    // lost. `checkRing` reads the Chumby first; the app, which already knows, passes false.
+    func setVolume(_ v: Int, checkRing: Bool = true) async throws {
+        if checkRing, let r = try? await raw("sys"), let s = try? JSONDecoder().decode(Sys.self, from: r.data), r.age < 30, let ring = s.ringing {
+            throw ChumbyError.refused(ring.snoozed ? "Not while an alarm is snoozing." : "Not while an alarm is ringing.")
+        }
+        // The Chumby refuses it too while one rings or snoozes (409 "an alarm is ringing"), said the same way.
+        do { try await cmd("volume", String(min(max(v, 0), 100))) }
+        catch ChumbyError.message(let m) where m.hasPrefix("an alarm is") { throw ChumbyError.refused("Not while \(m).") }
+    }
+}
+
+// A level he just set, held on screen until the Chumby confirms it (Richard, 11-19: the volume "still fucked", the slider
+// didn't stick). The panel takes the level about a second after the command, and the Mac's copy of `sys` can be ten
+// seconds old, so readings taken before the level could have landed say nothing either way and the held level shows.
+// A reading taken after that which says the level is in confirms it; two that say otherwise (the Chumby really is
+// elsewhere: the command was lost, or something put the volume back) are believed, as is anything once `patience` is up.
+// Before this, the hold went by when the reading arrived, not when it was taken, and readings parked while a page moved
+// skipped it altogether, so an old level came back after the slider had been let go.
+struct VolumeHold: Equatable {
+    static let settle: TimeInterval = 4, patience: TimeInterval = 20
+    let level: Int, sentAt: Date
+    var doubtedAt: Date?
+    init(level: Int, sentAt: Date) { self.level = level; self.sentAt = sentAt }
+    // The level to show for a reading of `reported` taken at `takenAt`, and the hold still to keep (nil: let go).
+    static func shown(reported: Int, takenAt: Date, hold: VolumeHold?, now: Date) -> (vol: Int, hold: VolumeHold?) {
+        guard var h = hold else { return (reported, nil) }
+        // Only a reading taken after the send confirms it: going 30, 0, 30, an old copy saying 30 isn't the new 30.
+        if reported == h.level, takenAt >= h.sentAt { return (reported, nil) }
+        if now.timeIntervalSince(h.sentAt) >= patience { return (reported, nil) }
+        if takenAt < h.sentAt.addingTimeInterval(settle) || reported < 0 || reported == h.level { return (h.level, h) }
+        // The same copy served twice is one reading, not two.
+        if let d = h.doubtedAt, takenAt.timeIntervalSince(d) >= 1 { return (reported, nil) }
+        if h.doubtedAt == nil { h.doubtedAt = takenAt }
+        return (h.level, h)
+    }
 }
 
 // MARK: - Alarm rules the Chumby applies, worked out the same way here so the phone never shows a list that flips later.

@@ -192,7 +192,7 @@ struct ChumbyVolumeIntent: AppIntent {
     static var title: LocalizedStringResource = "Set Chumby Volume"
     static var description = IntentDescription("Sets the volume from 0 to 100.")
     @Parameter(title: "Volume", inclusiveRange: (0, 100)) var volume: Int
-    func perform() async throws -> some IntentResult { try await chumbyTry { try await $0.cmd("volume", String(volume)) }; return .result() }
+    func perform() async throws -> some IntentResult { try await chumbyTry { try await $0.setVolume(volume) }; return .result() }
 }
 struct ChumbyNapIntent: AppIntent {
     static var title: LocalizedStringResource = "Chumby Nap"

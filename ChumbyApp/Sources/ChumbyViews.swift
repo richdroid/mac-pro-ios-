@@ -2152,12 +2152,11 @@ struct NowPlaying: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var art = SongArt.shared
     @AppStorage("lastVolume") private var lastVolume = 4
-    @State private var volume = 0.0
-    @State private var dragging = false
     let tab: Int
     let failID: String
-    // Refused (an alarm is ringing), the slider goes back to the level the Chumby has (gate, 11-18).
-    func set(_ v: Int) { volume = Double(v); if !model.setVolume(v, id: failID), model.sys.vol >= 0 { withAnimation(.snappy) { volume = Double(model.sys.vol) } } }
+    // Refused (an alarm is ringing), the slider goes back to the level the Chumby has (gate, 11-18): VolumeSlider follows
+    // sys.vol, which setVolume leaves alone then.
+    func set(_ v: Int) { if v > 0 { lastVolume = v }; model.setVolume(v, id: failID) }
     // The song playing, when the Chumby says its player is going and Pandora's history has a song from the last few
     // minutes; otherwise nothing is named rather than an old song.
     var nowSong: Song? {
@@ -2220,16 +2219,12 @@ struct NowPlaying: View {
             }
             // Asked again whenever the song changes: it's often nil on first appearance, before state and history arrive.
             .task(id: song.map(SongArt.key)) { if let song { art.look(song) } }
-            HStack(spacing: 12) {
+            // Mute is volume 0 (the panel's MusicPlayer setMute never reaches the mixer); Unmute goes back to the last level.
+            VolumeSlider(level: model.sys.vol, label: "Volume", commit: set) { shown in
                 Button {
-                    if volume > 0 { lastVolume = Int(volume); set(0) } else { set(lastVolume > 0 ? lastVolume : 4) }
-                } label: { Image(systemName: volume > 0 ? "speaker.wave.2.fill" : "speaker.slash.fill").frame(width: 26) }
-                .buttonStyle(.borderless).accessibilityLabel(volume > 0 ? "Mute" : "Unmute")
-                Slider(value: $volume, in: 0...100, step: 1) { e in
-                    dragging = e
-                    if !e { if volume > 0 { lastVolume = Int(volume) }; set(Int(volume)) }
-                }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
-                Text("\(Int(volume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
+                    if shown > 0 { lastVolume = shown; set(0) } else { set(lastVolume > 0 ? lastVolume : 4) }
+                } label: { Image(systemName: shown > 0 ? "speaker.wave.2.fill" : "speaker.slash.fill").frame(width: 26) }
+                .buttonStyle(.borderless).accessibilityLabel(shown > 0 ? "Mute" : "Unmute")
             }
             if let f = model.failed(failID) { FailNote(text: f) }
             // About the Mac's song (it couldn't start, or didn't stop): kept until put away.
@@ -2245,7 +2240,6 @@ struct NowPlaying: View {
                 try? await Task.sleep(nanoseconds: model.macPlaying != nil ? 8_000_000_000 : 30_000_000_000)
             }
         }
-        .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { volume = Double(model.sys.vol) } }
         // For the build's film: the volume set to 60 from here, on a stand-in that applies it two seconds later.
         .task { if ChumbyModel.pose == "voldemo", tab == model.tab { try? await Task.sleep(nanoseconds: 3_500_000_000); set(60) } }
         .task(id: model.tab == tab && model.state.musicPlaying) {
@@ -2257,11 +2251,63 @@ struct NowPlaying: View {
     }
 }
 
+// The one volume control, for the Chumby's listening volume (Home's Playing card, Sounds' Now) and his alarm volume
+// (Sounds' alarms) alike. It shows `level`, the model's (the Chumby's, or a level just set and held until the Chumby
+// confirms it), except while his finger is on it; let go, the value goes to `commit` once, and it follows `level` again,
+// so a refused or failed change goes back to what the Chumby has, and a stale reading can't move it while he drags.
+struct VolumeSlider<Lead: View>: View {
+    let level: Int
+    var step = 1
+    let label: String
+    var bubble: String? = nil
+    let commit: (Int) -> Void
+    let lead: (Int) -> Lead
+    init(level: Int, step: Int = 1, label: String, bubble: String? = nil, commit: @escaping (Int) -> Void, @ViewBuilder lead: @escaping (Int) -> Lead) {
+        self.level = level; self.step = step; self.label = label; self.bubble = bubble; self.commit = commit; self.lead = lead
+    }
+    @State private var shown = 0.0
+    @State private var dragging = false
+    // Bumped on each send, so the slider looks at the model's level again even when that level didn't change.
+    @State private var sends = 0
+    private struct Sync: Equatable { let level: Int; let sends: Int }
+    private func send(_ v: Int) {
+        let v = min(max(v, 0), 100)
+        shown = Double(v)
+        commit(v)
+        sends += 1
+    }
+    var body: some View {
+        HStack(spacing: 12) {
+            lead(Int(shown))
+            Slider(value: $shown, in: 0...100, step: Double(step)) { e in
+                dragging = e
+                if !e { send(Int(shown)) }
+            }
+            .accessibilityLabel(label).tint(ChumbyPalette.orange)
+            // VoiceOver's swipe up and down moves the slider without a drag, which never sent anything. 5% a swipe at
+            // least: 1% was a send (and a haptic) for each barely audible step.
+            .accessibilityAdjustableAction { d in
+                let by = max(step, 5)
+                switch d {
+                case .increment: send(Int(shown) + by)
+                case .decrement: send(Int(shown) - by)
+                @unknown default: break
+                }
+            }
+            .overlay(alignment: .trailing) { if let bubble { LandBubble(mark: bubble) } }
+            Text("\(Int(shown))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
+        }
+        .task(id: Sync(level: level, sends: sends)) {
+            guard !dragging, level >= 0, Int(shown) != level else { return }
+            if sends > 0 { withAnimation(.snappy) { shown = Double(level) } } else { shown = Double(level) }
+        }
+    }
+}
+
 struct SoundsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
     @Environment(\.colorScheme) private var scheme
-    @State private var alarmVolume = 100.0
     @State private var addStream = false
     @State private var addStation = false
     @State private var pickSong = false
@@ -2489,13 +2535,9 @@ struct SoundsTab: View {
                 if model.state.volume >= 0 {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Alarm volume").font(.subheadline.weight(.semibold))
-                    HStack(spacing: 12) {
+                    VolumeSlider(level: model.state.volume, step: 5, label: "Alarm volume", bubble: "alarmVolume",
+                                 commit: { model.change(.volume($0)) }) { _ in
                         Image(systemName: "alarm.waves.left.and.right.fill").frame(width: 26)
-                        Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
-                            if !e { model.change(.volume(Int(alarmVolume))) }
-                        }.accessibilityLabel("Alarm volume").tint(ChumbyPalette.orange)
-                            .overlay(alignment: .trailing) { LandBubble(mark: "alarmVolume") }
-                        Text("\(Int(alarmVolume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
                     }
                 }
                 MarkNote(mark: "alarmVolume").noteRow(lead: 0)
@@ -2566,7 +2608,6 @@ struct SoundsTab: View {
             } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { SectionFoot(scanNote) } }
         }
         .seaList()
-        .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
         // Folded and open upright a value's list is pushed (the system's Back); open flat it is the right pane. A turn
         // keeps it: the binding only lets go when the page itself goes back.
