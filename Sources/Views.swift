@@ -1608,7 +1608,7 @@ struct AppsTab: View {
             .task {
                 if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } }
                 // The build's shot of a quit that didn't happen, said under its row.
-                if model.pose == "appsfail", let a = model.status?.apps.first { try? await Task.sleep(nanoseconds: 2_000_000_000); say("\(a.pid)", "\(a.name) didn’t quit: the Mac didn’t answer.") }
+                if model.pose == "appsfail", let a = model.status?.apps.first(where: { $0.mem != nil }) { try? await Task.sleep(nanoseconds: 2_000_000_000); say("\(a.pid)", "\(a.name) didn’t quit: the Mac didn’t answer.") }
             }
         }
     }
