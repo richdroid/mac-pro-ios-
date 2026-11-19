@@ -161,11 +161,15 @@ struct YourTide: View {
     let tint: Color
     var body: some View {
         let few = story.plays < 50 || story.months.values.filter { $0 > 0 }.count < 6
-        VStack(alignment: .leading, spacing: S.head) {
-            SectionHead(text: "your tide")
-            if few { SparseTide(months: story.months, tint: tint).card() } else { Tide(months: story.months, tint: tint).card() }
+        // A tide needs more than one month to be a shape: one dot in an empty card is bare (run 27). The figures above
+        // already say when he first heard it.
+        if story.months.values.filter({ $0 > 0 }).count >= 2 {
+            VStack(alignment: .leading, spacing: S.head) {
+                SectionHead(text: "your tide")
+                if few { SparseTide(months: story.months, tint: tint).card() } else { Tide(months: story.months, tint: tint).card() }
+            }
+            .padding(.horizontal, S.margin)
         }
-        .padding(.horizontal, S.margin)
     }
 }
 

@@ -34,7 +34,8 @@ struct RiverCard: View {
                 SectionHead(text: "always there", trailing: "\(river.layers.count) artists")
                 VStack(alignment: .leading, spacing: S.inner) {
                     stream(order, from: river.from).id(tick)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: S.figures)], alignment: .leading, spacing: S.pair * 2) {
+                    // Columns wide enough for a whole name: three upright cut them to "The Long Aft…" (run 27).
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: S.figures)], alignment: .leading, spacing: S.pair * 2) {
                         ForEach(bySize) { l in
                             Opens(route: .artist(l.artist), zoom: nil) {
                                 HStack(spacing: 8) {

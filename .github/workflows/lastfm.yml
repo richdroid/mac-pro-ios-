@@ -167,7 +167,7 @@ jobs:
           }
           date
           # Folded, upright. The first launch: the whole history read in, filmed on You, slowed so it can be seen.
-          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 0 -fresh YES -mockSyncSlow YES
+          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 0 -fresh YES -mockSyncSlow YES -pose sync
           # Read in full at normal speed for everything after (the slowed read above may not have finished), then the
           # insights that need all of it, the track lengths and Discover's first list.
           shot start-first 1 30 -tab 0

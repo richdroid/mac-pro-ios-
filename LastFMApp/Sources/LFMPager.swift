@@ -263,7 +263,9 @@ private struct PivotHeaders: View {
     let choose: (Int) -> Void
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     var body: some View {
-        let size = 40 * min(max(k, 0.9), 1.2)
+        // Seven stretches at 40 pt left "week month 3 month" cut at the camera folded; past four names they're set
+        // smaller so most of them show at once (review, run 27).
+        let size = (names.count > 4 ? 32 : 40) * min(max(k, 0.9), 1.2)
         let lead = S.margin - 3
         let f = max(0, min(CGFloat(names.count - 1), motion.x / pw))
         ScrollViewReader { proxy in

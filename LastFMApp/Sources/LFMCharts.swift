@@ -174,7 +174,7 @@ struct ChartSummary: Sendable {
     @ObservationIgnored private var renderTask: Task<Void, Never>?
     func render() {
         let n = size
-        let list = Array(entries.prefix(n * n))
+        let list = collageCells(entries, n * n)
         renderTask?.cancel()
         shareImage = nil
         guard !list.isEmpty else { return }
@@ -234,8 +234,11 @@ struct ChartsTab: View {
                       panels: pages.enumerated().map { i, p in
                           Panel(i, p.name.lowercased()) {
                               VStack(alignment: .leading, spacing: S.section) {
-                                  content(p, onlyLeft: false)
+                                  // His top list straight after the figures, the collage after it: the list is what he
+                                  // comes for, and it sat more than a screen down under the picture (review, run 27).
+                                  content(p, onlyLeft: false, collage: false)
                                   list(m.cache[m.key(p, m.kind)]?.0 ?? [])
+                                  collage(m.cache[m.key(p, m.kind)]?.0 ?? [], current: p == m.period)
                                   // The last twelve weeks are three months: they belong on that page.
                                   if p == .days(90) { BumpSection() }
                               }
@@ -257,11 +260,11 @@ struct ChartsTab: View {
     }
 
     // One stretch's chart: its figures and its collage (the list follows, or sits on the right open flat).
-    @ViewBuilder private func content(_ p: Period, onlyLeft: Bool) -> some View {
+    @ViewBuilder private func content(_ p: Period, onlyLeft: Bool, collage withCollage: Bool = true) -> some View {
         let hit = p == m.period ? (m.entries, m.summary) : (m.cache[m.key(p, m.kind)] ?? ([], nil))
         if hit.0.isEmpty { ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section) }
         figures(hit.1, p)
-        collage(hit.0, current: p == m.period)
+        if withCollage { collage(hit.0, current: p == m.period) }
     }
 
     private var kindPicker: some View {
@@ -334,7 +337,7 @@ struct ChartsTab: View {
     @ViewBuilder private func collage(_ entries: [Entry], current: Bool) -> some View {
         if !entries.isEmpty {
             let n = m.size
-            let cells = Array(entries.prefix(n * n))
+            let cells = collageCells(entries, n * n)
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "collage")
                 HStack(spacing: S.gap) {
@@ -602,4 +605,15 @@ struct WeekRow: View {
         .buttonStyle(Press())
         .task(id: w.from) { top = await HistoryDB.reader.weekTop(from: w.from, to: w.to) }
     }
+}
+
+// A collage's cells: one per cover, never the same cover twice. Tracks from one album all carry its cover, and a year of
+// tracks drew the same cover two to four times (run 27), which reads as broken.
+func collageCells(_ entries: [Entry], _ count: Int) -> [Entry] {
+    var seen = Set<String>(), out: [Entry] = []
+    for e in entries where out.count < count {
+        let k = e.art.url.flatMap { $0.isEmpty ? nil : $0 } ?? (e.art.album.isEmpty ? e.id : e.art.key)
+        if seen.insert(k).inserted { out.append(e) }
+    }
+    return out
 }

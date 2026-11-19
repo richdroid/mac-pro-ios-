@@ -57,7 +57,7 @@ struct StartTab: View {
             }
             StreakCard().padding(.horizontal, S.margin)
             // The first read, while it runs, under his figures rather than over them: his stats come first.
-            if !sync.complete { YearsSection() }
+            if !sync.complete { YearsSection().id("reading") }
             PaceCard().padding(.horizontal, S.margin)
             MilestoneCard().padding(.horizontal, S.margin)
             TimeCard()
