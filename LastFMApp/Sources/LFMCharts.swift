@@ -216,6 +216,9 @@ struct ChartsTab: View {
     @Environment(\.paneLayout) private var pane
     @State private var picking = false
     @State private var all = false
+    // The width the figures have: folded, the plays are set smaller so the largest count he has ("33,022") fits beside
+    // the change unshrunk.
+    @State private var figuresWidth: CGFloat = 400
     // The stretch it opens on, from the start: set in onAppear it came after the pager had fixed where it begins, and a
     // chart opened on a year showed the week's figures under names with none lit (run 32).
     @State private var page: Int
@@ -332,17 +335,29 @@ struct ChartsTab: View {
 
     // Open flat: the stretches in the same glass bar as every other choice (a past week among them once chosen),
     // scrolling with a fade when they outrun the pane, and the way to choose a week under it with the kind.
+    // Two rows of three, each spread across the pane, so every stretch shows whole ("All time" was cut to "A" at the
+    // pane's edge, run 33); a past week, once chosen, on a row of its own.
     private var periods: some View {
-        Segments(items: pages, selection: Binding(get: { m.period }, set: { m.period = $0 })) { $0.name }
+        let pick = Binding(get: { m.period }, set: { m.period = $0 })
+        return VStack(alignment: .leading, spacing: S.pair * 2) {
+            Segments(items: Array(Period.rolling.prefix(3)), selection: pick, fill: true) { $0.name }
+            Segments(items: Array(Period.rolling.dropFirst(3)), selection: pick, fill: true) { $0.name }
+            if case .week = m.period { Segments(items: [m.period], selection: pick, fill: true) { $0.name } }
+        }
+        .padding(.horizontal, S.margin)
     }
 
     @ViewBuilder private func figures(_ s: ChartSummary?, _ p: Period) -> some View {
         if let s {
+            let size: CGFloat = figuresWidth < 440 ? 50 : 64
             VStack(alignment: .leading, spacing: S.inner) {
                 HStack(alignment: .lastTextBaseline, spacing: S.figures) {
                     VStack(alignment: .leading, spacing: S.pair) {
-                        Text(number(s.plays)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                        // A slot of one height whatever the count: a shrunk figure was shorter and everything under it
+                        // rose, about 21 pt between week and 6 months folded (run 33).
+                        Text(number(s.plays)).font(.system(size: size, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                             .lineLimit(1).minimumScaleFactor(0.6)
+                            .frame(height: ceil(size * 1.2), alignment: .bottom)
                         Text("plays").font(.title3.weight(.light)).foregroundStyle(S.soft)
                     }
                     if let c = s.change {
@@ -373,6 +388,7 @@ struct ChartsTab: View {
                     }
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { figuresWidth = $0 }
             .padding(.horizontal, S.margin)
         }
     }

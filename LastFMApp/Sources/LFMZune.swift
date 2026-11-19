@@ -28,7 +28,9 @@ struct MixName: View {
             let natural = max(textWidth(name, size: size, tracking: -2), 1)
             // Always whole: set smaller until it fits the band, and left out when even half size wouldn't fit. A word
             // cut at the display's edge or at the fold read as broken ("ard li", run 32).
-            let fit = min(size, size * room / natural)
+            // At most 80 % of the band, so there's always room to sway: fitted to the full width it had none and stood
+            // still (run 33).
+            let fit = min(size, size * room * 0.8 / natural)
             let slack = max(0, room - natural * fit / size)
             if fit >= size * 0.5 {
                 TimelineView(.animation(minimumInterval: 1 / 30, paused: !moving || still || slack < 2)) { tl in
@@ -177,14 +179,16 @@ struct MixView: View {
     }
 
     private func grid(_ nodes: [Node]) -> some View {
-        let cols = width < 330 ? 3 : 4
+        let cols = min(width < 330 ? 3 : 4, max(nodes.count, 1))
+        // Only full rows: eight in three columns left a hole (3, 3, 2; run 33).
+        let cells = Array(nodes.prefix(max(cols, nodes.count / cols * cols)))
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: S.gap, alignment: .top), count: cols), alignment: .leading, spacing: S.inner) {
-            ForEach(Array(nodes.enumerated()), id: \.element.id) { k, n in
+            ForEach(Array(cells.enumerated()), id: \.element.id) { k, n in
                 Opens(route: .artist(n.name), zoom: "mix|\(n.id)") {
                     VStack(alignment: .leading, spacing: 4) {
                         ArtView(n.art, px: 300, corner: 8).aspectRatio(1, contentMode: .fit).zoomSource("mix|\(n.id)")
                             .opacity(n.plays > 0 ? 1 : 0.72)
-                        words(n, align: .leading)
+                        words(n, align: .leading, reserve: true)
                     }
                 }
                 .opacity(shown ? 1 : 0)
@@ -197,9 +201,10 @@ struct MixView: View {
         }
     }
 
-    private func words(_ n: Node, align: HorizontalAlignment) -> some View {
+    // In the grid every name keeps two lines, so the plays under them sit on one line across a row (run 33).
+    private func words(_ n: Node, align: HorizontalAlignment, reserve: Bool = false) -> some View {
         VStack(alignment: align, spacing: 0) {
-            Text(n.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: false)
+            Text(n.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: reserve)
                 .multilineTextAlignment(align == .leading ? .leading : .center)
             Text(n.plays > 0 ? plays(n.plays) : "new to you").font(.caption2).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
         }

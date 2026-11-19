@@ -121,6 +121,11 @@ struct NowHero: View {
     @State private var breathe = false
     // His history with the song on now: his plays of it and of the artist, and when he first heard it.
     @State private var depth: Depth?
+    // Where the song's block sits on the first screen (measured once, at rest), its height, and the screen's height:
+    // the name's band goes whole above the foot or wholly under it, never cut by it (run 33, folded at rest).
+    @State private var heroTop: CGFloat?
+    @State private var heroHeight: CGFloat = 0
+    @State private var viewport: CGFloat = 0
     struct Depth: Equatable { let id: String; let track: Int; let artist: Int; let first: Int? }
     init(layout: Layout, titled: Bool = true) { self.layout = layout; self.titled = titled; LaunchLog.mark("hero built") }
     private var store: Store { Store.shared }
@@ -160,15 +165,21 @@ struct NowHero: View {
                     }
                 }
                 .padding(.horizontal, S.margin)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { r in
+                    if heroTop == nil { heroTop = r.minY }
+                    heroHeight = r.height
+                }
                 // Zune HD's Now Playing: the artist's name huge and faint, drifting while it plays. A band of its own
                 // under the song, never behind its words (it ran through "Orchard Lights / Velvet Rooms", run 32), and
                 // always whole in its pane. Gone when nothing plays.
                 if playing {
-                    MixName(text: s.artist, size: layout == .wide ? 110 : 84, moving: true)
-                        .padding(.top, -S.pair)
+                    let size: CGFloat = layout == .wide ? 110 : 84
+                    MixName(text: s.artist, size: size, moving: true)
+                        .padding(.top, bandDrop(ceil(size * 1.2)) - S.pair)
                         .id(s.artist).transition(.opacity)
                 }
             }
+            .background { Color.clear.containerRelativeFrame(.vertical).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 } }
             .animation(.smooth(duration: 0.5), value: s.id)
             .animation(.easeOut(duration: 0.3), value: depth)
             .task(id: "\(s.id)|\(HistorySync.shared.complete)") {
@@ -193,6 +204,14 @@ struct NowHero: View {
                 .accessibilityLabel("Waiting for your listening")
             }
         }
+    }
+    // How far the band is let down: nothing when it fits whole above the screen's foot at rest (or starts below it
+    // anyway), else enough to start it just under the foot.
+    private func bandDrop(_ band: CGFloat) -> CGFloat {
+        guard let top = heroTop, viewport > 0, heroHeight > 0 else { return 0 }
+        let start = top + heroHeight + S.head - S.pair
+        guard start < viewport, start + band > viewport - 8 else { return 0 }
+        return viewport - start + 8
     }
     private func art(_ s: Scrobble, _ playing: Bool) -> some View {
         let tint = ArtStore.shared.palette(s.art)?.vivid.color ?? Palette.from(name: s.artist + s.album).vivid.color

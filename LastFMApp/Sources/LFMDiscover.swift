@@ -24,7 +24,7 @@ struct Rec: Codable, Hashable, Identifiable, Sendable {
     private(set) var failed = false
     private var file: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(LastFM.shared.mock ? "discover-mock.json" : "discover.json") }
     private init() {
-        if !UserDefaults.standard.bool(forKey: "fresh"), let d = try? Data(contentsOf: file), let o = try? JSONDecoder().decode([Rec].self, from: d) {
+        if !UserDefaults.standard.bool(forKey: "fresh"), !UserDefaults.standard.bool(forKey: "mockDown"), let d = try? Data(contentsOf: file), let o = try? JSONDecoder().decode([Rec].self, from: d) {
             recs = o
             day = UserDefaults.standard.integer(forKey: LastFM.shared.mock ? "discover.day.mock" : "discover.day")
         }
@@ -79,6 +79,8 @@ struct Rec: Codable, Hashable, Identifiable, Sendable {
             }
             recs = list
         }
+        // Nothing found (Last.fm gone) isn't kept as today's list.
+        guard !list.isEmpty else { return }
         day = LocalDay.today
         UserDefaults.standard.set(day, forKey: LastFM.shared.mock ? "discover.day.mock" : "discover.day")
         if let d = try? JSONEncoder().encode(list) { try? d.write(to: file, options: .atomic) }

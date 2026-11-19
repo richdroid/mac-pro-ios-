@@ -131,7 +131,8 @@ struct Profile: Sendable {
                 if before != nil { await loadProfile(fresh: 60) }
             }
         } catch {
-            if failingSince == nil { failingSince = Date() }
+            // (-mockDown YES: as if gone for a while already, so the build's shots show the note without waiting.)
+            if failingSince == nil { failingSince = Date().addingTimeInterval(UserDefaults.standard.bool(forKey: "mockDown") ? -30 : 0) }
             if let f = failingSince, Date().timeIntervalSince(f) > 25, !trouble { withAnimation(.smooth) { trouble = true } }
         }
     }

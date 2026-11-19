@@ -125,7 +125,9 @@ struct Pager: View {
                     // (review 2026-11-14, item 5).
                     .mask {
                         VStack(spacing: 0) {
-                            if look == .pivot { LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: S.head) }
+                            // A soft fade, deep enough to read as one: at 12 pt "Show all 37" looked hard cut under the
+                            // pinned kinds (run 33).
+                            if look == .pivot { LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fade) }
                             if look == .panorama {
                                 HStack(spacing: 0) {
                                     Color.black
@@ -169,7 +171,7 @@ struct Pager: View {
                     }
                     p.content
                 }
-                .padding(.top, look == .pivot || title == nil ? S.head : 0)
+                .padding(.top, look == .pivot ? Self.fade : title == nil ? S.head : 0)
                 .padding(.bottom, S.section)
             }
             .contentMargins(.top, look == .pivot ? 0 : bars.top, for: .scrollContent)
@@ -208,6 +210,8 @@ struct Pager: View {
         if id != page { page = id; landed += 1 }
     }
 
+    // How deep a pivot's pages fade under its names; their content starts under it at rest.
+    static let fade: CGFloat = 24
     // His name small, over every section but the first.
     static let eyebrow: CGFloat = 22
     // The title as large as the panorama's first section allows, from 88 pt, and always whole: a long name is set

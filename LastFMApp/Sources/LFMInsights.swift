@@ -318,9 +318,11 @@ struct RecordsSection: View {
         return Opens(route: route, zoom: "record|\(r.id)") {
             ZStack(alignment: .bottomLeading) {
                 ArtView(ref, px: 700, corner: 0).frame(width: 250, height: 250).zoomSource("record|\(r.id)")
-                LinearGradient(colors: [.black.opacity(0.05), .black.opacity(0.45), .black.opacity(0.88)], startPoint: .top, endPoint: .bottom)
+                // The shade reaches up behind the figure: the thin "155" on a busy cover was hard to read (run 33).
+                LinearGradient(stops: [.init(color: .black.opacity(0.1), location: 0), .init(color: .black.opacity(0.6), location: 0.3), .init(color: .black.opacity(0.9), location: 1)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: S.pair) {
                     Text(number(r.plays)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.5), radius: 8)
                     Text(what).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                     Text(name).font(.subheadline).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
                     Text(LocalDay.date(r.day).formatted(.dateTime.month(.wide).day().year())).font(.subheadline).foregroundStyle(.white.opacity(0.7))

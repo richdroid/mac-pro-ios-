@@ -95,7 +95,8 @@ actor LastFM {
     // `keep: false` for replies that go straight into the history database (a thousand pages need no second copy).
     func call(_ method: String, _ params: [String: String] = [:], fresh: TimeInterval = 0, keep: Bool = true) async throws -> J {
         let ck = cacheKey(method, params)
-        if fresh > 0, let (d, when) = DiskCache.read(ck), Date().timeIntervalSince(when) < fresh, let o = try? JSONSerialization.jsonObject(with: d) { return J(o) }
+        // (-mockDown YES: nothing kept either, so the build can shoot each screen's note for Last.fm gone.)
+        if fresh > 0, !UserDefaults.standard.bool(forKey: "mockDown"), let (d, when) = DiskCache.read(ck), Date().timeIntervalSince(when) < fresh, let o = try? JSONSerialization.jsonObject(with: d) { return J(o) }
         if let t = inFlight[ck] { return try await t.value }
         let t = Task { try await self.fetch(method, params, keep ? ck : nil) }
         inFlight[ck] = t
