@@ -31,7 +31,7 @@ struct StartTab: View {
                 // Library are (it was a panorama whose other sections only a swipe could find; Richard, 2026-11-18:
                 // "its almost impossible to use in its current state").
                 Pager(.pivot, page: $page, top: top,
-                      panels: [Panel(0, ProfileHead.name) { stats(wide: size == .regular && !sideways, strip: true) }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
+                      panels: [Panel(0, ProfileHead.name.lowercased()) { stats(wide: size == .regular && !sideways, strip: true) }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }

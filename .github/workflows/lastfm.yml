@@ -260,6 +260,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Every step tried whatever one of them returns: a film that would not re-encode or a glob with nothing in it
+          # stopped the whole publish in run 27, and the shots and status never went up.
+          set +e
           (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
           # The films at the simulator's full size came to too much for one release asset (films.zip never arrived, runs 2
           # to 20): each is re-encoded within 1280x720, frame rate kept; one that won't re-encode is kept only if small;
@@ -267,7 +270,7 @@ jobs:
           mkdir -p small
           for f in dist/*.mp4; do
             n=$(basename "$f")
-            avconvert -p Preset1280x720 -s "$f" -o "small/$n" --replace > /dev/null 2>&1
+            avconvert -p Preset1280x720 -s "$f" -o "small/$n" --replace > /dev/null 2>&1 || true
             if [ ! -s "small/$n" ]; then
               if [ "$(stat -f %z "$f")" -lt 40000000 ]; then cp "$f" small/; echo "kept as filmed: $n" >> dist/publish.log; else echo "dropped (too large, no re-encode): $n" >> dist/publish.log; fi
             fi

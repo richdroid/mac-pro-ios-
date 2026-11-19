@@ -143,7 +143,9 @@ struct NowHero: View {
                                 Spacer(minLength: 0)
                                 words(s, playing, line: false).padding(.bottom, 6)
                             }
-                            .frame(height: 300)
+                            // At least the cover's height, more when the figures need it: held to 300 the column
+                            // overflowed upward and "3rd" sat cut under the pivot's names (run 27).
+                            .frame(minHeight: 300)
                         }
                     } else if layout == .short {
                         HStack(alignment: .bottom, spacing: S.figures) {

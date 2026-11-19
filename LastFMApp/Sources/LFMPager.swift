@@ -264,23 +264,27 @@ private struct PivotHeaders: View {
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     var body: some View {
         let size = 40 * min(max(k, 0.9), 1.2)
+        let lead = S.margin - 3
         let f = max(0, min(CGFloat(names.count - 1), motion.x / pw))
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 22) {
+                // Each name follows its own margin-wide spacer, and the row is scrolled to the spacers: scrolled to a
+                // name, the name lay flush on the display's edge with no margin (run 27). Room after the last name lets
+                // the last two reach the left as the others do, never clamped into a half word ("ing lately", run 27).
+                HStack(alignment: .firstTextBaseline, spacing: 22 - lead) {
                     ForEach(names.indices, id: \.self) { i in
                         let near = max(0, 1 - abs(CGFloat(i) - f))
+                        Color.clear.frame(width: lead, height: 1).id(i)
                         Button { choose(i) } label: {
                             Text(names[i]).font(.system(size: size, weight: .light)).tracking(-0.8).fixedSize()
                                 .foregroundStyle(.white.opacity(0.42 + 0.56 * near))
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .id(i)
                         .accessibilityAddTraits(i == current ? .isSelected : [])
                     }
                 }
-                .padding(.leading, S.margin - 3).padding(.trailing, 48)
+                .padding(.trailing, max(48, pw * 0.65))
             }
             .scrollIndicators(.hidden)
             .scrollClipDisabled(false)
