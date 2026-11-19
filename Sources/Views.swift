@@ -2706,7 +2706,10 @@ final class HealthSummary: ObservableObject {
     // The programs the Mac says aren't responding ("1 program stuck: Safari; a restart clears it"), by name, for the
     // restart question to offer closing them first.
     @Published private(set) var stuck: [String] = []
+    // The whole report last read, for Everything's page to open on.
+    private(set) var last: MacReport?
     func set(_ r: MacReport?) {
+        if let r { last = r }
         let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false }
         var names: [String] = []
         if let p = r?.parts.first(where: { $0.part == "stuck" && $0.bad }), let c = p.say.components(separatedBy: ";").first?.range(of: ": ") {

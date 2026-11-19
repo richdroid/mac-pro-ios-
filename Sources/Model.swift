@@ -207,6 +207,7 @@ final class AppModel: ObservableObject {
         let api = api
         Task { await ConsoleRemote.shared.refresh(self) }
         Task { await ConsoleSummary.shared.readAll(api) }
+        Task { if let r = try? await api.macHealth() { HealthSummary.shared.set(r) } }
     }
     // What's on screen is only the last the Mac sent: it can't be reached, or won't answer without its code.
     var stale: Bool { problem != nil || needsSignIn || unreadable }

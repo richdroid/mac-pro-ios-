@@ -176,7 +176,8 @@ struct DashboardTab: View {
         let near = s.heat?.hottest
         let memPct = mem.total > 0 ? Int((mem.used / mem.total * 100).rounded()) : 0
         let top = s.procs.max { $0.cpu < $1.cpu }
-        let bad = s.healthBad
+        // The build's pose of one part needing a look says so on every surface (chip, tile, page).
+        let bad = model.pose == "chipbad" ? 1 : s.healthBad
         var t: [TileData] = [
             // CPU and Memory as on Status, each opening its own history by the same name ("Mac Pro" opened a page called CPU).
             TileData(id: "cpu", title: "CPU", symbol: "gauge.with.dots.needle.67percent", figure: "\(cpu.total)%", line: String(format: "Load %.2f", (store.live?.load ?? s.load).first ?? 0), page: "overview") { model.history = .cpu },
