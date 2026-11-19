@@ -2,6 +2,8 @@ name: Last.fm app
 # The Last.fm app alone, on its own branch (never main): built unsigned for the iPhone, then shot and filmed in the
 # simulator's Duo on the bundled mock (no key in CI), folded, open upright (the posture Richard holds) and open flat.
 # Published to the lastfm-latest release; nothing else is touched.
+# Two jobs: the shots (every posture, published as soon as they're taken), then the films on a runner of their own, so
+# a gate never waits on the films and a slow or stuck film can't cost the shots (run 35 lost 118 of them that way).
 on:
   push:
     branches: [lastfm]
@@ -14,7 +16,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 255
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,20 +42,25 @@ jobs:
           # The widgets' gallery: every family, look and state drawn as sheets.
           xcodebuild -project MacPro.xcodeproj -scheme GalleryLastFM -configuration Debug -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
-      - name: Shots and films
+          # The simulator build for the films job, kept as a zip (ditto keeps the bundle whole).
+          ditto -c -k --keepParent build-sim/Build/Products/Debug-iphonesimulator/LastFM.app LastFM-sim.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lastfm-sim
+          path: LastFM-sim.zip
+          retention-days: 2
+      - name: Shots
         continue-on-error: true
-        # Run 32 reached 105 minutes in the flat films and lost the rest of them; run 34 reached 140 there.
-        timeout-minutes: 160
+        # Shots only, no films: about 40 minutes.
+        timeout-minutes: 70
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
-          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
-          xcrun simctl list devices available | grep -m1 "$DEVICE"
-          xcrun simctl boot "$DEVICE"
-          xcrun simctl bootstatus "$DEVICE" -b
-          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/LastFM.app
+          . ci/lfm-sim.sh
+          sim_setup build-sim/Build/Products/Debug-iphonesimulator/LastFM.app
+          ZIP=shots.zip
           # The widgets: every family, look and state, drawn by the gallery as sheets.
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryLastFM.app
           xcrun simctl launch "$DEVICE" local.macpro.GalleryLastFM -sheets YES
@@ -61,93 +68,6 @@ jobs:
           G=$(xcrun simctl get_app_container "$DEVICE" local.macpro.GalleryLastFM data 2>/dev/null) && cp "$G"/Documents/sheets/*.png dist/ 2>/dev/null
           xcrun simctl terminate "$DEVICE" local.macpro.GalleryLastFM || true
           ls dist | grep -c lfm-widgets || echo "NO WIDGET SHEETS"
-          APP=local.macpro.LastFM
-          # Each film is shrunk as soon as it's filmed, in the background while the next one runs (see ci/lfm-shrink.swift):
-          # the films as filmed came to 1.7 GB and never went up (films.txt Not Found, runs 27 to 32).
-          swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
-          mkdir -p small
-          SHRINKS=""
-          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
-          D=/tmp/dh/.build/release/devicehubctl
-          open -a DeviceHub; sleep 10
-          # Turn the phone until a display's screenshot has the shape wanted. Device Hub's rotate numbers didn't land the
-          # same way in every pose (run 2: "rotate 1" right after closing left the outer display sideways, and open flat
-          # 1 and 3 came out the other way round), so the shape is checked rather than assumed.
-          orient() {
-            local want=$1 display=$2 r w h
-            for r in 1 3 2 4 1 3; do
-              xcrun simctl io "$DEVICE" screenshot --display=$display /tmp/o.png > /dev/null 2>&1
-              w=$(sips -g pixelWidth /tmp/o.png 2>/dev/null | awk '/pixelWidth/{print $2}'); h=$(sips -g pixelHeight /tmp/o.png 2>/dev/null | awk '/pixelHeight/{print $2}')
-              if [ -n "$w" ] && { { [ $want = portrait ] && [ "$w" -lt "$h" ]; } || { [ $want = landscape ] && [ "$w" -gt "$h" ]; }; }; then echo "orient $want $display: ${w}x${h}"; return 0; fi
-              $D "$DEVICE" rotate $r || true; sleep 4
-            done
-            echo "orient $want $display FAILED (${w}x${h})"
-          }
-          $D "$DEVICE" pose closed || true; sleep 4
-          orient portrait 1
-          # One shot: name, display, wait, then the app's own arguments. A shot is checked for having rendered: a frame taken
-          # before the app drew (run 10's lfm-now-portrait.png was the bare ground) compresses to almost nothing, so one
-          # under 250 KB is taken again, up to three times, and named in the log if it never fills.
-          shot() {
-            local name=$1 display=$2 wait=$3; shift 3
-            xcrun simctl launch "$DEVICE" $APP -launchLog YES "$@"
-            # TURN=landscape: turned with the app in front. The Home Screen never turns, so turning before the launch
-            # checked a display that stayed upright and gave up (run 20: every -fland shot was upright).
-            if [ -n "${TURN:-}" ]; then sleep 3; orient $TURN $display; fi
-            sleep $wait
-            local f=dist/lfm-$name.png n=0
-            xcrun simctl io "$DEVICE" screenshot --display=$display $f > /dev/null 2>&1
-            while [ "$(stat -f %z $f 2>/dev/null || echo 0)" -lt 250000 ] && [ $n -lt 3 ]; do
-              n=$((n + 1)); echo "shot $name looked blank ($(stat -f %z $f 2>/dev/null) bytes), again ($n)"; sleep 4
-              xcrun simctl io "$DEVICE" screenshot --display=$display $f > /dev/null 2>&1
-            done
-            [ "$(stat -f %z $f 2>/dev/null || echo 0)" -lt 250000 ] && echo "SHOT BLANK: $name"
-            xcrun simctl terminate "$DEVICE" $APP || true
-          }
-          # One film: name, display, seconds, then the app's own arguments; steps run while it records (STEPS="cmd:wait ...").
-          film() {
-            local name=$1 display=$2 secs=$3; shift 3
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/lfm-$name.mp4 > /dev/null 2>&1 & REC=$!
-            sleep 3
-            xcrun simctl launch "$DEVICE" $APP -launchLog YES "$@"
-            local step cmd wait t=0
-            for step in $STEPS; do
-              cmd=${step%%:*}; wait=${step##*:}
-              sleep $wait; t=$((t + wait))
-              case $cmd in
-                fling) $D "$DEVICE" drag ${X:-0.5} 0.8 ${X:-0.5} 0.25 0.12 || echo "drag failed";;
-                flingback) $D "$DEVICE" drag ${X:-0.5} 0.25 ${X:-0.5} 0.8 0.12 || echo "drag failed";;
-                pull) $D "$DEVICE" drag ${X:-0.5} 0.3 ${X:-0.5} 0.85 0.9 || echo "drag failed";;
-                slow) $D "$DEVICE" drag ${X:-0.5} 0.75 ${X:-0.5} 0.35 0.9 || echo "drag failed";;
-                side) $D "$DEVICE" drag 0.8 ${Y:-0.75} 0.2 ${Y:-0.75} 0.25 || echo "drag failed";;
-                sideback) $D "$DEVICE" drag 0.2 ${Y:-0.75} 0.8 ${Y:-0.75} 0.25 || echo "drag failed";;
-                sideslow) $D "$DEVICE" drag 0.75 ${Y:-0.75} 0.35 ${Y:-0.75} 1.2 || echo "drag failed";;
-                link) xcrun simctl openurl "$DEVICE" "$LINK" || echo "link failed";;
-                edge) $D "$DEVICE" drag ${EX:-0.01} 0.5 0.9 0.5 0.8 || echo "drag failed";;
-                tap) $D "$DEVICE" touch ${TX:-0.3} ${TY:-0.3} 0.05 || echo "tap failed";;
-                open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose failed";;
-                portrait) orient portrait $display;;
-                landscape) orient landscape $display;;
-                shot) xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-$t.png;;
-              esac
-            done
-            sleep $((secs > t ? secs - t : 1))
-            xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-end.png
-            kill -INT $REC; wait $REC
-            xcrun simctl terminate "$DEVICE" $APP || true
-            if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; return; fi
-            # One shrink at a time (lockf): run 34 had several at once beside the simulator, ten failed, and the shots ran slow.
-            [ -x /tmp/lfm-shrink ] && { lockf /tmp/lfm-shrink.lock /tmp/lfm-shrink dist/lfm-$name.mp4 small/lfm-$name.mp4 || echo "shrink failed: $name"; } &
-            SHRINKS="$SHRINKS $!"
-          }
-          # The shots so far, published while the rest is still being taken, so a pass can be looked at before the run ends.
-          early() {
-            (cd dist && zip -qr ../shots-early.zip . -i '*.png') && cp shots-early.zip shots.zip
-            echo "$GITHUB_SHA $1 run $GITHUB_RUN_NUMBER" > stage.txt
-            gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
-            gh release upload lastfm-latest shots.zip stage.txt --clobber || echo "early upload failed ($1)"
-            rm -f shots.zip
-          }
           # Every tab and page in one posture: name suffix, display. Tabs: 0 you (Start, panels 0 stats, 1 now, 2 lately,
           # 3 story), 1 charts, 2 library, 3 discover.
           everything() {
@@ -173,51 +93,34 @@ jobs:
             # A long user name with no real name set: whole on the first section, small and whole over the others.
             shot name$x $d 9 -tab 0 -mockName midnightsignal
             shot name-story$x $d 9 -tab 0 -panel 3 -mockName midnightsignal
+            shot scrub$x $d 9 -tab 0 -panel 1 -pose scrub
+            # Last.fm gone: every call fails and nothing kept is used; -mockDown also dates the failures 30 s back, so
+            # the note is up from the first failed call.
+            shot down$x $d 20 -tab 0 -mockDown YES
+            shot now-down$x $d 20 -tab 0 -panel 1 -mockDown YES
+            shot discover-down$x $d 25 -tab 3 -mockDown YES
           }
           date
-          # Before anything else, since -fresh empties his history (the sync film after it starts from nothing anyway): a
-          # stretch not yet read from his own history, asked of Last.fm while it's gone, shows its note. Run 34 had it last
-          # and the step's time limit came first.
+          folded
+          # First, since -fresh empties his history: a stretch not yet read from his own history, asked of Last.fm while
+          # it's gone, shows its note. Then the history read in full at normal speed for everything after, the insights
+          # that need all of it, the track lengths and Discover's first list.
           shot charts-down 1 25 -tab 1 -period 2 -fresh YES -mockDown YES
-          # Folded, upright. The first launch: the whole history read in, filmed on You, slowed so it can be seen.
-          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 0 -fresh YES -mockSyncSlow YES -pose sync
-          # Read in full at normal speed for everything after (the slowed read above may not have finished), then the
-          # insights that need all of it, the track lengths and Discover's first list.
-          shot start-first 1 30 -tab 0
+          shot start-first 1 40 -tab 0 -fresh YES
           shot discover-first 1 20 -tab 3
           everything "" 1
-          shot scrub 1 9 -tab 0 -panel 1 -pose scrub
-          # Last.fm gone: every call fails and nothing kept is used; -mockDown also dates the failures 30 s back, so the note
-          # (shown once it has been away 25 s) is up from the first failed call (run 33's 36 s waits missed it).
-          shot down 1 20 -tab 0 -mockDown YES
-          shot now-down 1 20 -tab 0 -panel 1 -mockDown YES
-          shot discover-down 1 25 -tab 3 -mockDown YES
           early folded
-          # The panorama: across Start's four sections and back (a slow drag, then flicks), the title sliding behind.
-          STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pan-start 1 28 -tab 0
-          # Scrolled down a section, then across: the title rising with it and meeting the next.
-          STEPS="slow:6 shot:2 side:2 shot:2 sideback:2 shot:2" film pan-start-scrolled 1 18 -tab 0
-          # The pivots: Charts' stretches and the Library's shelves, swiped through and back.
-          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pivot-charts 1 26 -tab 1
-          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-library 1 24 -tab 2
-          STEPS="slow:10 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 26 -tab 0 -panel 1
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 slow:2 shot:2" film scroll-now-idle 1 20 -tab 0 -panel 1 -playing NO
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 30 -tab 0
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-story 1 34 -tab 0 -panel 3
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-lately 1 22 -tab 0 -panel 2
-          # A widget's link into the app while it's open: to a section, then to an artist's page.
-          # The simulator asks "Open in Rotation?" for a link from outside: Open is tapped (left up, it sat over every
-          # later shot in run 18).
-          TX=0.57 TY=0.51 LINK="rotation://lately" STEPS="link:6 shot:1 tap:2 shot:3" film link-lately 1 14 -tab 0
-          TX=0.57 TY=0.51 LINK="rotation://artist?name=Glass%20Harbor" STEPS="link:6 tap:2 shot:4" film link-artist 1 16 -tab 1
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-charts 1 28 -tab 1
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-library 1 20 -tab 2
-          STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll 1 26 -tab 0 -pose artist
-          STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2" film album-scroll 1 20 -tab 0 -pose album
-          STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film track-film 1 20 -tab 0 -pose track
-          STEPS="shot:12 shot:12" film live 1 30 -tab 0 -panel 1 -mockAdvance 11
-          film tour 1 22 -tab 0 -pose tour
+          date
+          # Open upright: the posture he holds.
+          upright
+          everything "-portrait" 3
+          early upright
+          # Open flat, two panes.
+          flat
+          everything "-open" 3
+          early flat
           # Folded and turned sideways, a posture he can hold too.
+          folded
           TURN=landscape shot start-fland 1 9 -tab 0
           TURN=landscape shot now-fland 1 8 -tab 0 -panel 1
           TURN=landscape shot now-idle-fland 1 8 -tab 0 -panel 1 -playing NO
@@ -226,101 +129,118 @@ jobs:
           TURN=landscape shot library-fland 1 9 -tab 2
           TURN=landscape shot artist-fland 1 11 -tab 0 -pose artist
           TURN=landscape shot track-fland 1 10 -tab 0 -pose track
-          # Upright again, with the app in front for the same reason.
-          xcrun simctl launch "$DEVICE" $APP -tab 0; sleep 3; orient portrait 1; xcrun simctl terminate "$DEVICE" $APP || true
-          date
-          # Postures changed live. Folded on Now, turned sideways and back: the outer display filmed.
-          $D "$DEVICE" pose closed || true; sleep 4; orient portrait 1
-          STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-outer 1 22 -tab 0
-          # Opened upright on Charts and scrolled, turned flat, half folded, flat again, upright: the inner display filmed
-          # from open (recording it folded gives an empty film).
-          $D "$DEVICE" pose open || true; sleep 6; orient portrait 3
-          STEPS="slow:6 shot:2 landscape:6 shot:2 partial:6 shot:2 open:6 shot:2 portrait:6 shot:2" film posture-inner 3 44 -tab 1
-          STEPS="slow:7 shot:2 landscape:6 shot:2 portrait:6 shot:2" film posture-page 3 30 -tab 0 -pose artist
-          # Open upright: the posture he holds.
-          $D "$DEVICE" pose open || true; sleep 8
-          orient portrait 3
-          sleep 4
-          everything "-portrait" 3
-          shot scrub-portrait 3 9 -tab 0 -panel 1 -pose scrub
-          early upright
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-lately-portrait 3 22 -tab 0 -panel 2
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-story-portrait 3 26 -tab 0 -panel 3
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-now-idle-portrait 3 18 -tab 0 -panel 1 -playing NO
-          STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pan-name-portrait 3 20 -tab 0 -mockName midnightsignal
-          STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pan-start-portrait 3 26 -tab 0
-          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 sideback:2 shot:2" film pivot-charts-portrait 3 18 -tab 1
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2" film scroll-now-portrait 3 20 -tab 0 -panel 1
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-you-portrait 3 28 -tab 0
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-charts-portrait 3 26 -tab 1
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-library-portrait 3 18 -tab 2
-          STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-portrait 3 22 -tab 0 -pose artist
-          film tour-portrait 3 22 -tab 0 -pose tour
-          # Open flat, two panes.
-          orient landscape 3
-          sleep 4
-          everything "-open" 3
-          early flat
-          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-story-open 3 18 -tab 0 -panel 3
-          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-now-open 3 18 -tab 0
-          X=0.28 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-you-open 3 20 -tab 0
-          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 sideback:2 shot:2" film pan-start-open 3 18 -tab 0
-          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
-          X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
-          film tour-open 3 22 -tab 0 -pose tour
           date
           # How long each launch took to its first frame, step by step (-launchLog).
           C=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) && cp "$C/Library/Caches/launch-log.txt" dist/launch.log 2>/dev/null
-          for p in $SHRINKS; do wait $p; done
-          ls small | wc -l
-          cat dist/launch.log 2>/dev/null | head -80
-          ls dist
-      - name: Publish
+          ls dist | grep -c png
+      - name: Publish shots
         if: always()
+        timeout-minutes: 15
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Every step tried whatever one of them returns: a film that would not re-encode or a glob with nothing in it
-          # stopped the whole publish in run 27, and the shots and status never went up.
           set +e
+          . ci/lfm-sim.sh
           (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
-          # The shots, the apps and the status first, before the films are re-encoded: run 29 reached the job's time
-          # limit while re-encoding, and nothing of it was published.
           (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || zip -q ../apps.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }} run $GITHUB_RUN_NUMBER" > status.txt
-          gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
-          for f in shots.zip apps.zip status.txt; do
-            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
-          done
-          # The films at the simulator's full size came to too much for one release asset (films.zip never arrived, runs 2
-          # to 20): each is re-encoded within 1280x720, frame rate kept; one that won't re-encode is kept only if small;
-          # and they go up as three zips, by posture, each well inside a release asset's limit. What happened is logged.
-          # Most were shrunk while filming; any the shots step didn't get to (it timed out, a shrink failed) are shrunk here,
-          # by the same tool, else avconvert's smaller preset; one that won't shrink is kept only if small.
-          mkdir -p small
-          [ -x /tmp/lfm-shrink ] || swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
-          for f in dist/*.mp4; do
-            n=$(basename "$f")
-            [ -s "small/$n" ] && continue
-            [ "$(stat -f %z "$f")" -lt 20000 ] && continue
-            /tmp/lfm-shrink "$f" "small/$n" > /dev/null 2>&1 || avconvert -p Preset960x540 -s "$f" -o "small/$n" --replace > /dev/null 2>&1 || true
-            if [ ! -s "small/$n" ]; then
-              if [ "$(stat -f %z "$f")" -lt 40000000 ]; then cp "$f" small/; echo "kept as filmed: $n" >> dist/publish.log; else echo "dropped (too large, no re-encode): $n" >> dist/publish.log; fi
-            fi
-          done
+          release
+          upload shots.zip apps.zip status.txt
+  films:
+    # After the shots, on the build they made; never holding them up.
+    needs: shots
+    if: ${{ !cancelled() }}
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: lastfm-sim
+      - name: Films
+        continue-on-error: true
+        timeout-minutes: 75
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          mkdir -p dist
+          exec > >(tee dist/films.log) 2>&1
+          ditto -x -k LastFM-sim.zip sim-app
+          . ci/lfm-sim.sh
+          sim_setup sim-app/LastFM.app
+          ZIP=film-shots.zip
+          date
+          folded
+          # The first launch: the whole history read in, filmed on You, slowed so it can be seen; then read in full at
+          # normal speed for the films after it.
+          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 0 -fresh YES -mockSyncSlow YES -pose sync
+          shot films-ready 1 40 -tab 0
+          shot films-ready-discover 1 20 -tab 3
+          # The pivots: Charts' stretches and the Library's shelves, swiped through and back; You across its sections.
+          STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pan-start 1 28 -tab 0
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pivot-charts 1 26 -tab 1
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-library 1 24 -tab 2
+          STEPS="slow:10 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 26 -tab 0 -panel 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 slow:2 shot:2" film scroll-now-idle 1 20 -tab 0 -panel 1 -playing NO
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 30 -tab 0
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-story 1 34 -tab 0 -panel 3
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-lately 1 22 -tab 0 -panel 2
+          # A widget's link into the app while it's open: to a section, then to an artist's page. The simulator asks
+          # "Open in Rotation?" for a link from outside: Open is tapped (left up, it sat over every later shot in run 18).
+          TX=0.57 TY=0.51 LINK="rotation://lately" STEPS="link:6 shot:1 tap:2 shot:3" film link-lately 1 14 -tab 0
+          TX=0.57 TY=0.51 LINK="rotation://artist?name=Glass%20Harbor" STEPS="link:6 tap:2 shot:4" film link-artist 1 16 -tab 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-charts 1 28 -tab 1
+          STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll 1 26 -tab 0 -pose artist
+          STEPS="shot:12 shot:12" film live 1 30 -tab 0 -panel 1 -mockAdvance 11
+          early films-folded
+          # Postures changed live. Folded on You, turned sideways and back: the outer display filmed.
+          STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-outer 1 22 -tab 0
+          # Opened upright on Charts and scrolled, turned flat, half folded, flat again, upright: the inner display filmed
+          # from open (recording it folded gives an empty film).
+          upright
+          STEPS="slow:6 shot:2 landscape:6 shot:2 partial:6 shot:2 open:6 shot:2 portrait:6 shot:2" film posture-inner 3 44 -tab 1
+          # Open upright: the films the gate reads in that posture.
+          upright
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2" film scroll-now-portrait 3 20 -tab 0 -panel 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-story-portrait 3 26 -tab 0 -panel 3
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 sideback:2 shot:2" film pivot-charts-portrait 3 18 -tab 1
+          STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pan-name-portrait 3 20 -tab 0 -mockName midnightsignal
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-charts-portrait 3 26 -tab 1
+          early films-upright
+          # Open flat, two panes.
+          flat
+          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-story-open 3 18 -tab 0 -panel 3
+          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-now-open 3 18 -tab 0
+          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
+          X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
+          date
+          # The simulator stopped before any film is shrunk: shrinking beside it failed with "Cannot Decode" (runs 34, 35).
+          xcrun simctl shutdown "$DEVICE"
+      - name: Publish films
+        if: always()
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          . ci/lfm-sim.sh
+          mkdir -p dist
+          # The films' stills first, so they're up whatever happens to the films.
+          (cd dist && zip -qr ../film-shots.zip . -i '*.png' || zip -q ../film-shots.zip /dev/null)
+          release
+          upload film-shots.zip
+          swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
+          # 15 minutes for all the shrinking, two at a time; then whatever is left is kept as filmed if small.
+          bash ci/lfm-shrink-all.sh dist small 900 2 | tee dist/publish.log
           (cd small && ls -la >> ../dist/publish.log)
           (cd small && zip -q0 ../films-upright.zip *-portrait*.mp4 lfm-posture-*.mp4 2>/dev/null; zip -q0 ../films-flat.zip *-open*.mp4 2>/dev/null; ls *.mp4 2>/dev/null | grep -v -e '-portrait' -e '-open' -e '^lfm-posture-' | zip -q0 ../films.zip -@ 2>/dev/null)
           for z in films.zip films-upright.zip films-flat.zip; do [ -f $z ] || zip -q $z /dev/null; done
           ls -la films*.zip | tee -a dist/publish.log
-          (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || zip -q ../apps.zip /dev/null)
-          echo "$GITHUB_SHA ${{ job.status }} run $GITHUB_RUN_NUMBER" > status.txt
-          gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
+          upload films.zip films-upright.zip films-flat.zip
+          # Last, so a gate knows these films are this run's: what went up, and the films' logs.
           (echo "$GITHUB_SHA films run $GITHUB_RUN_NUMBER"; cd small && ls -la *.mp4 2>/dev/null) > films.txt
-          for f in films.zip films-upright.zip films-flat.zip; do
-            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
-          done
-          # The films' log and the publish log last, so a gate knows these films are this run's.
-          (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || true)
-          for f in films.txt apps.zip; do
-            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
-          done
+          (cd dist && zip -q ../films-logs.zip films.log publish.log 2>/dev/null || zip -q ../films-logs.zip /dev/null)
+          upload films.txt films-logs.zip
