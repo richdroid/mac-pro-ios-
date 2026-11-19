@@ -20,6 +20,8 @@ struct Rec: Codable, Hashable, Identifiable, Sendable {
     private(set) var recs: [Rec] = []
     private(set) var day = 0
     private(set) var working = false
+    // The last try found nothing (Last.fm didn't answer): said so, with a way to try again, not a record turning for ever.
+    private(set) var failed = false
     private var file: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(LastFM.shared.mock ? "discover-mock.json" : "discover.json") }
     private init() {
         if !UserDefaults.standard.bool(forKey: "fresh"), let d = try? Data(contentsOf: file), let o = try? JSONDecoder().decode([Rec].self, from: d) {
@@ -31,7 +33,8 @@ struct Rec: Codable, Hashable, Identifiable, Sendable {
         guard !working, day != LocalDay.today || recs.isEmpty else { return }
         guard HistorySync.shared.complete || HistorySync.shared.coveredFrom < Int(Clock.now.timeIntervalSince1970) - 90 * 86400 else { return }
         working = true
-        Task { await work(); working = false }
+        failed = false
+        Task { await work(); working = false; failed = recs.isEmpty }
     }
     private func work() async {
         let db = HistoryDB.reader
@@ -123,7 +126,18 @@ struct DiscoverTab: View {
     }
 
     @ViewBuilder private var artists: some View {
-        if m.recs.isEmpty {
+        if m.recs.isEmpty && m.failed {
+            VStack(spacing: S.inner) {
+                Text("Last.fm isn't answering, so there's nothing to suggest yet.").font(.body).foregroundStyle(.white).multilineTextAlignment(.center)
+                Button("Try again") { m.appear() }
+                    .font(.body.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 18).frame(minHeight: 44)
+                    .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, S.section).padding(.horizontal, S.inner)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: S.corner, style: .continuous))
+            .padding(.horizontal, S.margin)
+        } else if m.recs.isEmpty {
             // The first time only: a record turning on glass while the first list is found.
             VStack(spacing: S.inner) {
                 TimelineView(.animation(minimumInterval: 1 / 30)) { tl in

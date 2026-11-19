@@ -29,7 +29,8 @@ enum LibShelf: Int, CaseIterable, Sendable {
         if !lovedAsked {
             lovedAsked = true
             Task {
-                if let l = await Loved.load() { withAnimation(.smooth) { loved = l } }
+                // Asked again on the next visit when Last.fm didn't answer (it was asked once a launch, however it went).
+                if let l = await Loved.load() { withAnimation(.smooth) { loved = l } } else { lovedAsked = false }
                 lovedPlays = await HistoryDB.reader.lovedPlays(loved.map { ($0.artist, $0.title) })
             }
         }
@@ -207,6 +208,7 @@ struct LibraryTab: View {
         .padding(.horizontal, S.margin).padding(.bottom, S.head)
         if isLoved {
             ForEach(m.loved) { l in lovedRow(l).padding(.horizontal, S.margin) }
+            if m.loved.isEmpty { Text("Songs you love on Last.fm show here.").font(.body).foregroundStyle(S.soft).padding(.horizontal, S.margin).padding(.top, S.head) }
         } else {
             // His plays as a bar on every row against the shelf's most played, so a wide row isn't a name, a gulf and a
             // number (review 2026-11-14, item 17).
@@ -217,6 +219,8 @@ struct LibraryTab: View {
                     .onAppear { if e.id == list.prefix(limit).last?.id, limit < list.count { self.shown[sh] = limit + 300 } }
             }
             if m.lists[kind] == nil { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
+            // Nothing yet (the first read hasn't reached any plays): said, not a blank shelf.
+            else if list.isEmpty { Text(HistorySync.shared.complete ? "Nothing here yet." : "Your \(kind.noun) show here as your history is read.").font(.body).foregroundStyle(S.soft).padding(.horizontal, S.margin).padding(.top, S.head) }
         }
     }
     private func trailing(_ e: Entry) -> String? {

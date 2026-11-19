@@ -72,6 +72,7 @@ struct ChartSummary: Sendable {
     @ObservationIgnored private var bumpCache: [Kind: ([Entry], [[String: Int]], [(Int, Int)])] = [:]
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var stamp = 0       // the history's size when the cache was made
+    @ObservationIgnored private var emptyRemote: Set<String> = []
 
     func key(_ p: Period, _ k: Kind) -> String { "\(p)|\(k.rawValue)" }
 
@@ -79,6 +80,9 @@ struct ChartSummary: Sendable {
         // Kept for a while: worked out again only when the history has grown by a song or two.
         let read = HistorySync.shared.read
         if abs(read - stamp) > 3 { cache = [:]; bumpCache = [:]; stamp = read; generation += 1 }
+        // Last.fm's own charts that came back empty (most often it didn't answer) are asked again on the next visit.
+        for k in emptyRemote { cache[k] = nil }
+        emptyRemote = []
         reload(); reloadBump()
         if weeks.isEmpty { Task { weeks = await ChartWeek.load() } }
     }
@@ -145,6 +149,7 @@ struct ChartSummary: Sendable {
             var week: ChartWeek?
             if case .week(let x) = p { week = x }
             list = await RemoteChart.top(k, period: p.lastfm, week: week)
+            if list.isEmpty { emptyRemote.insert(ck) }
         }
         cache[ck] = (list, sum)
     }
@@ -262,7 +267,17 @@ struct ChartsTab: View {
     // One stretch's chart: its figures and its collage (the list follows, or sits on the right open flat).
     @ViewBuilder private func content(_ p: Period, onlyLeft: Bool, collage withCollage: Bool = true) -> some View {
         let hit = p == m.period ? (m.entries, m.summary) : (m.cache[m.key(p, m.kind)] ?? ([], nil))
-        if hit.0.isEmpty { ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section) }
+        // A spinner only while it's being worked out: a stretch with nothing in it (a quiet past week) or a chart
+        // Last.fm didn't send says so, instead of spinning for ever.
+        if hit.0.isEmpty {
+            if m.cache[m.key(p, m.kind)] == nil {
+                ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section)
+            } else {
+                Text(Store.shared.trouble ? "Last.fm isn't answering. This stretch shows when it does." : "Nothing played in this stretch.")
+                    .font(.body).foregroundStyle(S.soft).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, S.margin).padding(.vertical, S.section)
+            }
+        }
         figures(hit.1, p)
         if withCollage { collage(hit.0, current: p == m.period) }
     }
