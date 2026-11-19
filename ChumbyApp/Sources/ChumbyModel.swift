@@ -632,6 +632,8 @@ final class ChumbyModel: ObservableObject {
                 Task { await ChumbyRingCard.handled() }
                 return true
             case .unconfirmed:
+                // if the Mac reports the ring over within 3 minutes, this was his Stop and the backup goes then
+                ChumbyBackupAlarm.shared.stopUnconfirmed(name: was.components(separatedBy: "\t").dropFirst().first)
                 withAnimation(Self.ringSpring) { sys.ring = was }
                 fail("ring", Self.unconfirmed)
                 Task { await self.loadSys() }

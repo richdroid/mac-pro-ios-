@@ -246,7 +246,8 @@ struct ChumbyStopAlarmIntent: ChumbyRingKey {
         let name = ChumbyRingCard.name, began = Date()
         let out = await RingDesk.shared.press(.stop)
         let backup = await ChumbyRingActions.backupAfter(out, stop: true, name: name)
-        Task.detached { await ChumbyRingActions.report("siri or control", "stop", out, since: began, backup: backup) }
+        // waited for: nothing else holds the app awake once this answers (gate, 11-19)
+        await ChumbyRingActions.report("siri or control", "stop", out, since: began, backup: backup)
         switch out {
         case .confirmed:
             await ChumbyRingCard.over(); await ChumbyRingCard.handled()
@@ -268,7 +269,7 @@ struct ChumbySnoozeAlarmIntent: ChumbyRingKey {
         let name = ChumbyRingCard.name, began = Date()
         let out = await RingDesk.shared.press(.snooze)
         let backup = await ChumbyRingActions.backupAfter(out, stop: false, name: name)
-        Task.detached { await ChumbyRingActions.report("siri or control", "snooze", out, since: began, backup: backup) }
+        await ChumbyRingActions.report("siri or control", "snooze", out, since: began, backup: backup)
         switch out {
         case .confirmed(let until):
             await ChumbyRingCard.handled()
@@ -508,7 +509,9 @@ enum ChumbyRingActions {
         case (.confirmed, true), (.nothingRinging, true): return await RingBackup.stop(name)
         case (.unconfirmed, true): return await RingBackup.unconfirmed(name)
         case (.confirmed(let until), false):
-            let at = until.map { Date(timeIntervalSince1970: $0) } ?? ChumbyRingCard.again ?? Date().addingTimeInterval(Double(ChumbyRingCard.snooze ?? 9) * 60)
+            // the Chumby's own time; else the card's, if it is still ahead (one left from an earlier snooze is not); else the length
+            let card = ChumbyRingCard.again.flatMap { $0 > Date() ? $0 : nil }
+            let at = until.map { Date(timeIntervalSince1970: $0) } ?? card ?? Date().addingTimeInterval(Double(ChumbyRingCard.snooze ?? 9) * 60)
             return await RingBackup.snooze(name, until: at)
         default: return "backup kept"
         }
