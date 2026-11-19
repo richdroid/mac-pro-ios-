@@ -231,7 +231,10 @@ final class ChumbyPushDelegate: NSObject, UIApplicationDelegate {
     // right here, for when the card's own push hasn't a token yet.
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
         guard userInfo["ring"] != nil else { return .noData }
-        ChumbyBackupAlarm.shared.push(userInfo)     // a snooze moves the phone's backup alarm; an end never cancels it
+        // a snooze moves the phone's backup alarm; an end cancels it only after a Stop pressed here (ChumbyBackupAlarm.push),
+        // done before iOS suspends the app again
+        ChumbyBackupAlarm.shared.push(userInfo)
+        await ChumbyBackupAlarm.shared.settle()
         await RingLink.fromMac(userInfo["ring"])
         return .newData
     }

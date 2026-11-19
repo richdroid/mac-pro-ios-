@@ -14,8 +14,9 @@ struct ChumbyApp: App {
     init() {
         ChumbyNotify.shared.install()
         // Stop and Snooze pressed outside the app's page (Lock Screen card, notification, Siri) reach the backup alarm too.
-        RingBackup.stopped = { name in ChumbyBackupAlarm.shared.handled(name: name); await ChumbyBackupAlarm.shared.settle() }
-        RingBackup.snoozed = { name, until in ChumbyBackupAlarm.shared.snoozed(name: name, until: until); await ChumbyBackupAlarm.shared.settle() }
+        RingBackup.stopped = { name in await ChumbyBackupAlarm.shared.stopNow(name: name) }
+        RingBackup.snoozed = { name, until in await ChumbyBackupAlarm.shared.snoozeNow(name: name, until: until) }
+        RingBackup.stopSent = { name in ChumbyBackupAlarm.shared.stopUnconfirmed(name: name) }
     }
     var body: some Scene {
         WindowGroup {

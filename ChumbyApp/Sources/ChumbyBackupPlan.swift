@@ -60,9 +60,10 @@ enum BackupPlan {
 
     // The backup of the ring in progress: one whose ring has begun and whose backup is still ahead, the alarm of that name if
     // several, else the latest to begin.
+    // The alarm named may have begun up to a minute "early" by this phone's clock (a Chumby a little fast, a quick press).
     static func current(_ entries: [Entry], now: Date, name: String?) -> Entry? {
         let live = entries.filter { $0.ringAt <= now && $0.fireAt > now }
-        if let name, !name.isEmpty, let e = live.filter({ same($0.name, name) }).max(by: { $0.ringAt < $1.ringAt }) { return e }
+        if let name, !name.isEmpty, let e = entries.filter({ $0.ringAt <= now.addingTimeInterval(60) && $0.fireAt > now && same($0.name, name) }).max(by: { $0.ringAt < $1.ringAt }) { return e }
         return live.max { $0.ringAt < $1.ringAt }
     }
 
@@ -75,7 +76,10 @@ enum BackupPlan {
     // He snoozed it until `until`: its backup moves to then plus the delay.
     static func snoozed(_ entries: [Entry], now: Date, name: String?, until: Date, delay: Int, makeID: () -> UUID = UUID.init) -> Result {
         guard let e = current(entries, now: now, name: name) else { return Result(entries: entries, cancel: [], add: []) }
-        var n = e; n.id = makeID(); n.fireAt = until.addingTimeInterval(Double(delay) * 60)
+        // already there (the card, the app's page, the Mac's push and the next reading can all report one snooze)
+        let fire = until.addingTimeInterval(Double(delay) * 60)
+        if e.fireAt == fire { return Result(entries: entries, cancel: [], add: []) }
+        var n = e; n.id = makeID(); n.fireAt = fire
         return Result(entries: entries.map { $0.id == e.id ? n : $0 }, cancel: [e], add: [n])
     }
 

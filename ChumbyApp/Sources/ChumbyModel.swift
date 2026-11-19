@@ -673,8 +673,8 @@ final class ChumbyModel: ObservableObject {
                 await ChumbyRingCard.clearNotice()
                 return true
             case .nothingRinging:
+                // a Snooze that found nothing ringing keeps the backup, as the Lock Screen's does (ChumbyRingActions.backupAfter)
                 withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
-                ChumbyBackupAlarm.shared.handled(name: was.components(separatedBy: "\t").dropFirst().first)
                 await ChumbyRingCard.over()
                 return true
             case .unconfirmed:
