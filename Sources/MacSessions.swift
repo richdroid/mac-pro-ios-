@@ -343,24 +343,10 @@ struct SessionTerminal: View {
                 let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
                 return .panes(seam: min(max(crease?.midX ?? w / 2, w * 0.3), w * 0.7), gutter: min(max(24, (crease?.width ?? 0) / 2 + 4), 40))
             }
-            if onItsSide(w) { return .panes(seam: (w * 0.6).rounded(), gutter: 12) }
             return .column
         }
-        if onItsSide(w) { return .panes(seam: (w * 0.6).rounded(), gutter: 12) }
         #endif
         return panes ? .panes(seam: w / 2, gutter: 24) : .column
-    }
-    // Folded and turned on its side: a short, wide page. One column there gave the controls the foot and left the screen
-    // a few lines over them (fewer still with the keyboard up), so the screen takes the left and the controls the right,
-    // as open flat. Judged from the window, not this page, whose height the keyboard takes: open upright with the
-    // keyboard up is shorter than it is wide too, and stays one column.
-    func onItsSide(_ w: CGFloat) -> Bool {
-        #if os(iOS)
-        guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first?.bounds.size else { return false }
-        return win.width > win.height && w >= 560
-        #else
-        return false
-        #endif
     }
     var body: some View {
         // A page of its own, pushed like any other, so Back is where the system puts it, on the side on the Duo.
