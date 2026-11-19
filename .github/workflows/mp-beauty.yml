@@ -38,6 +38,10 @@ jobs:
           exec > >(tee dist/sim.log) 2>&1
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
+          # The software keyboard, not the Mac's: with the hardware keyboard connected a tapped field never raises it, and the
+          # session-turn film showed no keyboard (designer gate 4, 2026-11-19). Set globally and for this device, before boot.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          defaults write com.apple.iphonesimulator DevicePreferences -dict-add "$DEVICE" '{ ConnectHardwareKeyboard = 0; }' || true
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
@@ -115,7 +119,8 @@ jobs:
           dash 1 ""
           # A session page turned from folded upright onto its side and back with the keyboard up (the box tapped first):
           # the screen and the controls go to two panes, clear of the rail, and the box keeps its focus.
-          film session-turn 1 5 'tap "Message the session";rotate 1;rotate 3' -tab 2 -pose session
+          # Tapped twice (the first can land while the page is still settling), so the keyboard is surely up before the turn.
+          film session-turn 1 5 'tap "Message the session";tap "Message the session";rotate 1;rotate 3' -tab 2 -pose session
           # Folded on its side (one right turn), which CI had never shot: the Dashboard, a session page, a history page,
           # Apps and Control. Then back upright before opening.
           $D "$DEVICE" rotate 1; sleep 5
