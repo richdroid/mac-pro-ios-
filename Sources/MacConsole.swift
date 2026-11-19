@@ -1133,10 +1133,22 @@ enum MacSendSize { static func bytes(_ b: Double) -> String { ByteCountFormatter
 struct StorageView: View {
     let model: AppModel
     @StateObject private var feed = FeedReader<StorageFeed>("/api/mac/storage")
+    // The start-up disk in the figures the Dashboard's Storage tile shows (the status's disk, the same df of
+    // /System/Volumes/Data, read every few seconds rather than this page's 20): the tile and the page it opens never
+    // disagree, even for the seconds between their reads (designer gate, 2026-11-19).
+    @State private var disk: (total: Double, free: Double)?
+    func shown(_ v: StorageFeed.Volume) -> StorageFeed.Volume {
+        guard v.mount == "/System/Volumes/Data", let d = disk else { return v }
+        return StorageFeed.Volume(name: v.name, mount: v.mount, total: d.total, free: d.free, kind: v.kind, isInternal: v.isInternal)
+    }
+    func take(_ s: Status?) {
+        guard let d = s?.disk, d.total.isFinite, d.free.isFinite, d.total > 0 else { return }
+        if disk?.total != d.total || disk?.free != d.free { disk = (d.total, d.free) }
+    }
     @ViewBuilder var volumes: some View {
         if let s = feed.value {
             Section {
-                ForEach(s.volumes) { v in
+                ForEach(s.volumes.map(shown)) { v in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack { Label(v.name, systemImage: v.isInternal == true ? "internaldrive" : "externaldrive"); Spacer(); Text("\(Format.bytes(v.free)) free").foregroundStyle(.secondary).monospacedDigit() }
                         GeometryReader { g in
@@ -1159,7 +1171,7 @@ struct StorageView: View {
         if let s = feed.value {
             Section {
                 if let h = s.home {
-                    let total = s.volumes.first?.total ?? 1
+                    let total = s.volumes.first.map(shown)?.total ?? 1
                     // A file among the biggest (~/.claude.json) is a plain row: opened as a folder it measured for ever.
                     ForEach(h) { f in
                         if f.dir == false { LabeledContent(f.name, value: f.bytes.map { MacSendSize.bytes($0) } ?? "–").monospacedDigit() }
@@ -1175,6 +1187,7 @@ struct StorageView: View {
     }
     var body: some View {
         ConsolePage(title: "Storage", place: "macstorage", away: feed.away, lastRead: feed.lastRead) { volumes } right: { home }
+            .onReceive(model.statusStore.$status) { take($0) }
             .task {
                 await feed.loop(model, every: 20)
             }

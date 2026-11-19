@@ -16,6 +16,7 @@ struct DashboardTab: View {
     @ObservedObject private var tv = ConsoleSummary.shared.tv
     @Environment(\.openURL) private var openURL
     @ObservedObject private var watch = RestartWatch.shared
+    @ObservedObject private var health = HealthSummary.shared
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -165,6 +166,15 @@ struct DashboardTab: View {
     static func shorter(_ f: String?) -> [String] {
         switch f { case "All running": ["Running"]; case "Up to date": ["Current"]; case "Restarting": ["Restart"]; default: [] }
     }
+    func everything(_ bad: Int?) -> TileData {
+        let open = { model.macPage = .health }
+        if watch.active { return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: "Restarting", line: "Getting everything up", page: "everything", open: open) }
+        guard let n = bad, n > 0 else {
+            return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: bad.map { _ in "All running" }, line: bad.map { _ in checkedLine }, good: bad.map { _ in true }, page: "everything", open: open)
+        }
+        let w = health.say(n)
+        return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: w.figure, line: w.line, good: false, alts: w.alts, figs: w.figs, page: "everything", open: open)
+    }
     var tileData: [TileData] {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net
         let temps = store.live?.temps ?? s.temps ?? []
@@ -186,7 +196,9 @@ struct DashboardTab: View {
             TileData(id: "temps", title: "Fans & heat", symbol: "thermometer.medium", figure: warmest.map { MacConsole.degrees($0.c) },
                      line: verdict.map { v in v == "Normal" || near == nil ? warmest.map { "\($0.name), the warmest" } ?? v : "\(v) · \(near!.name) \(MacConsole.degrees(near!.c))" } ?? warmest.map { "\($0.name), the warmest" },
                      good: verdict.map { $0 == "Normal" }, alts: [verdict == nil || verdict == "Normal" || near == nil ? warmest?.name : near?.name].compactMap { $0 }, page: "temps") { model.macPage = .fans },
-            TileData(id: "everything", title: "Everything", symbol: "checklist", figure: watch.active ? "Restarting" : bad.map { $0 == 0 ? "All running" : "\($0)" }, line: watch.active ? "Getting everything up" : bad.map { $0 == 0 ? checkedLine : $0 == 1 ? "part needs a look" : "parts need a look" }, good: watch.active ? nil : bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
+            // One part down is named ("Programs", "needs a look"), two or more named as a count always is; the count alone
+            // until the Mac's report agrees with it (designer gate, 2026-11-19: "1 / part needs a look" named nothing).
+            everything(bad),
             TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", alts: ["down"], page: "overview") { model.history = .download },
             TileData(id: "processes", title: "Processes", symbol: "cpu", figure: top.map { "\(Int($0.cpu.rounded()))%" }, line: top?.name, page: "processes") { model.processes = .cpu },
             TileData(id: "storage", title: "Storage", symbol: "internaldrive", figure: Format.bytes(s.disk.free), line: "free of \(Format.bytes(s.disk.total))", alts: ["free"], page: "storage") { model.macPage = .storage },

@@ -1268,7 +1268,8 @@ struct HeroChips: View {
     var parts: Int? { MacConsole.pose == "chipbad" ? 1 : healthBad ?? summary.bad }
     var health: (Color, String) {
         func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
-        if let n = parts, n > 0 { return (.orange, look(n)) }
+        // The part named, as the Dashboard's tile names it (designer gate, 2026-11-19).
+        if let n = parts, n > 0 { return (.orange, summary.say(n).chip) }
         let said = alerts ?? []
         if !said.isEmpty {
             let tint: Color = said.contains { $0.level == "critical" } ? .red : .orange
@@ -1514,6 +1515,9 @@ struct AppsTab: View {
     func say(_ key: String, _ text: String?) {
         guard let text else { return }
         withAnimation(Motion.quick) { failed = (key, text) }; fails += 1
+        // The build's posed failure stays up: folded, the open apps are drawn only once scrolled to, and the shot was
+        // taken before the failure was said, or after it had gone (designer gate, 2026-11-19).
+        if model.pose == "appsfail" { return }
         Task { try? await Task.sleep(nanoseconds: 6_000_000_000); if failed?.text == text { withAnimation(Motion.quick) { failed = nil } } }
     }
     // Quitting, the way the Processes page does it: asked to close first, and Force Quit offered only for an app that
@@ -1536,6 +1540,31 @@ struct AppsTab: View {
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     // Its memory, with its helpers', always; the CPU only while it's doing something, so a list of idle apps isn't a column
     // of "0% CPU" and a busy one stands out. Megabytes under a gigabyte: a few hundred MB read as "0.1 GB" in gigabytes.
+    // Each Mac app's glyph: the Mac doesn't send its apps' icons, so a symbol by name, the same one wherever the app is
+    // listed (open, or in Launch another app), and one plain glyph for an app this doesn't know.
+    static func symbol(_ name: String) -> String {
+        switch name {
+        case "Terminal", "iTerm", "iTerm2": "apple.terminal"
+        case "Finder": "folder"
+        case "Safari", "Google Chrome", "Firefox", "Arc": "safari"
+        case "Music": "music.note"
+        case "Calendar": "calendar"
+        case "Claude": "sparkle"
+        case "Code", "Visual Studio Code", "Xcode": "chevron.left.forwardslash.chevron.right"
+        case "System Settings", "System Preferences": "gearshape"
+        case "Tailscale": "network"
+        case "TextEdit", "Notes": "doc.text"
+        case "VLC", "QuickTime Player", "IINA", "TV": "play.rectangle"
+        case "Messages": "message"
+        case "Mail": "envelope"
+        case "Photos": "photo.on.rectangle"
+        case "Preview": "doc.richtext"
+        case "Activity Monitor": "waveform.path.ecg"
+        case "App Store": "bag"
+        case "Screen Sharing": "rectangle.on.rectangle"
+        default: "app"
+        }
+    }
     static func figures(_ a: Status.App) -> String {
         let mem = Format.memory(a.mem ?? 0), cpu = a.cpu ?? 0
         return cpu >= 1 ? "\(mem) · \(Int(cpu.rounded()))% CPU" : mem
@@ -1559,6 +1588,9 @@ struct AppsTab: View {
                     // dim grey ✕ read as unavailable though it worked (Richard, 2026-11-07: "the greyed out xs when they r
                     // seemingly actionable r confusing and fucked"). Never a swipe (no swipe-to-delete on glass cards).
                     HStack(spacing: 12) {
+                        // A glyph like every other row's: the Mac doesn't send its apps' icons, so each app has a symbol of its
+                        // own, in one box (designer gate, 2026-11-19).
+                        Image(systemName: Self.symbol(a.name)).font(.body).foregroundStyle(macBlue).frame(width: 26, height: 22)
                         VStack(alignment: .leading) {
                             // One line each, so the CPU figure coming and going with each reading never changes the row's height.
                             Text(a.name).lineLimit(1)
@@ -1597,7 +1629,7 @@ struct AppsTab: View {
                 // card of one row of its own was drawn as a lone capsule under the list (2026-11-18, streamlining).
                 Menu {
                     // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
-                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } }
+                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } label: { Label(name, systemImage: Self.symbol(name)) } }
                 } label: {
                     // Its failure in the label's place for a few seconds, likewise.
                     if let f = failed, f.key == "launch" { Label(f.text, systemImage: "exclamationmark.circle").foregroundStyle(.red).lineLimit(1) }
@@ -2464,7 +2496,9 @@ struct ControlTab: View {
     // row, with a line of gestures the Screen's own guide teaches, was a lone capsule between two cards (2026-11-18,
     // "the app is a mess and needs to be streamlined"). The login and the Mac's screen are one job: seeing the Mac.
     var openScreen: some View {
-        Button("Open Screen") { model.openScreen() }
+        // A glyph like every other action row, Status's Screen glyph (designer gate, 2026-11-19: a bare blue line between
+        // a status row and a red one).
+        Button { model.openScreen() } label: { Label("Open Screen", systemImage: "macwindow") }
             .disabled(model.problem != nil || model.needsSignIn)
     }
     var displayOn: Bool { s.displayOn ?? (s.screen != "display off") }
@@ -2576,7 +2610,7 @@ struct ControlTab: View {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
                 // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
                 ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.os.isEmpty ? (p.online ? "Connected" : "Offline") : "\(p.os) · \(p.online ? "Connected" : "Offline")") }
-                if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
+                if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link(destination: u) { Label("Open public link", systemImage: "globe") } }
             // Named by what it holds, not "Remote access" (Status has a card of that name with other rows) nor the
             // plumbing's name (designer, 2026-11-18).
             } header: { Text("Reaching the Mac") } footer: {
@@ -2710,14 +2744,40 @@ final class HealthSummary: ObservableObject {
     @Published private(set) var stuck: [String] = []
     // The whole report last read, for Everything's page to open on.
     private(set) var last: MacReport?
+    // The parts the last report says need a look, in its order, for the words that name them.
+    @Published private(set) var badParts: [String]?
     func set(_ r: MacReport?) {
-        if let r { last = r }
+        if let r { last = r; let b = r.parts.filter(\.bad).map(\.part); if b != badParts { badParts = b } }
         let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false }
         var names: [String] = []
         if let p = r?.parts.first(where: { $0.part == "stuck" && $0.bad }), let c = p.say.components(separatedBy: ";").first?.range(of: ": ") {
             names = String(p.say.components(separatedBy: ";").first![c.upperBound...]).components(separatedBy: ", ").filter { !$0.isEmpty }
         }
         if names != stuck { stuck = names }
+    }
+    // The parts that need a look by name (one name for two parts he knows as one, like Remote access), only while the
+    // report counts as many as `n`: the status's count and the report arrive separately, and until they agree the count
+    // is said alone, so a tile or chip never names one part beside a "2" (designer gate, 2026-11-19). The build's poses
+    // name their own report's parts.
+    func names(agreeing n: Int, pose: String = MacConsole.pose) -> [String]? {
+        guard n > 0, let ids = MacHealthView.posed(pose).map({ $0.report.parts.filter(\.bad).map(\.part) }) ?? badParts, ids.count == n else { return nil }
+        var out: [String] = []
+        for id in ids { let k = MacParts.name(id); if !out.contains(k) { out.append(k) } }
+        return out
+    }
+    // "TV needs a look", "macOS patches need a look": the verb agrees with the name's last word.
+    static func needs(_ name: String) -> String {
+        let w = name.split(separator: " ").last.map(String.init) ?? name
+        return w.hasSuffix("s") && !w.hasSuffix("ss") ? "need a look" : "needs a look"
+    }
+    // The words for `n` parts needing a look, the same on Status's chip and the Dashboard's tile: one part by its name,
+    // two or more named as a count always is (MacConsole.named), the bare count only until the report is in.
+    func say(_ n: Int) -> (figure: String, figs: [String], line: String, alts: [String], chip: String) {
+        let count = (figure: "\(n)", figs: [String](), line: n == 1 ? "part needs a look" : "parts need a look", alts: [String](), chip: "\(n) need\(n == 1 ? "s" : "") a look")
+        guard let names = names(agreeing: n) else { return count }
+        if names.count == 1 { return (names[0], ["\(n)"], Self.needs(names[0]), [], names[0] + " " + Self.needs(names[0])) }
+        let said = MacConsole.named(names, "need a look")
+        return ("\(n)", [], said, [count.line], said)
     }
     // For Status, from a Mac whose status doesn't carry the count: asked once a minute at most.
     func refresh(_ api: API) {
