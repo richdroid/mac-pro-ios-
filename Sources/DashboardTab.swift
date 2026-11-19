@@ -320,8 +320,9 @@ struct DashboardTab: View {
     // The row follows what's lit: the page on the Mac's screen was a blue sliver cut by the pane's edge when it was the
     // fourth chip or later (CI 7809d95, open flat; designer gate 2026-11-19). In place as the row appears, glided after.
     func chips<C: View>(shown: String?, @ViewBuilder _ content: () -> C) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content() } }
+        let row = content()
+        return ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { row } }
                 .contentMargins(.horizontal, 20, for: .scrollContent)
                 .onAppear { if let shown { proxy.scrollTo(shown, anchor: .center) } }
                 .onChange(of: shown) { _, to in if let to { withAnimation(Motion.quick) { proxy.scrollTo(to, anchor: .center) } } }
