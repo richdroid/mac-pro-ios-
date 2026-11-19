@@ -421,6 +421,36 @@ do {
     expect(BackupPlan.signal(["ring": NSNull()], now: now) == .over && BackupPlan.signal(["ring": ["over": true]], now: now) == .over, "a push with ring null or over ends it")
     expect(BackupPlan.signal(["ring": ["snoozed": true, "name": "Work", "until": 1000.0]], now: now) == .snoozed(name: "Work", until: Date(timeIntervalSince1970: 1000)), "a snoozed push carries its end")
     expect(BackupPlan.signal(["ring": ["snoozed": false, "name": "Work"]], now: now) == nil && BackupPlan.signal([:], now: now) == nil, "a ringing push or none says nothing")
+    expect(BackupPlan.signal(["ring": ["over": true, "stopped": true, "name": "Work", "at": 1000.0]], now: now) == .stopped(name: "Work", at: Date(timeIntervalSince1970: 1000)), "over with the Chumby's stop row is a Stop, for the ring that began at `at`")
+    let dentist = at(2026, 11, 11, 13)
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: dentist.addingTimeInterval(40)).cancel.map(\.ringAt) == [dentist], "a Stop on the Chumby takes that ring's backup")
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: at(2026, 11, 11, 12, 50)).cancel.isEmpty, "a late push for an earlier ring takes no other ring's backup")
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: nil).cancel.isEmpty, "and with no time it takes nothing")
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 6), at: dentist).cancel.isEmpty, "nor one that has already rung")
+}
+
+section("The backup rings after the Chumby's loud beep")
+do {
+    var music = alarm("Calendar: Shift", "once", mins(at(2026, 11, 11, 13))); music.type = "audio"; music.arg = "pandora"
+    let beep = once("Nap", at(2026, 11, 11, 10))
+    let ids = (1...9).map { UUID(uuidString: "00000000-0000-0000-0000-00000000001\($0)")! }
+    var n = 0; func mk() -> UUID { n += 1; return ids[n - 1] }
+    let rs = BackupPlan.rings(in: state([music, beep]), now: now, horizon: 36 * 3600)
+    let r = BackupPlan.reconcile(kept: [], wanted: rs, delay: 1, now: now, makeID: mk)
+    expect(r.add.map(\.fireAt) == [at(2026, 11, 11, 10, 1), at(2026, 11, 11, 13, 5)], "music: its beep at 4 min, then 1 min; a beep alarm: 1 min after it rings")
+    let sn = BackupPlan.snoozed(r.entries, now: at(2026, 11, 11, 13, 2), name: "Shift", until: at(2026, 11, 11, 13, 11), delay: 1, makeID: mk)
+    expect(sn.add.map(\.fireAt) == [at(2026, 11, 11, 13, 13)], "after a snooze: the re-ring's beep 1 min in, then 1 min")
+    var off = state([music]); off.escalate = [0]
+    expect(BackupPlan.reconcile(kept: [], wanted: BackupPlan.rings(in: off, now: now, horizon: 36 * 3600), delay: 3, now: now, makeID: mk).add.map(\.fireAt) == [at(2026, 11, 11, 13, 3)], "the Chumby's beep off: counted from the ring")
+    var own = state([music]); own.escalate = [300, 90]
+    let ro = BackupPlan.reconcile(kept: [], wanted: BackupPlan.rings(in: own, now: now, horizon: 36 * 3600), delay: 6, now: now, makeID: mk)
+    expect(ro.add.map(\.fireAt) == [at(2026, 11, 11, 13, 11)] && ro.add.first?.again == 90, "its own escalation times are used")
+    expect(BackupPlan.reconcile(kept: r.entries, wanted: rs, delay: 1, now: now, makeID: mk).add.isEmpty, "syncing again changes nothing")
+    let begun = BackupPlan.reconcile(kept: sn.entries, wanted: rs, delay: 1, now: at(2026, 11, 11, 13, 3), makeID: mk)
+    expect(begun.entries.filter { $0.ringAt == at(2026, 11, 11, 13) }.map(\.fireAt) == [at(2026, 11, 11, 13, 13)] && begun.add.allSatisfy { $0.ringAt != at(2026, 11, 11, 13) }, "a ring begun and moved by a snooze keeps the snooze's time through a sync, with no twin")
+    expect([3, 5, 10].map { BackupPlan.migrated(fromRing: $0) } == [1, 1, 6], "a delay saved from the ring: 5 and 10 ring when they did, 3 just after the beep")
+    let old = BackupPlan.Entry(id: ids[8], ringAt: at(2026, 11, 11, 13), name: "Calendar: Shift", fireAt: at(2026, 11, 11, 13, 5))
+    expect(BackupPlan.snoozed([old], now: at(2026, 11, 11, 13, 2), name: nil, until: at(2026, 11, 11, 13, 9), delay: 1, makeID: mk).add.map(\.fireAt) == [at(2026, 11, 11, 13, 11)], "one saved before 11-19 takes the 1 min after a snooze")
 }
 
 // MARK: The volume he sets sticks

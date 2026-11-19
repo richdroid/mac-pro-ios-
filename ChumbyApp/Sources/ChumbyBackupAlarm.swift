@@ -7,10 +7,12 @@ import AlarmKit
 #endif
 
 // The last line (Richard, 2026-11-19: "I need to be woken up by any means necessary"): for each ring the Chumby will
-// make, this iPhone keeps an alarm of its own a few minutes later, which sounds through Silent and Focus. A Stop pressed on
-// this phone (the app's page, the Lock Screen card, the notification, Siri or Control Center) takes it away; a Snooze
-// anywhere moves it (the Mac reports one made on the Chumby). A ring that ends any other way keeps it, a Stop on the
-// Chumby itself included (the Mac can't tell that from a ring that died): that is exactly the one it is for. The rules are in ChumbyBackupPlan; this is the AlarmKit end.
+// make, this iPhone keeps an alarm of its own, set to ring a little after the Chumby's loud beep (music, then the beep,
+// then the phone), which sounds through Silent and Focus. A Stop pressed on this phone (the app's page, the Lock Screen
+// card, the notification, Siri or Control Center) takes it away, and so does a Stop on the Chumby itself once the Mac
+// reads the Chumby's own record of it (a=hist "stop"; Richard, 11-19). A Snooze anywhere moves it. A ring that dies, plays
+// out unheard or is cut off by a restart keeps it: that is exactly the one it is for. The rules are in ChumbyBackupPlan;
+// this is the AlarmKit end.
 #if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
 struct ChumbyBackupMeta: AlarmMetadata {}
 #endif
@@ -51,16 +53,26 @@ private enum Kit {
 @MainActor
 final class ChumbyBackupAlarm: ObservableObject {
     static let shared = ChumbyBackupAlarm()
-    static let onKey = "backupAlarmOn", delayKey = "backupAlarmDelay"
+    // delayKey: minutes after the Chumby's loud beep (11-19 on); oldDelayKey: minutes after the ring, as saved before
+    static let onKey = "backupAlarmOn", delayKey = "backupAlarmAfterBeep", oldDelayKey = "backupAlarmDelay"
+    // Once: a delay saved from the ring becomes one from the beep that rings the phone when it did (or just after the beep).
+    static func migrateDelay() {
+        let d = UserDefaults.standard
+        guard d.object(forKey: delayKey) == nil, let old = d.object(forKey: oldDelayKey) as? Int else { return }
+        d.set(BackupPlan.migrated(fromRing: old), forKey: delayKey)
+    }
     private static let keptKey = "backupAlarms"
 
     enum Status { case off, notAsked, denied, on }
     @Published private(set) var status: Status = .off
     // the next backup armed, for the setting's line
     @Published private(set) var next: Date?
+    // the Chumby's escalation as last read, for the setting's words
+    @Published private(set) var escalation = BackupPlan.Escalation.standard
 
     var enabled: Bool { UserDefaults.standard.object(forKey: Self.onKey) as? Bool ?? true }
     var delay: Int {
+        Self.migrateDelay()
         let d = UserDefaults.standard.object(forKey: Self.delayKey) as? Int ?? BackupPlan.defaultDelay
         return BackupPlan.delays.contains(d) ? d : BackupPlan.defaultDelay
     }
@@ -78,8 +90,9 @@ final class ChumbyBackupAlarm: ObservableObject {
     }
 
     // After every successful read of the Chumby's list: the rings coming up (BackupPlan.rings).
-    func sync(rings: [BackupPlan.Ring]) {
+    func sync(rings: [BackupPlan.Ring], escalation: BackupPlan.Escalation = .standard) {
         wanted = rings
+        if self.escalation != escalation { self.escalation = escalation }
         queue { [self] in await apply() }
     }
     // The setting changed: start or stop at once, from the rings last read.
@@ -140,10 +153,11 @@ final class ChumbyBackupAlarm: ObservableObject {
     // What the bridge's quiet push said (see BackupPlan.signal).
     func push(_ userInfo: [AnyHashable: Any]) {
         switch BackupPlan.signal(userInfo, now: Date()) {
-        // A ring that's gone is not a ring he dealt with: 11-19 it died after a few beeps. Only his own Stop on this
-        // phone takes the backup away; the Mac can't tell a Stop on the Chumby from a ring that failed. One pressed here
-        // in the last 3 minutes that the Chumby hadn't confirmed in time is his.
+        // A ring that's gone is not a ring he dealt with: 11-19 it died after a few beeps. A plain "over" keeps the backup,
+        // unless a Stop pressed here in the last 3 minutes, which the Chumby hadn't confirmed in time, was his.
         case .over?: if let n = takeStopSent() { handled(name: n.isEmpty ? nil : n) }
+        // stopped on the Chumby itself: the Mac read the hook's "stop" row for this ring (Richard, 11-19: yes, cancel it)
+        case .stopped(_, let at)?: queue { [self] in await commit(BackupPlan.stoppedRing(entries, now: Date(), at: at)) }
         case .snoozed(let name, let until)?: snoozed(name: name, until: until)
         case nil: break
         }
@@ -179,18 +193,21 @@ final class ChumbyBackupAlarm: ObservableObject {
         for id in Kit.ids where !known.contains(id) { Kit.cancel(id) }
     }
 
+    // New alarms first; an old one is cancelled only once whatever replaces it (same ring) is set, so a refusal from iOS
+    // leaves the old one standing rather than no backup at all.
     private func commit(_ r: BackupPlan.Result, keepOldOnFail: Bool = false) async {
         var kept = r.entries
-        var failed = false
+        var failed: [BackupPlan.Entry] = []
         for e in r.add {
-            do { try await Kit.schedule(e) } catch { kept.removeAll { $0.id == e.id }; failed = true }
+            do { try await Kit.schedule(e) } catch { kept.removeAll { $0.id == e.id }; failed.append(e) }
         }
-        // a move that iOS refused: the old alarm stays, as it was
-        if failed && keepOldOnFail {
-            for e in r.add where kept.contains(where: { $0.id == e.id }) { Kit.cancel(e.id) }
-            return      // nothing was cancelled, so what was kept before still stands
+        var cancel = r.cancel
+        for f in failed {
+            let old = cancel.filter { $0.ringAt == f.ringAt && $0.name == f.name }
+            cancel.removeAll { o in old.contains { $0.id == o.id } }
+            kept.append(contentsOf: old)
         }
-        for e in r.cancel { Kit.cancel(e.id) }
+        for e in cancel { Kit.cancel(e.id) }
         entries = kept
         next = kept.map(\.fireAt).filter { $0 > Date() }.min()
     }
@@ -210,7 +227,15 @@ struct BackupAlarmSettings: View {
     @ObservedObject private var backup = ChumbyBackupAlarm.shared
     @AppStorage(ChumbyBackupAlarm.onKey) private var enabled = true
     @AppStorage(ChumbyBackupAlarm.delayKey) private var delay = BackupPlan.defaultDelay
+    init() { ChumbyBackupAlarm.migrateDelay() }
     var denied: Bool { enabled && backup.status == .denied }
+    // Plainly, in the order it happens (Richard, 11-19: music, then the Chumby's loud beep, then the phone).
+    var order: String {
+        let e = backup.escalation
+        guard e.first > 0 else { return "The Chumby’s loud beep is off, so this counts from when the alarm starts." }
+        func m(_ s: Int) -> String { s % 60 == 0 ? "\(s / 60) min" : "\(s) s" }
+        return "The alarm plays, the Chumby beeps loudly after \(m(e.first)), then the iPhone rings."
+    }
     // "7:05 AM" today, "Sat 7:05 AM" on another day
     static func when(_ d: Date) -> String {
         let t = d.formatted(date: .omitted, time: .shortened)
@@ -223,7 +248,7 @@ struct BackupAlarmSettings: View {
                 .onChange(of: enabled) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
                 .soloCard(on: !enabled && !denied)
             if enabled {
-                MenuRow(title: "Ring the iPhone after", note: "After the Chumby rings, or a snooze ends.", selection: $delay) {
+                MenuRow(title: "After the beep", note: order, selection: $delay) {
                     ForEach(BackupPlan.delays, id: \.self) { Text("\($0) min").tag($0) }
                 }
                 .onChange(of: delay) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }

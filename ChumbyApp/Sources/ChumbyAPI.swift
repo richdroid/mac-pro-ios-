@@ -215,6 +215,8 @@ struct ChumbyState: Decodable {
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
     var now: Double?
     var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
+    // The ring watch's escalation, [FIRST, AGAIN] seconds (/psp/alarm_escalate); nil from a Chumby that doesn't say.
+    var escalate: [Int]?
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
@@ -250,13 +252,14 @@ struct ChumbyState: Decodable {
         song = (try? c.decodeIfPresent(Song.self, forKey: .song)) ?? nil
         rang = (try? c.decodeIfPresent(Ring.self, forKey: .rang)) ?? nil
         musicPlaying = ((try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil)?.playing ?? false
+        escalate = (try? c.decodeIfPresent([Int].self, forKey: .escalate)) ?? nil
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, pandoraAdd, local, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
+    enum Key: String, CodingKey { case escalate, missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, pandoraAdd, local, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
 }
 
 // The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
