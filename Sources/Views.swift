@@ -1074,9 +1074,8 @@ struct WebTile: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, 14).padding(.vertical, 12)
-        // The Dashboard's tiles (no chart) are one height: nothing in them shrinks or wraps, and none is shorter than
-        // this, so a row never steps by a few points.
-        .frame(minHeight: spark.count > 1 ? nil : 98, alignment: .topLeading)
+        // Sized to its three lines with even padding: nothing in a tile shrinks or wraps, so every tile in a row is one
+        // height without a fixed one (a fixed 98 left a band under the text, designer gate 2026-11-18).
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
 
@@ -1263,7 +1262,8 @@ struct HeroChips: View {
         HStack(spacing: 6) { dot(); Text(text).lineLimit(1); if opens { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) } }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
-    var parts: Int? { healthBad ?? summary.bad }
+    // The build's shot of a part that needs a look ("chipbad"), so the chip's way into Everything can be filmed.
+    var parts: Int? { MacConsole.pose == "chipbad" ? 1 : healthBad ?? summary.bad }
     var health: (Color, String) {
         func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
         if let n = parts, n > 0 { return (.orange, look(n)) }
@@ -1514,7 +1514,6 @@ struct AppsTab: View {
         withAnimation(Motion.quick) { failed = (key, text) }; fails += 1
         Task { try? await Task.sleep(nanoseconds: 6_000_000_000); if failed?.text == text { withAnimation(Motion.quick) { failed = nil } } }
     }
-    @ViewBuilder func failLine(_ key: String) -> some View { if let f = failed, f.key == key { FailText(f.text) } }
     // Quitting, the way the Processes page does it: asked to close first, and Force Quit offered only for an app that
     // was asked and stayed. The two were offered side by side in one alert here (audit, 2026-11-10).
     @State private var forcing: Status.App?
@@ -1557,12 +1556,17 @@ struct AppsTab: View {
                     // Quitting is a full-strength Quit capsule at the row's end, the same control as Update above it: a
                     // dim grey ✕ read as unavailable though it worked (Richard, 2026-11-07: "the greyed out xs when they r
                     // seemingly actionable r confusing and fucked"). Never a swipe (no swipe-to-delete on glass cards).
-                    VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading) {
                             // One line each, so the CPU figure coming and going with each reading never changes the row's height.
                             Text(a.name).lineLimit(1)
-                            Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                            // A quit that didn't happen is said in red in the figures' own place for a few seconds, so the
+                            // rows never move (designer gate, 2026-11-18).
+                            if let f = failed, f.key == "\(a.pid)" {
+                                Text(f.text).font(.footnote).foregroundStyle(.red).lineLimit(1).minimumScaleFactor(0.85).transition(.opacity)
+                            } else {
+                                Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                            }
                         }
                         Spacer(minLength: 8)
                         // The button stays mounted while the quit is in flight, so the questions hung off it can present.
@@ -1584,8 +1588,6 @@ struct AppsTab: View {
                                 .accessibilityLabel("Quit \(a.name)")
                         }
                     }
-                    failLine("\(a.pid)")
-                    }
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
                     .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
                 }
@@ -1594,9 +1596,12 @@ struct AppsTab: View {
                 Menu {
                     // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
                     ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } }
-                } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
+                } label: {
+                    // Its failure in the label's place for a few seconds, likewise.
+                    if let f = failed, f.key == "launch" { Label(f.text, systemImage: "exclamationmark.circle").foregroundStyle(.red).lineLimit(1) }
+                    else { Label("Launch another app", systemImage: "plus.square.on.square") }
+                }
                 .place("launch")
-                failLine("launch")
             }
             .haptic(.warn, trigger: fails)
             // The build's shot of the second question, for an app that was asked to quit and stayed.

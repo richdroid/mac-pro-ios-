@@ -2,7 +2,7 @@ dash-tiles|tap "tile.Fans & heat";touch 0.73 0.945 0.05;tap tile.CPU;touch 0.27 
 dash-crosstab|tap tile.CPU;touch 0.73 0.945 0.05;tap tile.Storage;touch 0.27 0.945 0.05;touch 0.27 0.945 0.05;touch 0.73 0.945 0.05|-tab 0
 dash-keys|tap key.Show;tap key.Glance;tap key.Glance;tap key.Sleep;tap key.Wake|-tab 6 -pose consolebehind
 dash-fail|tap key.Hide|-tab 6 -pose consolefail
-dash-chips|drag 0.5 0.85 0.5 0.3 0.4;tap chip.board.machine;tap chip.board.machine;tap chip.page.storage;tap "Boards take turns"|-tab 6
+dash-chips|drag 0.5 0.85 0.5 0.3 0.4;tap chip.board.machine;tap chip.board.machine;tap chip.page.storage;drag 0.5 0.8 0.5 0.35 0.4;tap "Boards take turns"|-tab 6
 dash-back|tap tile.Storage;drag 0.01 0.5 0.75 0.5 0.35;tap "tile.Fans & heat";drag 0.01 0.5 0.75 0.5 0.35|-tab 6
 dash-backtap|tap tile.Storage;touch 0.063 0.05 0.05;tap tile.CPU;touch 0.063 0.05 0.05;tap "tile.Fans & heat";touch 0.063 0.05 0.05|-tab 6
-dash-healthchip|tap "All running"|-tab 0
+dash-healthchip|tap "1 needs a look"|-tab 0 -pose chipbad
