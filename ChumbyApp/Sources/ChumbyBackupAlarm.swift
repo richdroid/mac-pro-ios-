@@ -232,7 +232,7 @@ struct BackupAlarmSettings: View {
     // Plainly, in the order it happens (Richard, 11-19: music, then the Chumby's loud beep, then the phone).
     var order: String {
         let e = backup.escalation
-        guard e.first > 0 else { return "The Chumby’s loud beep is off, so this counts from when it rings." }
+        guard e.first > 0 else { return "The Chumby’s loud beep is off, so this counts from when the alarm starts." }
         func m(_ s: Int) -> String { s % 60 == 0 ? "\(s / 60) min" : "\(s) s" }
         return "The alarm plays, the Chumby beeps loudly after \(m(e.first)), then the iPhone rings."
     }
@@ -248,8 +248,8 @@ struct BackupAlarmSettings: View {
                 .onChange(of: enabled) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
                 .soloCard(on: !enabled && !denied)
             if enabled {
-                MenuRow(title: "Ring the iPhone", note: order, selection: $delay) {
-                    ForEach(BackupPlan.delays, id: \.self) { Text("\($0) min after the beep").tag($0) }
+                MenuRow(title: "After the beep", note: order, selection: $delay) {
+                    ForEach(BackupPlan.delays, id: \.self) { Text("\($0) min").tag($0) }
                 }
                 .onChange(of: delay) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
             }
