@@ -2284,11 +2284,13 @@ struct VolumeSlider<Lead: View>: View {
                 if !e { send(Int(shown)) }
             }
             .accessibilityLabel(label).tint(ChumbyPalette.orange)
-            // VoiceOver's swipe up and down moves the slider without a drag, which never sent anything.
+            // VoiceOver's swipe up and down moves the slider without a drag, which never sent anything. 5% a swipe at
+            // least: 1% was a send (and a haptic) for each barely audible step.
             .accessibilityAdjustableAction { d in
+                let by = max(step, 5)
                 switch d {
-                case .increment: send(Int(shown) + step)
-                case .decrement: send(Int(shown) - step)
+                case .increment: send(Int(shown) + by)
+                case .decrement: send(Int(shown) - by)
                 @unknown default: break
                 }
             }

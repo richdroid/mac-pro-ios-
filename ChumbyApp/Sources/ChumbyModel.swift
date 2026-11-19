@@ -561,15 +561,25 @@ final class ChumbyModel: ObservableObject {
         if sys.vol != level { sys.vol = level }
         tick()
         hold(2)
-        Task { [weak self] in
-            do { try await self?.api?.setVolume(level, checkRing: false) } catch {
-                guard let self else { return }
-                self.fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))")
-                // Not sent: back to what the Chumby has, unless a newer level went out meanwhile.
-                if self.volumeHold?.sentAt == sent.sentAt { self.volumeHold = nil; if self.reportedVol >= 0 { self.sys.vol = self.reportedVol } }
+        // One send at a time, in order, and only the newest level: levels sent side by side could land out of order.
+        volumeWanted = (level, sent.sentAt, id)
+        if volumeSender == nil { volumeSender = Task { [weak self] in await self?.sendVolumes(); self?.volumeSender = nil } }
+        return true
+    }
+    private var volumeWanted: (level: Int, at: Date, id: String)?
+    private var volumeSender: Task<Void, Never>?
+    private func sendVolumes() async {
+        while let w = volumeWanted {
+            volumeWanted = nil
+            do { try await api?.setVolume(w.level, checkRing: false) } catch {
+                // Superseded by a newer level: that one goes, and says how it went.
+                guard volumeWanted == nil else { continue }
+                if case ChumbyError.refused(let why) = error { fail(w.id, why) }
+                else { fail(w.id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))") }
+                // Not taken: back to what the Chumby has.
+                if volumeHold?.sentAt == w.at { volumeHold = nil; if reportedVol >= 0 { sys.vol = reportedVol } }
             }
         }
-        return true
     }
     // True once the Chumby took it, for a caller that says so.
     @discardableResult func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) -> Task<Bool, Never> {

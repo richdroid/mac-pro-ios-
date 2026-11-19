@@ -440,6 +440,15 @@ do {
     expect(second.vol == 7 && second.hold == nil, "a second one is believed: the Chumby really is elsewhere")
     r = VolumeHold.shown(reported: 7, takenAt: sec(-1), hold: sent, now: sec(21))
     expect(r.vol == 7 && r.hold == nil, "after 20 s the Chumby's word goes, whatever its age")
+    // Mute then unmute: 30, 0 at 0 s, 30 again at 1 s. A copy from before the unmute says 30 and must not let go, or
+    // the next reading (0, the mute landing) would drop the slider.
+    let unmute = VolumeHold(level: 30, sentAt: sec(1))
+    r = VolumeHold.shown(reported: 30, takenAt: sec(-2), hold: unmute, now: sec(1.5))
+    expect(r.vol == 30 && r.hold != nil, "an old 30 doesn't confirm the unmute's 30")
+    r = VolumeHold.shown(reported: 0, takenAt: sec(1.5), hold: r.hold, now: sec(2.5))
+    expect(r.vol == 30 && r.hold != nil, "the mute landing just after doesn't drop the slider")
+    r = VolumeHold.shown(reported: 30, takenAt: sec(3), hold: r.hold, now: sec(4))
+    expect(r.vol == 30 && r.hold == nil, "a 30 read after the unmute confirms it")
     r = VolumeHold.shown(reported: 12, takenAt: sec(30), hold: nil, now: sec(30))
     expect(r.vol == 12 && r.hold == nil, "with nothing held, the reading is shown")
 }

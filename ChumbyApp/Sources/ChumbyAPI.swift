@@ -417,7 +417,9 @@ actor ChumbyAPI {
         if checkRing, let r = try? await raw("sys"), let s = try? JSONDecoder().decode(Sys.self, from: r.data), r.age < 30, let ring = s.ringing {
             throw ChumbyError.refused(ring.snoozed ? "Not while an alarm is snoozing." : "Not while an alarm is ringing.")
         }
-        try await cmd("volume", String(min(max(v, 0), 100)))
+        // The Chumby refuses it too while one rings or snoozes (409 "an alarm is ringing"), said the same way.
+        do { try await cmd("volume", String(min(max(v, 0), 100))) }
+        catch ChumbyError.message(let m) where m.hasPrefix("an alarm is") { throw ChumbyError.refused("Not while \(m).") }
     }
 }
 
@@ -436,9 +438,10 @@ struct VolumeHold: Equatable {
     // The level to show for a reading of `reported` taken at `takenAt`, and the hold still to keep (nil: let go).
     static func shown(reported: Int, takenAt: Date, hold: VolumeHold?, now: Date) -> (vol: Int, hold: VolumeHold?) {
         guard var h = hold else { return (reported, nil) }
-        if reported == h.level { return (reported, nil) }
+        // Only a reading taken after the send confirms it: going 30, 0, 30, an old copy saying 30 isn't the new 30.
+        if reported == h.level, takenAt >= h.sentAt { return (reported, nil) }
         if now.timeIntervalSince(h.sentAt) >= patience { return (reported, nil) }
-        if takenAt < h.sentAt.addingTimeInterval(settle) || reported < 0 { return (h.level, h) }
+        if takenAt < h.sentAt.addingTimeInterval(settle) || reported < 0 || reported == h.level { return (h.level, h) }
         // The same copy served twice is one reading, not two.
         if let d = h.doubtedAt, takenAt.timeIntervalSince(d) >= 1 { return (reported, nil) }
         if h.doubtedAt == nil { h.doubtedAt = takenAt }
