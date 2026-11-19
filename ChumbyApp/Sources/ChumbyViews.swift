@@ -1616,7 +1616,7 @@ struct ChannelsTab: View {
     // readings of what's playing in that time say nothing about a channel he chose.
     @State private var savedAt = Date.distantPast
     @State private var heldForAlarm = false
-    // The widget just jumped to, said under the menu for a few seconds.
+    // The widget just jumped to, ticked in the menu for a few seconds.
     @State private var jumped: String?
     @State private var rows: [EditorRow] = []
     @State private var saveTask: Task<Void, Never>?
@@ -2018,7 +2018,8 @@ struct ChannelsTab: View {
             // Only what plays in the channel showing, in its order (Richard, 11-18: "jump to widget and widget management in
             // general is buggy"): the Chumby's list holds every widget it has loaded, his own included, and a jump to one
             // the channel leaves out of its rotation, or one of his own kept to other channels, showed it for a moment and
-            // bounced on to the next. Said when it's done; nothing switches under an alarm (model.cmd).
+            // bounced on to the next. The picture above and the menu's tick confirm it (a failure is said); nothing switches
+            // under an alarm (model.cmd).
             Menu("Jump to a widget") {
                 ForEach(jumpable, id: \.self) { n in
                     Button { jump(n) } label: { if n == jumped { Label(n, systemImage: "checkmark") } else { Text(n) } }
@@ -2026,7 +2027,6 @@ struct ChannelsTab: View {
             }.foregroundStyle(.tint)
             .disabled(jumpable.isEmpty)
             .id("jumprow")
-            if let j = jumped { RowNote(icon: "checkmark.circle", text: "Showing \(j) on the Chumby", color: .secondary).transition(.opacity) }
             Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
         } header: {
             // Open, as tall as the channel header across the fold, so the two panes' cards start level.
@@ -2047,7 +2047,7 @@ struct ChannelsTab: View {
     func jump(_ name: String) {
         let sent = model.cmd("widget", name, id: "nowPlaying")
         Task {
-            // Said once the Chumby has taken it, never before (a refusal under an alarm, or no answer, says why instead).
+            // Ticked once the Chumby has taken it, never before (a refusal under an alarm, or no answer, says why instead).
             guard await sent.value else { return }
             withAnimation(.snappy) { jumped = name }
             try? await Task.sleep(nanoseconds: 6_000_000_000)
@@ -2087,10 +2087,12 @@ struct ChannelsTab: View {
         .onChange(of: wide) { _, _ in adding = false }
         .onAppear {
             startFromCache()
-            guard !posed, ["chsync", "chdemo", "chadd", "chedit", "cheditdemo", "jumpdemo"].contains(ChumbyModel.pose) else { return }
+            guard !posed, ["chsync", "chdemo", "chadd", "chedit", "cheditdemo", "jumpdemo", "jumprow"].contains(ChumbyModel.pose) else { return }
             posed = true
             Task {
                 // For the build's film: a jump to the channel's second widget, said once the Chumby has taken it.
+                // For the build's shot of the menu open: the page scrolled to it (CI taps it).
+                if ChumbyModel.pose == "jumprow" { try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { scroll.scrollTo("jumprow", anchor: .center) }; return }
                 if ChumbyModel.pose == "jumpdemo" {
                     try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { scroll.scrollTo("jumprow", anchor: .center) }
                     try? await Task.sleep(nanoseconds: 1_000_000_000); if let n = jumpable.last { jump(n) }

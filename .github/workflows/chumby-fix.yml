@@ -108,6 +108,12 @@ jobs:
           set_ 3 "-open"
           $D "$DEVICE" rotate 1; sleep 5
           set_ 3 "-portrait"
+          # Jump to a widget's menu open, open upright.
+          remock
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/live -tab 1 -pose jumprow; sleep 6
+          $D "$DEVICE" tap "Jump to a widget" || echo "jump menu tap failed"; sleep 2
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/fix-jumpmenu-portrait.png
+          xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           xcrun simctl ui "$DEVICE" appearance dark
           shot screen-dark-portrait 3 9 $M/ringing -tab 0 -pose ringscreen
           shot channels-edit-dark-portrait 3 10 $M -tab 1 -pose chedit

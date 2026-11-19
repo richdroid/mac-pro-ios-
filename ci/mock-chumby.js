@@ -13,7 +13,7 @@ const data = {
     tones: ['Beep', 'Bells', 'Chime'], channels: [{ id: 'A', name: 'Default' }, { id: 'B', name: 'News' }],
     pandora: [{ id: '1', name: 'Morning Mix' }], pandoraScan: '',
     schedule: [{ time: '22:30', cmd: 'night', val: 'on' }, { time: '07:00', cmd: 'night', val: 'off' }],
-    channelNames: ['Default', 'News'], widgetNames: ['Clock', 'Weather', 'X'], mine: [{ name: 'X', secs: 60 }, { name: 'NYT', secs: 45 }],
+    channelNames: ['Default', 'News'], widgetNames: ['Clock', 'Weather', 'X', 'NYT Top Headlines', 'NYT'], mine: [{ name: 'X', secs: 60 }, { name: 'NYT', secs: 45 }],
   },
   chlist: { cur: 'A', names: [['W3', 'Moon Phase']], channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '0', '0'], ['W5', '1', '45']], list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15'], ['W5', 'NYT Top Headlines', '45']] }, { id: 'B', conf: [], list: [['#', 'News'], ['W4', 'NYT', '45']] }] },
 };
