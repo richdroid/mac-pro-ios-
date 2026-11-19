@@ -13,7 +13,7 @@ const data = {
     tones: ['Beep', 'Bells', 'Chime'], channels: [{ id: 'A', name: 'Default' }, { id: 'B', name: 'News' }],
     pandora: [{ id: '1', name: 'Morning Mix' }], pandoraScan: '',
     schedule: [{ time: '22:30', cmd: 'night', val: 'on' }, { time: '07:00', cmd: 'night', val: 'off' }],
-    channelNames: ['Default', 'News'], widgetNames: ['Clock', 'Weather', 'X'], mine: [{ name: 'X', secs: 60 }, { name: 'NYT', secs: 45 }],
+    channelNames: ['Default', 'News'], widgetNames: ['Clock', 'Weather', 'X', 'NYT Top Headlines', 'NYT'], mine: [{ name: 'X', secs: 60 }, { name: 'NYT', secs: 45 }],
   },
   chlist: { cur: 'A', names: [['W3', 'Moon Phase']], channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '0', '0'], ['W5', '1', '45']], list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15'], ['W5', 'NYT Top Headlines', '45']] }, { id: 'B', conf: [], list: [['#', 'News'], ['W4', 'NYT', '45']] }] },
 };
@@ -564,7 +564,7 @@ function chumbyScene(q, s) {
       q.on('data', c => body += c);
       q.on('end', () => {
         const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
-        if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's');
+        if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's') + '\t' + (Math.floor(Date.now() / 1000) + 540);   // the hook's line: rings again at EPOCH
         if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
         // The panel's own skip, as the Chumby answers it: pinned by name (and the ring at or after `at`, epoch minutes)
         // since chumby 2c90cc9, an unknown name leaving no skip; without a name, the next Work. One pin only: a new skip
@@ -601,6 +601,14 @@ function chumbyScene(q, s) {
         }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
+        // A channel's list saved: kept, and the channel reloaded as the Chumby does (about half a minute, with its readings
+        // of what's playing blank for the first seconds), so a film shows the list holding still through it.
+        if (a === 'chedit') {
+          const id = qs.get('p'), ch = (live.chlist = live.chlist || JSON.parse(JSON.stringify(data.chlist))).channels.find(c => c.id === id);
+          if (ch) ch.conf = Array.from({ length: +f.get('n') || 0 }, (_, i) => [f.get(i + '_id'), f.get(i + '_on'), f.get(i + '_secs')]);
+          const was = live.sys.chan; live.sys.chan = ''; setTimeout(() => { live.sys.chan = was; }, 6000);
+          return json({ ok: true, missing: 0 });
+        }
         if (a === 'save' && live.failsLeft !== undefined) {
           if (live.failsLeft > 0) { live.failsLeft--; setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return; }
           const why = saveProblem(f);
@@ -623,6 +631,7 @@ function chumbyScene(q, s) {
     // portrait) must show every one of them held while the page is past its end, not landing under the pull.
     if (a === 'sys') { const n = Math.floor(Date.now() / 1000); return json(scene === 'live' ? { ...live.sys, up: live.sys.up + n % 100000, load: 0.3 + (n % 7) / 10, memFree: live.sys.memFree - (n % 5) * 400, wifi: 60 + (n * 7) % 31 } : live.sys); }
     if (a === 'state') return json(stateNow(live.state));
+    if (a === 'chlist' && live.chlist) return json(live.chlist);
     return false;
   }
   if (scene === 'slow') {

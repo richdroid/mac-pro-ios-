@@ -140,6 +140,8 @@ struct RingScreen: View {
     var status: String {
         if nothing { return "Nothing is ringing now" }
         if stopping { return "Stopping…" }
+        // A press from here, the card or the notification, until the Chumby confirms it (the same words everywhere).
+        if let w = model.ringWorking { return w }
         if away { return model.reachWords }
         guard let s = shown else { return "Reaching the Chumby…" }
         if s.snoozed { return s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" }
@@ -320,6 +322,7 @@ struct RingScreen: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(snoozing || stopping)
+                .opacity(model.ringWorking == "Snoozing…" ? 0.45 : 1)
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
             // "Stop" in every state, as every other place says it: stopping a snoozed alarm ends it for good.

@@ -64,9 +64,10 @@ struct RingDetail: View {
 struct RingKeys: View {
     let snoozed: Bool
     var height: CGFloat = 46
-    // A key pressed and not yet answered: both dim, so the press is seen to have landed.
+    // A key pressed and not yet answered: both dim, so the press is seen to have landed. They stay pressable: a second
+    // press joins the first (RingDesk), and a card whose app was ended mid-press must never be left with dead keys.
     var working = false
-    var body: some View { keys.opacity(working ? 0.45 : 1).allowsHitTesting(!working) }
+    var body: some View { keys.opacity(working ? 0.45 : 1) }
     // The CI gallery draws the card in a plain app, where the Lock Screen's intent keys have nothing to run in.
     #if GALLERY
     func key<L: View>(_ intent: some AppIntent, @ViewBuilder _ label: () -> L) -> some View { Button {} label: { label() } }

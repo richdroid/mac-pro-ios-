@@ -298,6 +298,11 @@ struct JustOnceSheet: View {
     let due: Date
     var later = 0
     var adjusting = false
+    // Opened on a ring that has, by the Chumby's newest word, already been moved just this once (the sheet was opened
+    // from a reading that hadn't caught up): it opens on that ring as moved, never at the usual time with a warning that
+    // it will undo his own change (gate, 11-18).
+    @State private var movedAlready = false
+    var moving: Bool { adjusting || movedAlready }
     @State private var minutes = 0
     @State private var loadedSound = ""
     @State private var alarm = Alarm()
@@ -339,7 +344,7 @@ struct JustOnceSheet: View {
                     ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else {
-                            Button { if !original.isCalendar, !adjusting, model.pinWarning != nil { confirm = true } else { save(replacing: false) } } label: { Label("Set", systemImage: "checkmark") }.fontWeight(.semibold)
+                            Button { if !original.isCalendar, !moving, model.pinWarning != nil { confirm = true } else { save(replacing: false) } } label: { Label("Set", systemImage: "checkmark") }.fontWeight(.semibold)
                                 // What it replaces is said once, in the note at the top of the sheet; this only asks
                                 // (Richard, 2026-11-10: the same sentence twice).
                                 .confirmationDialog("Replace that skip?", isPresented: $confirm, titleVisibility: .visible) {
@@ -358,7 +363,7 @@ struct JustOnceSheet: View {
         .tint(ChumbyPalette.acc(scheme == .dark))
     }
     @ViewBuilder var sections: some View {
-        let warning = original.isCalendar || adjusting ? nil : model.pinWarning
+        let warning = original.isCalendar || moving ? nil : model.pinWarning
         if saving || problem != nil || warning != nil {
             Section {
                 if saving { HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) } }
@@ -409,7 +414,11 @@ struct JustOnceSheet: View {
         // How it rings now, as the Chumby holds it (a calendar alarm with the calendar's set, or its own); a ring already
         // moved just this once opens with the sound it was given then.
         alarm = model.deviceState.alarms.first { $0.key == original.key } ?? original
-        if adjusting, let j = model.state.justOnce() { alarm.takeSettings(from: j.alarm) }
+        if !adjusting, !original.isCalendar, let j = model.state.justOnce(), j.original?.key == original.key, let u = j.usual, abs(u.timeIntervalSince(due)) < 60 {
+            movedAlready = true
+            minutes = Int((j.at.timeIntervalSince(due) / 60).rounded())
+        }
+        if moving, let j = model.state.justOnce() { alarm.takeSettings(from: j.alarm) }
         sound = SoundChoice(alarm, state: model.state, stations: model.pandoraStations)
         var a = alarm
         if sound.apply(to: &a, state: model.state, stations: model.pandoraStations) == nil { loadedSound = soundKey(a) }
@@ -418,17 +427,17 @@ struct JustOnceSheet: View {
         var a = alarm
         if let why = sound.apply(to: &a, state: model.state, stations: model.pandoraStations) { problem = why.errorDescription; return }
         // Nothing changed: nothing to send.
-        if minutes == later && soundKey(a) == loadedSound { dismiss(); return }
+        if minutes == (movedAlready ? Int((model.state.justOnce()?.at.timeIntervalSince(due) ?? 0) / 60) : later) && soundKey(a) == loadedSound { dismiss(); return }
         saving = true; problem = nil
         Task {
             // A ring already moved goes back to its usual time first (the skip taken back, the one-off removed), so the
             // new time is set from the same footing as the first; a failure in between leaves the usual alarm ringing.
-            if adjusting, let why = await model.undoJustOnce() { saving = false; problem = why; return }
+            if moving, let why = await model.undoJustOnce() { saving = false; problem = why; return }
             // Back at its usual time with its usual sound is all he asked for.
-            if adjusting && minutes == 0 && soundKey(a) == soundKey(model.deviceState.alarms.first { $0.key == original.key } ?? original) { saving = false; dismiss(); return }
+            if moving && minutes == 0 && soundKey(a) == soundKey(model.deviceState.alarms.first { $0.key == original.key } ?? original) { saving = false; dismiss(); return }
             let why = await model.justOnce(original, due: due, at: at, settings: a, replacing: replacing)
             saving = false
-            if let why { problem = adjusting ? "It’s back at its usual time. \(why)" : why } else { dismiss() }
+            if let why { problem = moving ? "It’s back at its usual time. \(why)" : why } else { dismiss() }
         }
     }
 }

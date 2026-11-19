@@ -108,6 +108,13 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
                 compact(.init(name: "Work", sound: "Beep", at: Date().timeIntervalSince1970 - 40, snoozed: false))
                 compact(.init(name: "Work", sound: "Beep", at: Date().timeIntervalSince1970 - 40, snoozed: true, until: Date().timeIntervalSince1970 + 431))
                 HStack { Capsule().fill(.black).frame(width: 126, height: 37); RingOctopus(snoozed: false, color: ChumbyPalette.orange).frame(width: 22, height: 20).frame(width: 37, height: 37).background(.black, in: Circle()) }
+            case 6:
+                // A press on its way and its answers (RingDesk, 11-18): Stopping… and Snoozing… with the keys dimmed but live,
+                // a press the Chumby hasn't confirmed, and the snooze by the Chumby's own time.
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, working: "Stopping…"))
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, working: "Snoozing…"))
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, problem: "Sent. The Chumby hasn’t confirmed yet."))
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 60, snoozed: true, until: Date().timeIntervalSince1970 + 538))
             default:
                 HStack(spacing: 14) { card(158, 158) { AlarmBody(family: .systemSmall, entry: e) }; card(158, 158) { AlarmBody(family: .systemSmall, entry: skipped) } }
                 HStack(spacing: 14) { card(158, 158) { AlarmBody(family: .systemSmall, entry: lost) }; card(158, 158) { BuddyBody(entry: e) } }
