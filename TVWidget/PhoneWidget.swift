@@ -105,10 +105,19 @@ struct PhoneShelfView: View {
     func tile(_ i: PhoneShelfEntry.Item, big: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             poster(i)
-            // Two lines' room in every tile, top-aligned, so the posters stay level whatever each name takes.
-            Text("X\nX").font(.caption.weight(.semibold)).hidden().frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .topLeading) { WholeWords(text: i.name, axis: .vertical).font(.caption.weight(.semibold)) }
-            WholeWords(text: Self.status(i), axis: .horizontal).font(.caption2).foregroundStyle(.secondary)
+            // One block of fixed height in every tile (two lines of name, one of time), top-aligned so the posters stay
+            // level: the time sits right under the name, and a short name leaves its spare line below both.
+            VStack(alignment: .leading, spacing: WholeWords<EmptyView>.gap) {
+                Text("X\nX").font(.caption.weight(.semibold))
+                Text("X").font(.caption2)
+            }
+            .hidden().frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .topLeading) {
+                WholeWords(text: i.name, axis: .vertical) {
+                    WholeWords(text: Self.status(i), axis: .horizontal).font(.caption2).foregroundStyle(.secondary)
+                }
+                .font(.caption.weight(.semibold))
+            }
         }
     }
     func poster(_ i: PhoneShelfEntry.Item) -> some View {
@@ -132,10 +141,14 @@ struct PhoneShelfView: View {
 // Words never cut and no ellipsis in a widget (the 11-12 ruling): the longest run of whole words, from the start, that fits.
 // Horizontal: one line. Vertical: wrapped onto as many lines as the height allows. A run never ends on "of", "the",
 // "by", "a" or "and", so no lone article; the first content word, if even that is too long, shrinks rather than being cut.
-struct WholeWords: View {
+// Anything given as `below` (a tile's time) sits right under whichever run is chosen, and counts toward its fit.
+struct WholeWords<Below: View>: View {
     let text: String
     let axis: Axis.Set
-    static let joiners: Set<String> = ["of", "the", "by", "a", "and"]
+    let below: Below
+    static var gap: CGFloat { 2 }
+    init(text: String, axis: Axis.Set, @ViewBuilder below: () -> Below) { self.text = text; self.axis = axis; self.below = below() }
+    static var joiners: Set<String> { ["of", "the", "by", "a", "and"] }
     static func runs(_ text: String) -> [String] {
         let words = text.split(separator: " ").map(String.init)
         var runs: [String] = []
@@ -151,11 +164,20 @@ struct WholeWords: View {
         let runs = Self.runs(text)
         ViewThatFits(in: axis) {
             ForEach(Array(runs.dropLast().enumerated()), id: \.offset) { _, r in
-                if axis == .horizontal { Text(r).lineLimit(1).fixedSize() } else { Text(r).fixedSize(horizontal: false, vertical: true) }
+                if axis == .horizontal { Text(r).lineLimit(1).fixedSize() } else {
+                    VStack(alignment: .leading, spacing: Self.gap) { Text(r).fixedSize(horizontal: false, vertical: true); below }
+                }
             }
-            Text(runs.last ?? text).lineLimit(1).minimumScaleFactor(0.5)
+            // The last resort: one line across, or two lines down at full size; it shrinks only when a single word is
+            // wider than the room.
+            if axis == .horizontal { Text(runs.last ?? text).lineLimit(1).minimumScaleFactor(0.5) } else {
+                VStack(alignment: .leading, spacing: Self.gap) { Text(runs.last ?? text).lineLimit(2).minimumScaleFactor(0.5); below }
+            }
         }
     }
+}
+extension WholeWords where Below == EmptyView {
+    init(text: String, axis: Axis.Set) { self.init(text: text, axis: axis) { EmptyView() } }
 }
 
 struct PhoneContinueWidget: Widget {
