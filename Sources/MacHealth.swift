@@ -539,7 +539,8 @@ struct MacHealthView: View {
     func problem(_ g: MacGroup, actions shown: Bool = true) -> some View {
         let p = parts(g).first(where: \.bad)
         return HeroCard(symbol: g.symbol, color: startingWindow ? .orange : .red, title: g.name,
-                        detail: p.map { (startingWindow ? "Still starting: " : "") + MacGroup.human(g, $0) },
+                        // Open flat the right card says what's wrong; the hero beside it only names the part (third gate).
+                        detail: shown ? p.map { (startingWindow ? "Still starting: " : "") + MacGroup.human(g, $0) } : nil,
                         note: shown ? note(g) : nil, tintDetail: true) {
             if shown { actions(g) }
         }

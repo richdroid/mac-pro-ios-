@@ -536,7 +536,15 @@ final class AppModel: ObservableObject {
                                notes: ["A calendar day can have its own sound and snooze", "The next alarm can ring later or with another sound just this once"],
                                builtAt: Date().timeIntervalSince1970 * 1000 - 90_000_000, icon: "/ios/icon/Chumby.ipa"),
             ]
-            s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil, apps: apps + (s.iosApps?.apps ?? []).filter { !$0.own })
+            // The offer sheet's own pose: four apps he added, never his own three, which TestFlight updates and which never
+            // show an update path here (R-MP-07; designer gate, 2026-11-19). Four, so the sheet is taller than the screen on
+            // its side and its scroll shows.
+            let offered = pose != "otaoffer" ? apps : [("Delta", "1.6", "107", "Smoother scrolling in the library"), ("Lantern", "2.1.1", "25", "Reads the night sky offline"),
+                                                      ("Pebble", "1.7", "161", "Widgets for the lock screen"), ("Kite", "3.3", "33", "Faster sync over cellular")].enumerated().map { i, a in
+                Status.SeedApp(file: a.0 + ".ipa", name: a.0, version: a.1, build: a.2, phoneBuild: String((Int(a.2) ?? 2) - 1), installedAt: 1, expires: Date().timeIntervalSince1970 * 1000 + 200 * 86_400_000, state: "waiting", message: "", own: true,
+                               ota: link(a.0), notes: [a.3], builtAt: Date().timeIntervalSince1970 * 1000 - Double(i + 1) * 3_600_000, icon: nil)
+            }
+            s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil, apps: offered + (s.iosApps?.apps ?? []).filter { !$0.own })
             // "otasent": Chumby's update already sent to this iPhone over the air, as after he tapped it at work.
             // "otahome": away, with Chumby's new build not yet signed for this iPhone: its capsule dimmed, "on home Wi-Fi".
             if pose == "otahome", let seed = s.iosApps {

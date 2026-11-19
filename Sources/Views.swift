@@ -1565,7 +1565,8 @@ struct AppsTab: View {
         case "Claude": "sparkle"
         case "Code", "Visual Studio Code", "Xcode": "chevron.left.forwardslash.chevron.right"
         case "System Settings", "System Preferences": "gearshape"
-        case "Tailscale": "network"
+        // Its own dot grid, not the globe-like network glyph beside the browsers (designer gate, 2026-11-19).
+        case "Tailscale": "circle.grid.3x3.fill"
         case "TextEdit", "Notes": "doc.text"
         case "VLC", "QuickTime Player", "IINA", "TV": "play.rectangle"
         case "Messages": "message"

@@ -243,25 +243,30 @@ struct SessionTerminal: View {
     }
     // Every key in view at once: one row when there's room, two on the folded screen, so the numbers and Ctrl-C are
     // never cut off when a menu needs them.
+    // Every key in view at once, as few rows as fit: twelve across, six, or four, the keys flexing to the column's width
+    // so they sit flush with the answers above and the box below (designer gate, 2026-11-19: a fixed two-row grid ran
+    // 16 pt wider than the box folded upright, and past a narrow pane under the rail on its side).
     var keyRows: some View {
-        VStack(spacing: 6) {
-            if width >= 520 {
-                HStack(spacing: 6) { ForEach(Self.keys, id: \.0) { keyButton($0.0, $0.1, $0.2) } }
-            } else {
-                // A grid, so the two rows' keys share their columns and both rows one leading edge (designer gate,
-                // 2026-11-19: two HStacks of different widths were each centred).
-                Grid(horizontalSpacing: 6, verticalSpacing: 6) {
-                    GridRow { ForEach(Self.keys.prefix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
-                    GridRow { ForEach(Self.keys.suffix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
-                }
+        ViewThatFits(in: .horizontal) {
+            keyGrid(12)
+            keyGrid(6)
+            keyGrid(4)
+        }
+        .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+    func keyGrid(_ across: Int) -> some View {
+        let rows = stride(from: 0, to: Self.keys.count, by: across).map { Array(Self.keys[$0..<min($0 + across, Self.keys.count)]) }
+        return Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+            ForEach(rows.indices, id: \.self) { r in
+                GridRow { ForEach(rows[r], id: \.0) { keyButton($0.0, $0.1, $0.2) } }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
     var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message the session", text: $message, axis: .vertical)
+            // Short where the column is narrow (a pane folded on its side), so the placeholder is never cut.
+            TextField(width > 0 && width < 300 ? "Message" : "Message the session", text: $message, axis: .vertical)
                 .lineLimit(1...5)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -350,10 +355,10 @@ struct SessionTerminal: View {
                 let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
                 return .panes(seam: min(max(crease?.midX ?? w / 2, w * 0.3), w * 0.7), gutter: min(max(24, (crease?.width ?? 0) / 2 + 4), 40))
             }
-            if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.6).rounded(), gutter: 12) }
+            if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.5).rounded(), gutter: 12) }
             return .column
         }
-        if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.6).rounded(), gutter: 12) }
+        if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.5).rounded(), gutter: 12) }
         #endif
         return panes ? .panes(seam: w / 2, gutter: 24) : .column
     }

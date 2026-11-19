@@ -325,24 +325,27 @@ struct DashboardTab: View {
 }
 
 // The chip row's scroll, following the lit chip: scrollTo in onAppear ran before the List had laid the row out, and the
-// change never fired, so the lit page stayed out of view (designer gate, 2026-11-19). Its position is the row's own state,
-// set after a turn of the run loop: in place the first time, glided on every change after.
+// change never fired (designer gate, 2026-11-19); a scroll position keyed by the chips' .id() never matched, since it
+// reads the ForEach's own ids (third gate). Now scrollTo, which finds a chip by its .id(), from a task keyed by the lit
+// chip, after a turn of the run loop: in place the first time, glided on every change after, whether from a tap or the
+// Mac's own (Boards take turns).
 struct ChipRow<C: View>: View {
     let shown: String?
     let content: C
-    @State private var position: String?
     @State private var placed = false
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content }.scrollTargetLayout() }
-            .contentMargins(.horizontal, 20, for: .scrollContent)
-            .scrollPosition(id: $position, anchor: .center)
-            .task(id: shown) {
-                guard let shown else { return }
-                await Task.yield()
-                try? await Task.sleep(nanoseconds: 60_000_000)
-                if placed { withAnimation(Motion.quick) { position = shown } } else { position = shown; placed = true }
-            }
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content } }
+                .contentMargins(.horizontal, 20, for: .scrollContent)
+                .task(id: shown) {
+                    guard let shown else { return }
+                    await Task.yield()
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    if placed { withAnimation(Motion.quick) { proxy.scrollTo(shown, anchor: .center) } }
+                    else { proxy.scrollTo(shown, anchor: .center); placed = true }
+                }
+        }
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
     }
 }
 

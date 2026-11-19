@@ -219,6 +219,9 @@ struct OTAOfferSheet: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .frame(maxWidth: .infinity)
         }
+        // Centred in the sheet: on its side folded the rail's strip was taken off one side only, and the content sat off
+        // the sheet's middle by its width (designer gate, 2026-11-19). It's 520 pt at most, clear of the rail either way.
+        .ignoresSafeArea(.container, edges: .horizontal)
         .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.height(height)])
         .presentationDragIndicator(.visible)
