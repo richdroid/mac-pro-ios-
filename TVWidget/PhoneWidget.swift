@@ -47,7 +47,10 @@ struct PhoneShelfProvider: TimelineProvider {
 
 struct PhoneShelfView: View {
     let entry: PhoneShelfEntry
-    @Environment(\.widgetFamily) private var family
+    // The CI sheet's family (ci/gallery-tv/PhoneSheets.swift): WidgetKit's own can't be set outside a widget.
+    var sheetFamily: WidgetFamily? = nil
+    @Environment(\.widgetFamily) private var widgetFamily
+    private var family: WidgetFamily { sheetFamily ?? widgetFamily }
     static func link(_ i: PhoneShelfEntry.Item) -> URL? {
         var c = URLComponents(); c.scheme = "tvremoteapp"; c.host = "phone"
         c.queryItems = [.init(name: "type", value: i.type), .init(name: "id", value: i.imdb), .init(name: "video", value: i.video), .init(name: "name", value: i.name)]
@@ -62,37 +65,119 @@ struct PhoneShelfView: View {
             if entry.items.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Image(systemName: "play.rectangle").font(.title2).foregroundStyle(TVLook.accent)
-                    Text("Nothing played on this iPhone yet").font(.subheadline.weight(.semibold))
-                    Text("Play on iPhone from any film or show.").font(.caption).foregroundStyle(.secondary)
+                    Text(family == .systemSmall ? "Nothing played yet" : "Nothing played on this iPhone yet").font(.subheadline.weight(.semibold)).lineLimit(3).minimumScaleFactor(0.85)
+                    Text("Play on iPhone from any film or show.").font(.caption).foregroundStyle(.secondary).lineLimit(2).minimumScaleFactor(0.85)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else if family == .systemSmall, let i = entry.items.first {
                 tile(i, big: true).widgetURL(Self.link(i))
             } else {
-                HStack(spacing: 10) {
-                    ForEach(Array(entry.items.prefix(family == .systemSmall ? 1 : 3).enumerated()), id: \.offset) { _, i in
-                        Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) { tile(i, big: false) }
+                if entry.items.count == 1, let i = entry.items.first {
+                    // One film: its poster at a poster's shape on the left, its name and time beside it, not two empty places.
+                    Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) {
+                        HStack(alignment: .top, spacing: 12) {
+                            poster(i).aspectRatio(Self.shape(i), contentMode: .fit)
+                            VStack(alignment: .leading, spacing: 4) {
+                                WholeWords(text: i.name, axis: .vertical).font(.headline)
+                                WholeWords(text: Self.status(i), axis: .horizontal).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                } else {
+                    // Two share the width in halves; three in thirds.
+                    HStack(spacing: 10) {
+                        ForEach(Array(entry.items.prefix(3).enumerated()), id: \.offset) { _, i in
+                            Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) { tile(i, big: false) }
+                        }
                     }
                 }
             }
         }
         .foregroundStyle(.white)
     }
+    // A poster's shape, or a still's when the picture is wider than tall.
+    static func shape(_ i: PhoneShelfEntry.Item) -> CGFloat {
+        guard let s = i.poster?.size, s.height > 0, s.width > s.height else { return 2 / 3 }
+        return 16 / 9
+    }
+    static func status(_ i: PhoneShelfEntry.Item) -> String { i.left > 60 ? left(i.left) : (i.line.isEmpty ? "Play on iPhone" : i.line) }
     func tile(_ i: PhoneShelfEntry.Item, big: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            ZStack(alignment: .bottom) {
-                Color.white.opacity(0.1)
-                if let p = i.poster { Image(tv: p).resizable().scaledToFill() } else { Image(systemName: "film").foregroundStyle(.white.opacity(0.5)) }
-                GeometryReader { g in
-                    ZStack(alignment: .leading) { Color.white.opacity(0.3); TVLook.accent.frame(width: g.size.width * min(max(i.progress, 0), 1)) }
-                }
-                .frame(height: 3)
+            poster(i)
+            // One block of fixed height in every tile (two lines of name, one of time), top-aligned so the posters stay
+            // level: the time sits right under the name, and a short name leaves its spare line below both.
+            VStack(alignment: .leading, spacing: WholeWords<EmptyView>.gap) {
+                Text("X\nX").font(.caption.weight(.semibold))
+                Text("X").font(.caption2)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            Text(i.name).font(.caption.weight(.semibold)).lineLimit(1)
-            Text(i.left > 60 ? Self.left(i.left) : (i.line.isEmpty ? "Play on iPhone" : i.line)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            .hidden().frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .topLeading) {
+                WholeWords(text: i.name, axis: .vertical) {
+                    WholeWords(text: Self.status(i), axis: .horizontal).font(.caption2).foregroundStyle(.secondary)
+                }
+                .font(.caption.weight(.semibold))
+            }
         }
     }
+    func poster(_ i: PhoneShelfEntry.Item) -> some View {
+        // The poster fills the room the tile is given, never more: loose in the ZStack, a poster filled to the tile's
+        // width came out taller than the tile and pushed its name and time off the bottom (a still, wider, ran into
+        // the tile beside it). Cropped from the top down, so a poster's title and faces stay in.
+        ZStack(alignment: .bottom) {
+            Color.white.opacity(0.1)
+                .overlay(alignment: .top) { if let p = i.poster { Image(tv: p).resizable().widgetAccentedRenderingMode(.fullColor).scaledToFill() } }
+                .overlay { if i.poster == nil { Image(systemName: "film").foregroundStyle(.white.opacity(0.5)) } }
+                .clipped()
+            GeometryReader { g in
+                ZStack(alignment: .leading) { Color.white.opacity(0.3); TVLook.accent.frame(width: g.size.width * min(max(i.progress, 0), 1)) }
+            }
+            .frame(height: 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+// Words never cut and no ellipsis in a widget (the 11-12 ruling): the longest run of whole words, from the start, that fits.
+// Horizontal: one line. Vertical: wrapped onto as many lines as the height allows. A run never ends on "of", "the",
+// "by", "a" or "and", so no lone article; the first content word, if even that is too long, shrinks rather than being cut.
+// Anything given as `below` (a tile's time) sits right under whichever run is chosen, and counts toward its fit.
+struct WholeWords<Below: View>: View {
+    let text: String
+    let axis: Axis.Set
+    let below: Below
+    static var gap: CGFloat { 2 }
+    init(text: String, axis: Axis.Set, @ViewBuilder below: () -> Below) { self.text = text; self.axis = axis; self.below = below() }
+    static var joiners: Set<String> { ["of", "the", "by", "a", "and"] }
+    static func runs(_ text: String) -> [String] {
+        let words = text.split(separator: " ").map(String.init)
+        var runs: [String] = []
+        for n in (1...max(words.count, 1)).reversed() where !words.isEmpty {
+            var w = Array(words.prefix(n))
+            if n < words.count { while let l = w.last, joiners.contains(l.lowercased()) { w.removeLast() } }
+            let r = w.joined(separator: " ")
+            if !r.isEmpty, runs.last != r { runs.append(r) }
+        }
+        return runs.isEmpty ? [text] : runs
+    }
+    var body: some View {
+        let runs = Self.runs(text)
+        ViewThatFits(in: axis) {
+            ForEach(Array(runs.dropLast().enumerated()), id: \.offset) { _, r in
+                if axis == .horizontal { Text(r).lineLimit(1).fixedSize() } else {
+                    VStack(alignment: .leading, spacing: Self.gap) { Text(r).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true); below }
+                }
+            }
+            // The last resort: one line across, or two lines down at full size; it shrinks only when a single word is
+            // wider than the room.
+            if axis == .horizontal { Text(runs.last ?? text).lineLimit(1).minimumScaleFactor(0.5) } else {
+                VStack(alignment: .leading, spacing: Self.gap) { Text(runs.last ?? text).multilineTextAlignment(.leading).lineLimit(2).minimumScaleFactor(0.5); below }
+            }
+        }
+    }
+}
+extension WholeWords where Below == EmptyView {
+    init(text: String, axis: Axis.Set) { self.init(text: text, axis: axis) { EmptyView() } }
 }
 
 struct PhoneContinueWidget: Widget {

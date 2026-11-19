@@ -250,6 +250,7 @@ targets:
     sources:
       - TVWidget/TVWidgets.swift
       - TVWidget/TVIslandWidget.swift
+      - TVWidget/PhoneWidget.swift
       - TVApp/Sources/TVShared.swift
       - TVApp/Sources/TVTheme.swift
       - TVApp/Sources/TVIsland.swift
