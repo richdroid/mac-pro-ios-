@@ -43,13 +43,12 @@ jobs:
           for P in backup none; do
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 4 -pose $P
             sleep 8
-            for D in 1 2; do xcrun simctl io "$DEVICE" screenshot --display=$D dist/tinker-$P-d$D.png 2>/dev/null; done
-            xcrun simctl io "$DEVICE" screenshot dist/tinker-$P.png
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/tinker-$P-d1.png
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby
           done
           xcrun simctl ui "$DEVICE" appearance dark
           xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 4 -pose backup
-          sleep 8; xcrun simctl io "$DEVICE" screenshot dist/tinker-backup-dark.png
+          sleep 8; xcrun simctl io "$DEVICE" screenshot --display=1 dist/tinker-backup-dark-d1.png
           ls -la dist
       - name: Publish
         if: always()
