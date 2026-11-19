@@ -98,6 +98,8 @@ jobs:
             remock; film chdemo$2 $1 12 $M/live -tab 1 -pose chdemo
             # The volume set from Sounds on a stand-in that applies it 2 s later, as the real one does: it must hold.
             remock; film voldemo$2 $1 8 $M/live -tab 3 -pose voldemo
+            # Tinker's lists in Edit: a Day-and-night time removed, then an X account, each Edit → remove → Done.
+            remock; film tinkereditdemo$2 $1 14 $M/live -tab 4 -pose tinkereditdemo
           }
           xcrun simctl ui "$DEVICE" appearance light
           set_ 1 ""

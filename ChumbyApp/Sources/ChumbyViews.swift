@@ -2687,7 +2687,15 @@ struct TinkerTab: View {
             }
             .pickerStyle(.menu)
             if let f = model.failed("xorder") { FailNote(text: f) }
-        } header: { EditHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark), small: true, editing: $editingX, shown: !model.sys.tw.isEmpty) }
+        } header: { EditHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark), small: true, editing: $editingX, shown: !model.sys.tw.isEmpty)
+            // For the build's film: after the times, Edit, the first account taken out, Done.
+            .task {
+                guard ChumbyModel.pose == "tinkereditdemo" else { return }
+                try? await Task.sleep(nanoseconds: 8_500_000_000); withAnimation(.snappy) { editingX = true }
+                try? await Task.sleep(nanoseconds: 2_000_000_000); if let h = model.sys.tw.first { Haptic.fire(.tick); saveAccounts(model.sys.tw.filter { $0 != h }) }
+                try? await Task.sleep(nanoseconds: 2_000_000_000); withAnimation(.snappy) { editingX = false }
+            }
+        }
         // Said only for an order that isn't the usual one; the usual one needs no footnote.
         footer: { if model.sys.xorder != "latest" { SectionFoot(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") } }
     }
@@ -3039,7 +3047,15 @@ struct NightSettings: View {
             if let f = model.failed("schedule") { FailNote(text: f) }
         // Named for all it holds: the night style, and the times the Chumby switches night, day, screen and channel by
         // itself. Headed "Night", a 7:00 AM "Day starts" or a channel switch read as being in the wrong section.
-        } header: { EditHead(icon: "moon.fill", text: "Day and night", color: ChumbyPalette.sub(scheme == .dark), editing: $editingTimes, shown: !model.state.schedule.isEmpty) }
+        } header: { EditHead(icon: "moon.fill", text: "Day and night", color: ChumbyPalette.sub(scheme == .dark), editing: $editingTimes, shown: !model.state.schedule.isEmpty)
+            // For the build's film: Edit, the first time taken out, Done.
+            .task {
+                guard ChumbyModel.pose == "tinkereditdemo" else { return }
+                try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { editingTimes = true }
+                try? await Task.sleep(nanoseconds: 2_000_000_000); if let e = model.state.schedule.first { Haptic.fire(.tick); remove(e.id) }
+                try? await Task.sleep(nanoseconds: 2_000_000_000); withAnimation(.snappy) { editingTimes = false }
+            }
+        }
     }
     static func date(_ s: String) -> Date {
         let p = s.split(separator: ":").compactMap { Int($0) }
