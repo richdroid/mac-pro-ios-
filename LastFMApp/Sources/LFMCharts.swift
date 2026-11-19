@@ -247,7 +247,8 @@ struct ChartsTab: View {
                             if m.entries.isEmpty {
                                 if m.cache[m.key(m.period, m.kind)] == nil {
                                     ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section * 2)
-                                } else {
+                                } else if !Store.shared.trouble {
+                                    // (Last.fm gone: the left pane's card says so; this one doesn't call it empty.)
                                     Text("Nothing in the top \(m.kind.noun) for this stretch.").font(.body).foregroundStyle(S.soft)
                                         .padding(.horizontal, S.margin)
                                 }
@@ -296,8 +297,11 @@ struct ChartsTab: View {
         if hit.0.isEmpty {
             if m.cache[m.key(p, m.kind)] == nil {
                 ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section)
+            } else if Store.shared.trouble {
+                // The same card as on his page and Now, not bare grey words (run 35).
+                TroubleNote().padding(.horizontal, S.margin).padding(.vertical, S.head)
             } else {
-                Text(Store.shared.trouble ? "Last.fm isn't answering. This stretch shows when it does." : "Nothing played in this stretch.")
+                Text("Nothing played in this stretch.")
                     .font(.body).foregroundStyle(S.soft).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, S.margin).padding(.vertical, S.section)
             }
