@@ -241,9 +241,10 @@ struct ChumbyStopAlarmIntent: AppIntent {
     static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     static var supportedModes: IntentModes { .background }
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        let name = ChumbyRingCard.name
         switch await RingDesk.shared.press(.stop) {
         case .confirmed:
-            await ChumbyRingCard.over(); await ChumbyRingCard.handled()
+            await ChumbyRingCard.over(); await RingBackup.stop(name); await ChumbyRingCard.handled()
             return .result(dialog: "Stopped.")
         case .nothingRinging: throw ChumbyError.message("No Chumby alarm is ringing.")
         case .unconfirmed: return .result(dialog: "Sent. The Chumby hasn’t confirmed yet.")
@@ -259,8 +260,10 @@ struct ChumbySnoozeAlarmIntent: AppIntent {
     static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     static var supportedModes: IntentModes { .background }
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        let name = ChumbyRingCard.name
         switch await RingDesk.shared.press(.snooze) {
         case .confirmed(let until):
+            await RingBackup.snooze(name, until: until.map { Date(timeIntervalSince1970: $0) } ?? Date().addingTimeInterval(9 * 60))
             await ChumbyRingCard.handled()
             let at = until.map { Date(timeIntervalSince1970: $0).formatted(date: .omitted, time: .shortened) }
             return .result(dialog: IntentDialog(stringLiteral: at.map { "Snoozed. It rings again at \($0)." } ?? "Snoozed."))
@@ -315,6 +318,10 @@ extension ChumbyRingAttributes: ActivityAttributes {}
 
 // The cards themselves. There is only ever one ring, so every card this phone holds is that ring's.
 enum ChumbyRingCard {
+    // The ringing alarm's name as the card has it, for the backup alarm (nil with no card).
+    static var name: String? { all.first?.content.state.name }
+    // When the card says a snooze rings again.
+    static var again: Date? { all.first?.content.state.again }
     static var all: [Activity<ChumbyRingAttributes>] { Activity<ChumbyRingAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale } }
     static func over() async {
         for a in Activity<ChumbyRingAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
@@ -368,6 +375,8 @@ enum ChumbyRingCard {
 }
 #else
 enum ChumbyRingCard {
+    static var name: String? { nil }
+    static var again: Date? { nil }
     static func handled() async {}
     static func diag(_ fields: [String: Any]) async {}
     static func over() async {}
@@ -377,6 +386,18 @@ enum ChumbyRingCard {
     static func sweep(asOf: Date) async {}
 }
 #endif
+
+// The iPhone's own backup alarm (ChumbyBackupAlarm) is in the app alone, and this file is the widget's too, so the app
+// hands it in at launch (ChumbyApp.init); a press here then reaches it, and is waited for, before iOS suspends the app.
+// 11-19: only the app's own ringing page told it. A Stop on the Lock Screen card, the notification or Siri left the
+// backup armed, so the phone rang 5 minutes after a Stop the Chumby had confirmed; a Snooze there left it at the first
+// ring's time (the Mac sends no snooze notice for a press made on the phone), so it rang during the snooze.
+enum RingBackup {
+    @MainActor static var stopped: (@MainActor @Sendable (String?) async -> Void)?
+    @MainActor static var snoozed: (@MainActor @Sendable (String?, Date) async -> Void)?
+    static func stop(_ name: String?) async { if let f = await stopped { await f(name) } }
+    static func snooze(_ name: String?, until: Date) async { if let f = await snoozed { await f(name, until) } }
+}
 
 // Stop and Snooze, from wherever they're pressed (the card, the notification, the app's ringing page, Siri), all go
 // through one desk (Richard, 2026-11-18: "stop or snooze looks good but doesnt work all the way through and is a bit
@@ -463,7 +484,7 @@ enum ChumbyRingActions {
         await ChumbyRingCard.diag(["from": from, "press": kind, "outcome": how, "ms": Int(Date().timeIntervalSince(since) * 1000)])
     }
     @discardableResult static func stop(from: String = "card") async -> String? {
-        let began = Date()
+        let began = Date(), name = ChumbyRingCard.name
         await ChumbyRingCard.change { $0.working = "Stopping…"; $0.problem = nil }
         let out = await RingDesk.shared.press(.stop)
         // The card first; the report to the Mac goes on its own, never holding the card (gate, 11-18).
@@ -471,6 +492,8 @@ enum ChumbyRingActions {
         switch out {
         case .confirmed, .nothingRinging:
             await ChumbyRingCard.over()
+            // stopped as the app's own page stops it: the phone's backup for this ring goes too
+            await RingBackup.stop(name)
             await ChumbyRingCard.handled()
             return nil
         case .unconfirmed:
@@ -483,7 +506,7 @@ enum ChumbyRingActions {
         }
     }
     @discardableResult static func snooze(from: String = "card") async -> String? {
-        let began = Date()
+        let began = Date(), name = ChumbyRingCard.name
         await ChumbyRingCard.change { $0.working = "Snoozing…"; $0.problem = nil }
         let out = await RingDesk.shared.press(.snooze)
         Task.detached { await report(from, "snooze", out, since: began) }
@@ -493,6 +516,9 @@ enum ChumbyRingActions {
             // Chumby's usual), and the Mac's next word carries the panel's time.
             let now = Date()
             await ChumbyRingCard.change { $0.working = nil; $0.problem = nil; $0.snoozed = true; $0.until = until ?? now.addingTimeInterval(Double($0.snooze ?? 9) * 60).timeIntervalSince1970 }
+            // the phone's backup moves to the snooze's end plus its delay, by the time the card now shows
+            let again = ChumbyRingCard.again ?? until.map { Date(timeIntervalSince1970: $0) } ?? now.addingTimeInterval(9 * 60)
+            await RingBackup.snooze(name, until: again)
             await ChumbyRingCard.clearNotice()
             await ChumbyRingCard.handled()
             return nil
