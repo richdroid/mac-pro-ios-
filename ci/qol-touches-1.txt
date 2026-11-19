@@ -5,3 +5,5 @@ dash-start|tap key.Start|-tab 6 -pose consoleoff
 dash-fail|tap key.Hide|-tab 6 -pose consolefail
 dash-chips|drag 0.5 0.85 0.5 0.3 0.4;tap chip.board.machine;tap chip.board.machine;tap chip.page.storage;tap "Boards take turns"|-tab 6
 dash-back|tap tile.Storage;drag 0.01 0.5 0.75 0.5 0.35;tap "tile.Fans & heat";drag 0.01 0.5 0.75 0.5 0.35|-tab 6
+dash-backtap|tap tile.Storage;touch 0.893 0.292 0.05;tap tile.CPU;touch 0.893 0.292 0.05;tap "tile.Fans & heat";touch 0.893 0.292 0.05|-tab 6
+dash-healthchip|tap "All running"|-tab 0

@@ -791,7 +791,7 @@ struct Screen<Content: View>: View {
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
                 // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
-                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
+                if let (t, to) = ["forcequit": (1, "open"), "appsfail": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     // The This Mac card is drawn only once its first reads land: waited for, or the scroll found nothing
                     // and the open portrait and folded shots never showed it (CI d9c229c).
@@ -1021,18 +1021,18 @@ struct WebTile: View {
     var good: Bool? = nil
     var onMac = false
     var open: () -> Void = {}
-    var figure: Text {
+    // Shorter second lines, for a detail that won't fit whole (the TV's show without its episode).
+    var details: [String] = []
+    // Shorter figures likewise: a figure is never shrunk, so every tile in a row is one size (designer gate, 2026-11-18).
+    var figures: [String] = []
+    func figureText(_ value: String) -> Text {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
         let small = Font.system(size: 17, weight: .semibold)
-        // Words ("All well", "Up to date") at one size: only a number has a unit beside it.
         guard value.first?.isNumber == true else { return Text(value).font(big) }
-        // "%" is a unit like the others (designer, resize gate): small beside its number.
         if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
         guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
         return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
     }
-    // Shorter second lines, for a detail that won't fit whole (the TV's show without its episode).
-    var details: [String] = []
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1050,7 +1050,11 @@ struct WebTile: View {
             // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
             HStack(spacing: 7) {
                 if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
-                figure.lineLimit(1).minimumScaleFactor(symbol == nil ? 1 : 0.7).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
+                ViewThatFits(in: .horizontal) {
+                    ForEach([value] + figures, id: \.self) { v in figureText(v).lineLimit(1).fixedSize() }
+                    figureText(figures.last ?? value).lineLimit(1)
+                }
+                .contentTransition(.numericText())
                 // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                 // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                 // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
@@ -1059,7 +1063,7 @@ struct WebTile: View {
             // The longest that fits whole, never cut with an ellipsis.
             ViewThatFits(in: .horizontal) {
                 ForEach([detail] + details, id: \.self) { d in Text(d).lineLimit(1).fixedSize() }
-                Text(details.last ?? detail).lineLimit(1).minimumScaleFactor(0.8)
+                Text(details.last ?? detail).lineLimit(1)
             }
             .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             if spark.count > 1 {
@@ -1068,8 +1072,11 @@ struct WebTile: View {
                     .frame(height: 42).padding(.top, 8)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, 14).padding(.vertical, 12)
+        // The Dashboard's tiles (no chart) are one height: nothing in them shrinks or wraps, and none is shorter than
+        // this, so a row never steps by a few points.
+        .frame(minHeight: spark.count > 1 ? nil : 98, alignment: .topLeading)
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
 
@@ -1593,7 +1600,11 @@ struct AppsTab: View {
             }
             .haptic(.warn, trigger: fails)
             // The build's shot of the second question, for an app that was asked to quit and stayed.
-            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
+            .task {
+                if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } }
+                // The build's shot of a quit that didn't happen, said under its row.
+                if model.pose == "appsfail", let a = model.status?.apps.first { try? await Task.sleep(nanoseconds: 2_000_000_000); say("\(a.pid)", "\(a.name) didn’t quit: the Mac didn’t answer.") }
+            }
         }
     }
 }
@@ -2530,8 +2541,8 @@ struct ControlTab: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Circle().fill(v.running ? Color.green : Color.red).frame(width: 9, height: 9)
-                                // The bridge's own service is named "Dashboard" on the Mac, beside a tab of that name here.
-                                Text(v.label == "local.mac-dash" ? "Bridge" : v.name)
+                                // The bridge's own service is named "Dashboard" on the Mac, beside a tab of that name here: said by what it does.
+                                Text(v.label == "local.mac-dash" ? "Phone link" : v.name)
                                 Spacer()
                                 // Only a service that's down has anything to restart.
                                 if !v.running {
@@ -2556,7 +2567,7 @@ struct ControlTab: View {
                 if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
             // Named by what it holds, not "Remote access" (Status has a card of that name with other rows) nor the
             // plumbing's name (designer, 2026-11-18).
-            } header: { Text("Your devices") } footer: {
+            } header: { Text("Reaching the Mac") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
             // Connections, fans, updates, storage, startup items and Everything were here too, as rows into the same pages

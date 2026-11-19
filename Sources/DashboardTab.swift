@@ -152,14 +152,19 @@ struct DashboardTab: View {
         let id: String, title: String, symbol: String
         var figure: String?, line: String?, good: Bool? = nil
         var alts: [String] = []    // shorter second lines, the longest that fits whole is shown
+        var figs: [String] = []    // shorter figures, likewise (a figure is never shrunk)
         let page: String?          // the Console page it puts on the Mac's screen, held
         let open: () -> Void
     }
     // When the Mac last checked every part, said the way Status's chip and Everything's page do: the second line adds.
     var checkedLine: String {
-        guard let at = s.healthAt, at > 0 else { return "Every part checked" }
+        guard let at = s.healthAt, at > 0 else { return " " }
         let m = Int(Date().timeIntervalSince1970 - at / 1000) / 60
         return m < 1 ? "Checked just now" : m < 60 ? "Checked \(m) min ago" : "Checked \(m / 60) h ago"
+    }
+    // The tiles' words, shorter, for a narrow tile: never a shrunk figure.
+    static func shorter(_ f: String?) -> [String] {
+        switch f { case "All running": ["Running"]; case "Up to date": ["Current"]; case "Restarting": ["Restart"]; default: [] }
     }
     var tileData: [TileData] {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net
@@ -200,7 +205,7 @@ struct DashboardTab: View {
         } else if !updates.unsupported { t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", page: "updates", open: updatesOpen)) }
         if let items = startup.value?.items {
             let stopped = StartupView.stopped(items.filter(\.mine)).count
-            t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "None stopped" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) kept running" : "stopped", good: stopped == 0, page: "startup", open: startupOpen))
+            t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "\(items.filter(\.mine).count) running" : "\(stopped)", line: stopped == 0 ? "None stopped" : "stopped", good: stopped == 0, page: "startup", open: startupOpen))
         } else if !startup.unsupported { t.append(TileData(id: "startup", title: "Startup", symbol: "power", page: "startup", open: startupOpen)) }
         // The TV, as the Console's Home has it: what's playing, or whether it's on. A tap opens the TV app.
         if let v = tv.value {
@@ -221,13 +226,14 @@ struct DashboardTab: View {
             let cols = size == .regular ? 3 : 2
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: cols), spacing: 12) {
                 ForEach(tileData) { d in
-                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open, details: d.alts)
+                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open, details: d.alts, figures: d.figs.isEmpty ? Self.shorter(d.figure) : d.figs)
                 }
             }
             .opacity(model.stale ? staleDim : 1)
-        // Over the cards as the system's own headers sit over theirs (Status's Temperatures, Run on the Mac beside).
-        } header: { Text("The Mac").padding(.leading, 20).padding(.bottom, 6) }
-        .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+            // The row runs edge to edge of the card; the header is the system's own, laid out as Control's are (its
+            // spacing tuned by hand was 2-9 pt off theirs, designer gate 2026-11-18).
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+        } header: { Text("The Mac") }
     }
 
     // MARK: For the Mac's screen: boards and pages
@@ -268,8 +274,8 @@ struct DashboardTab: View {
                         }
                     }
                 }
-            } header: { Text("For the Mac’s screen").padding(.leading, 20).padding(.top, 5).padding(.bottom, 6) }
-            .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+            } header: { Text("For the Mac’s screen") }
             // Two settings, as rows of the system's own card, as in Settings.
             Section {
                 Toggle(isOn: Binding(get: { st?.rotate == true }, set: { on in remote.send(model, "rotate", "rotate", on ? "on" : "off") })) {

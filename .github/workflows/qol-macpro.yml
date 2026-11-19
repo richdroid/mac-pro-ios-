@@ -81,6 +81,7 @@ jobs:
             shot control$x $d 8 -tab 5
             film control-scroll$x $d 3 "drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2" -tab 5
             shot status$x $d 8 -tab 0
+            shot apps-fail$x $d 8 -tab 1 -pose appsfail
             # Read on fd 3, so nothing a film runs can swallow the next lines.
             # Upright open, the tab bar's buttons aren't separate on the accessibility tree: its own file taps them by place.
             f=ci/qol-touches-$d$x.txt; [ -f $f ] || f=ci/qol-touches-$d.txt
