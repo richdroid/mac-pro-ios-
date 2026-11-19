@@ -73,7 +73,8 @@ struct StartTab: View {
         return Panel(1, playing ? "now playing" : "today") {
             VStack(alignment: .leading, spacing: S.section) {
                 // First, as on his own page: under the hero it sat below the first screen folded (run 34).
-                if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
+                // Open flat (.stage) his page's note is on screen in the left pane already: said once, not twice (run 36).
+                if store.trouble, layout != .stage { TroubleNote().padding(.horizontal, S.margin) }
                 if playing {
                     NowHero(layout: layout == .stage ? .column : layout, titled: false)
                     // Zune's Mixview: the artist on now ringed by the artists like them, his plays as the lines.

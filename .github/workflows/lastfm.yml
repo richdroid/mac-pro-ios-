@@ -75,7 +75,8 @@ jobs:
             shot start$x $d 9 -tab 0
             shot now$x $d 12 -tab 0 -panel 1
             shot now-idle$x $d 8 -tab 0 -panel 1 -playing NO
-            shot lately$x $d 9 -tab 0 -panel 2
+            # Long enough for his picture and the covers to be in (run 36: placeholder discs at 9 s).
+            shot lately$x $d 14 -tab 0 -panel 2
             shot story$x $d 9 -tab 0 -panel 3
             shot charts$x $d 9 -tab 1
             shot library$x $d 9 -tab 2
@@ -106,8 +107,10 @@ jobs:
           # it's gone, shows its note. Then the history read in full at normal speed for everything after, the insights
           # that need all of it, the track lengths and Discover's first list.
           shot charts-down 1 25 -tab 1 -period 2 -fresh YES -mockDown YES
-          shot start-first 1 40 -tab 0 -fresh YES
+          shot start-first 1 40 -tab 0
           shot discover-first 1 20 -tab 3
+          # A launch on Lately to fetch its art before it's shot, so the shot isn't the first look after the -fresh read.
+          shot lately-warm 1 14 -tab 0 -panel 2
           everything "" 1
           early folded
           date

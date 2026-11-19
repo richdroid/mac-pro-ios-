@@ -38,7 +38,7 @@ struct Pager: View {
     let top: Int
     var accessory: AnyView? = nil
     var locked = false
-    @State private var motion = PagerMotion()
+    @State private var motion: PagerMotion
     @State private var position: Int?
     @State private var landed = 0
     // Opened on a section other than the first (a widget's link, a build's pose): not settled, and nothing read from
@@ -50,7 +50,12 @@ struct Pager: View {
         self.look = look; self.title = title; self.panels = panels; _page = page; self.top = top
         self.accessory = accessory; self.locked = locked
         _position = State(initialValue: page.wrappedValue)
-        start = panels.firstIndex { $0.id == page.wrappedValue } ?? 0
+        let start = panels.firstIndex { $0.id == page.wrappedValue } ?? 0
+        self.start = start
+        // Where it opens, known before the first frame, so the name lit and the page shown agree from the start (run 36:
+        // "lately" opened with the names unlit over his page until the placing loop caught up).
+        let m = PagerMotion(); m.f = CGFloat(start)
+        _motion = State(initialValue: m)
     }
     private let start: Int
 
@@ -99,6 +104,9 @@ struct Pager: View {
                     // pivot now, a page the pager's full width, so a page is exactly one section.
                     .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $position, anchor: .leading)
+                    // Laid out on the section it opens to in its first frame: across the row by the section's share, which
+                    // with equal widths and the peek as the trailing margin is exactly that section's offset.
+                    .defaultScrollAnchor(UnitPoint(x: panels.count > 1 ? CGFloat(start) / CGFloat(panels.count - 1) : 0, y: 0))
                     // The last section comes to rest at the margin like the others, not pushed back by the peek.
                     .contentMargins(.trailing, peek, for: .scrollContent)
                     .scrollIndicators(.hidden)
@@ -287,7 +295,7 @@ private struct PivotHeaders: View {
         // smaller so most of them show at once (review, run 27).
         let size = (names.count > 4 ? 32 : 40) * min(max(k, 0.9), 1.2)
         let lead = S.margin - 3
-        let f = max(0, min(CGFloat(names.count - 1), motion.x / pw))
+        let f = max(0, min(CGFloat(names.count - 1), motion.f))
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 // Each name follows its own margin-wide spacer, and the row is scrolled to the spacers: scrolled to a
