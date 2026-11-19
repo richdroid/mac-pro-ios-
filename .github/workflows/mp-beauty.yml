@@ -95,6 +95,10 @@ jobs:
             shot control$x $d 8 -tab 5
             film control-scroll$x $d 3 "drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2" -tab 5
             shot status$x $d 8 -tab 0
+            # Apps as it opens (designer gate, 2026-11-19: only its failure pose was shot).
+            shot apps$x $d 8 -tab 1
+            # A fling: three quick throws down the Dashboard and one back, for the frames between.
+            film dash-fling$x $d 3 "drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.2 $sx 0.9 0.08" -tab 6
             # The posed failure stays up once said (about 2 s after the open apps are drawn, which folded is only once
             # they're scrolled to): shot well after, never before it is said (designer gate, 2026-11-19).
             shot apps-fail$x $d 10 -tab 1 -pose appsfail
@@ -117,6 +121,8 @@ jobs:
           shot history-cpu-land 1 9 -tab 0 -openHistory cpu
           shot apps-land 1 8 -tab 1
           shot control-land 1 8 -tab 5
+          # The update offer with two apps ready is taller than the screen on its side: scrolled to its Update button.
+          film otaoffer-land 1 3 "drag 0.5 0.8 0.5 0.3 0.4" -tab 1 -pose otaoffer
           $D "$DEVICE" rotate 3; sleep 5
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
