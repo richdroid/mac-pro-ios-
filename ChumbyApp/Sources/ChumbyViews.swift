@@ -58,12 +58,13 @@ struct ChumbyApp: App {
         .backgroundTask(.appRefresh(CalendarWake.refreshID)) {
             await CalendarWake.shared.sync()
             await ChumbyNotify.shared.afterBackgroundSync()
+            // the next refresh is asked for first: the read below can take a while, and iOS may end this task in it
+            await CalendarWake.shared.scheduleRefresh()
             // the phone's backup alarms from the Chumby's own list, so they hold while the app stays closed
             if let s = try? await chumbyTry({ try JSONDecoder().decode(ChumbyState.self, from: try await $0.raw("state").data) }) {
                 await ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()))
                 await ChumbyBackupAlarm.shared.settle()
             }
-            await CalendarWake.shared.scheduleRefresh()
         }
         #endif
     }

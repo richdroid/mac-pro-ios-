@@ -130,7 +130,8 @@ final class ChumbyBackupAlarm: ObservableObject {
         guard let wanted else { refreshStatus(); return }
         var auth = Kit.state
         // Asked the first time there is something to back up; a "no" is left alone (the setting says so).
-        if auth == .notDetermined, !wanted.isEmpty { auth = await Kit.request() }
+        // only with him in the app: a prompt asked from a background refresh could hang the queue
+        if auth == .notDetermined, !wanted.isEmpty, Self.inFront { auth = await Kit.request() }
         refreshStatus()
         guard auth == .authorized else { return }
         await commit(BackupPlan.reconcile(kept: entries, wanted: wanted, delay: delay, now: Date()))
@@ -148,6 +149,13 @@ final class ChumbyBackupAlarm: ObservableObject {
         entries = kept
         next = kept.map(\.fireAt).filter { $0 > Date() }.min()
     }
+    private static var inFront: Bool {
+        #if canImport(UIKit)
+        return UIApplication.shared.applicationState == .active
+        #else
+        return false
+        #endif
+    }
     // Waits for what's queued (a background refresh must finish before iOS suspends the app).
     func settle() async { await tail?.value }
 }
@@ -158,9 +166,14 @@ struct BackupAlarmSettings: View {
     @AppStorage(ChumbyBackupAlarm.onKey) private var enabled = true
     @AppStorage(ChumbyBackupAlarm.delayKey) private var delay = BackupPlan.defaultDelay
     var denied: Bool { enabled && backup.status == .denied }
+    // "7:05 AM" today, "Sat 7:05 AM" on another day
+    static func when(_ d: Date) -> String {
+        let t = d.formatted(date: .omitted, time: .shortened)
+        return Calendar.current.isDateInToday(d) ? t : d.formatted(.dateTime.weekday(.abbreviated)) + " " + t
+    }
     var body: some View {
         Section {
-            Toggle(isOn: $enabled) { TwoLine("iPhone backup alarm", backup.next.map { "Next: \($0.formatted(date: .omitted, time: .shortened))" } ?? "Rings through Silent if the Chumby alarm isn’t stopped.") }
+            Toggle(isOn: $enabled) { TwoLine("iPhone backup alarm", (backup.status == .on ? backup.next : nil).map { "Next: " + Self.when($0) } ?? "Rings through Silent if the Chumby alarm isn’t stopped.") }
                 .padding(.trailing, 2)
                 .onChange(of: enabled) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
                 .soloCard(on: !enabled && !denied)
