@@ -403,7 +403,7 @@ final class ChumbyModel: ObservableObject {
         deviceState = s
         if !stateKnown { stateKnown = true }
         // The phone's own backup alarm for each ring coming up (ChumbyBackupAlarm).
-        ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()))
+        ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()), escalation: BackupPlan.Escalation(s.escalate))
         if let d = doubted, Self.skipAgrees(s.skipped, d) { doubted = nil; letGo("skip") }
         // A change that didn't get through, which the Chumby now matches anyway (put right on the Chumby, say), is done.
         pending.removeAll { p in

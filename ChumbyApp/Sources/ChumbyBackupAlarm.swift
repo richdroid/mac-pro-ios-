@@ -51,16 +51,26 @@ private enum Kit {
 @MainActor
 final class ChumbyBackupAlarm: ObservableObject {
     static let shared = ChumbyBackupAlarm()
-    static let onKey = "backupAlarmOn", delayKey = "backupAlarmDelay"
+    // delayKey: minutes after the Chumby's loud beep (11-19 on); oldDelayKey: minutes after the ring, as saved before
+    static let onKey = "backupAlarmOn", delayKey = "backupAlarmAfterBeep", oldDelayKey = "backupAlarmDelay"
+    // Once: a delay saved from the ring becomes one from the beep that rings the phone when it did (or just after the beep).
+    static func migrateDelay() {
+        let d = UserDefaults.standard
+        guard d.object(forKey: delayKey) == nil, let old = d.object(forKey: oldDelayKey) as? Int else { return }
+        d.set(BackupPlan.migrated(fromRing: old), forKey: delayKey)
+    }
     private static let keptKey = "backupAlarms"
 
     enum Status { case off, notAsked, denied, on }
     @Published private(set) var status: Status = .off
     // the next backup armed, for the setting's line
     @Published private(set) var next: Date?
+    // the Chumby's escalation as last read, for the setting's words
+    @Published private(set) var escalation = BackupPlan.Escalation.standard
 
     var enabled: Bool { UserDefaults.standard.object(forKey: Self.onKey) as? Bool ?? true }
     var delay: Int {
+        Self.migrateDelay()
         let d = UserDefaults.standard.object(forKey: Self.delayKey) as? Int ?? BackupPlan.defaultDelay
         return BackupPlan.delays.contains(d) ? d : BackupPlan.defaultDelay
     }
@@ -78,8 +88,9 @@ final class ChumbyBackupAlarm: ObservableObject {
     }
 
     // After every successful read of the Chumby's list: the rings coming up (BackupPlan.rings).
-    func sync(rings: [BackupPlan.Ring]) {
+    func sync(rings: [BackupPlan.Ring], escalation: BackupPlan.Escalation = .standard) {
         wanted = rings
+        if self.escalation != escalation { self.escalation = escalation }
         queue { [self] in await apply() }
     }
     // The setting changed: start or stop at once, from the rings last read.
@@ -144,6 +155,8 @@ final class ChumbyBackupAlarm: ObservableObject {
         // phone takes the backup away; the Mac can't tell a Stop on the Chumby from a ring that failed. One pressed here
         // in the last 3 minutes that the Chumby hadn't confirmed in time is his.
         case .over?: if let n = takeStopSent() { handled(name: n.isEmpty ? nil : n) }
+        // stopped on the Chumby itself: the Mac read the hook's "stop" row for this ring (Richard, 11-19: yes, cancel it)
+        case .stopped(let name)?: handled(name: name)
         case .snoozed(let name, let until)?: snoozed(name: name, until: until)
         case nil: break
         }
@@ -210,7 +223,15 @@ struct BackupAlarmSettings: View {
     @ObservedObject private var backup = ChumbyBackupAlarm.shared
     @AppStorage(ChumbyBackupAlarm.onKey) private var enabled = true
     @AppStorage(ChumbyBackupAlarm.delayKey) private var delay = BackupPlan.defaultDelay
+    init() { ChumbyBackupAlarm.migrateDelay() }
     var denied: Bool { enabled && backup.status == .denied }
+    // Plainly, in the order it happens (Richard, 11-19: music, then the Chumby's loud beep, then the phone).
+    var order: String {
+        let e = backup.escalation
+        guard e.first > 0 else { return "The Chumby’s loud beep is off, so this counts from when it rings." }
+        func m(_ s: Int) -> String { s % 60 == 0 ? "\(s / 60) min" : "\(s) s" }
+        return "After the Chumby’s loud beep, which comes \(m(e.first)) into an alarm no one stops" + (e.again > 0 ? " (\(m(e.again)) after a snooze)." : ".")
+    }
     // "7:05 AM" today, "Sat 7:05 AM" on another day
     static func when(_ d: Date) -> String {
         let t = d.formatted(date: .omitted, time: .shortened)
@@ -223,8 +244,8 @@ struct BackupAlarmSettings: View {
                 .onChange(of: enabled) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
                 .soloCard(on: !enabled && !denied)
             if enabled {
-                MenuRow(title: "Ring the iPhone after", note: "After the Chumby rings, or a snooze ends.", selection: $delay) {
-                    ForEach(BackupPlan.delays, id: \.self) { Text("\($0) min").tag($0) }
+                MenuRow(title: "Ring the iPhone", note: order, selection: $delay) {
+                    ForEach(BackupPlan.delays, id: \.self) { Text("\($0) min after").tag($0) }
                 }
                 .onChange(of: delay) { _, _ in ChumbyBackupAlarm.shared.settingsChanged() }
             }

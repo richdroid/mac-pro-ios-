@@ -13,6 +13,7 @@ struct ChumbyApp: App {
     #endif
     init() {
         ChumbyNotify.shared.install()
+        ChumbyBackupAlarm.migrateDelay()
         // Stop and Snooze pressed outside the app's page (Lock Screen card, notification, Siri) reach the backup alarm too.
         RingBackup.stopped = { name in await ChumbyBackupAlarm.shared.stopNow(name: name) }
         RingBackup.snoozed = { name, until in await ChumbyBackupAlarm.shared.snoozeNow(name: name, until: until) }
@@ -68,7 +69,7 @@ struct ChumbyApp: App {
             await CalendarWake.shared.scheduleRefresh()
             // the phone's backup alarms from the Chumby's own list, so they hold while the app stays closed
             if let s = try? await chumbyTry({ try JSONDecoder().decode(ChumbyState.self, from: try await $0.raw("state").data) }) {
-                await ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()))
+                await ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()), escalation: BackupPlan.Escalation(s.escalate))
                 await ChumbyBackupAlarm.shared.settle()
             }
         }
