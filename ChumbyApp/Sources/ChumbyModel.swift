@@ -536,12 +536,14 @@ final class ChumbyModel: ObservableObject {
     // The Chumby's volume, set from the phone (Sounds and Home's Playing card, the mute key): shown at once, held until the
     // Chumby reports it, never sent under an alarm (the ring sets its own volume and puts his back after).
     private var volumeSent: (level: Int, at: Date)?
-    func setVolume(_ v: Int, id: String) {
+    // False when it wasn't sent (an alarm is ringing): the caller's slider goes back to the Chumby's level.
+    @discardableResult func setVolume(_ v: Int, id: String) -> Bool {
         let level = min(max(v, 0), 100)
-        if let why = alarmBusy, sys.ringing != nil { fail(id, "Not while \(why)."); return }
+        if let why = alarmBusy, sys.ringing != nil { fail(id, "Not while \(why)."); return false }
         volumeSent = (level, Date())
         if sys.vol != level { sys.vol = level }
         cmd("volume", String(level), id: id, holdFor: 2)
+        return true
     }
     // True once the Chumby took it, for a caller that says so.
     @discardableResult func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) -> Task<Bool, Never> {

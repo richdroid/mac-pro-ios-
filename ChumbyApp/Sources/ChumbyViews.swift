@@ -2161,7 +2161,8 @@ struct NowPlaying: View {
     @State private var dragging = false
     let tab: Int
     let failID: String
-    func set(_ v: Int) { volume = Double(v); model.setVolume(v, id: failID) }
+    // Refused (an alarm is ringing), the slider goes back to the level the Chumby has (gate, 11-18).
+    func set(_ v: Int) { volume = Double(v); if !model.setVolume(v, id: failID), model.sys.vol >= 0 { withAnimation(.snappy) { volume = Double(model.sys.vol) } } }
     // The song playing, when the Chumby says its player is going and Pandora's history has a song from the last few
     // minutes; otherwise nothing is named rather than an old song.
     var nowSong: Song? {
@@ -2231,7 +2232,7 @@ struct NowPlaying: View {
                 .buttonStyle(.borderless).accessibilityLabel(volume > 0 ? "Mute" : "Unmute")
                 Slider(value: $volume, in: 0...100, step: 1) { e in
                     dragging = e
-                    if !e { if volume > 0 { lastVolume = Int(volume) }; model.setVolume(Int(volume), id: failID) }
+                    if !e { if volume > 0 { lastVolume = Int(volume) }; set(Int(volume)) }
                 }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
                 Text("\(Int(volume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
             }

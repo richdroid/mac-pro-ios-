@@ -155,7 +155,11 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
         done()
     }
     #if canImport(UIKit)
-    @MainActor static func keepAwake() -> UIBackgroundTaskIdentifier { UIApplication.shared.beginBackgroundTask(withName: "Chumby ring press") {} }
+    @MainActor static func keepAwake() -> UIBackgroundTaskIdentifier {
+        var t = UIBackgroundTaskIdentifier.invalid
+        t = UIApplication.shared.beginBackgroundTask(withName: "Chumby ring press") { if t != .invalid { UIApplication.shared.endBackgroundTask(t); t = .invalid } }
+        return t
+    }
     @MainActor static func letSleep(_ t: UIBackgroundTaskIdentifier) { if t != .invalid { UIApplication.shared.endBackgroundTask(t) } }
     #else
     static func keepAwake() -> Int { 0 }

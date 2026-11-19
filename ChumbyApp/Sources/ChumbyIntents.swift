@@ -466,7 +466,8 @@ enum ChumbyRingActions {
         let began = Date()
         await ChumbyRingCard.change { $0.working = "Stopping…"; $0.problem = nil }
         let out = await RingDesk.shared.press(.stop)
-        await report(from, "stop", out, since: began)
+        // The card first; the report to the Mac goes on its own, never holding the card (gate, 11-18).
+        Task.detached { await report(from, "stop", out, since: began) }
         switch out {
         case .confirmed, .nothingRinging:
             await ChumbyRingCard.over()
@@ -485,7 +486,7 @@ enum ChumbyRingActions {
         let began = Date()
         await ChumbyRingCard.change { $0.working = "Snoozing…"; $0.problem = nil }
         let out = await RingDesk.shared.press(.snooze)
-        await report(from, "snooze", out, since: began)
+        Task.detached { await report(from, "snooze", out, since: began) }
         switch out {
         case .confirmed(let until):
             // Until when: the Chumby's own time; failing that, this alarm's snooze length from now (9 minutes is the
