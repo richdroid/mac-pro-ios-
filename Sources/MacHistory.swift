@@ -275,11 +275,13 @@ struct HistoryView: View {
                 FoldSplit {
                     // 20 pt from the display's edge, on the tabs' title line: the pane's own 14 pt outer air plus 6 (it was
                     // 20 more, the title at 35; designer gate, 2026-11-19).
-                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5); staleLine; readout; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
+                    // The figure moved to the right pane, where it heads the figures and the period, and gave the chart its
+                    // height: open flat the right pane stood half empty under Processes (designer gate 4, 2026-11-19).
+                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5); staleLine; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
                         .padding(.leading, 6).padding(.trailing, 20).padding(.top, 4).padding(.bottom, 20)
                 } right: {
                     ScrollView {
-                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false, nudge: 5); range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false, nudge: 5); readout; range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
                             .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
                     }
                     .scrollsUnder()

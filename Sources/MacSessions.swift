@@ -66,6 +66,8 @@ struct SessionTerminal: View {
     // The posture's layout as last read at rest: the fold is read in the page's own space, which moves as the page slides
     // off, so it's held while a push or pop is in flight (NavTransit).
     @State private var heldMode: SessionFoldLayout.Mode?
+    // The kind of layout last drawn (one column, stacked, panes): a change of kind is never glided (below).
+    @State private var drawnKind = 0
     // Glyphs short enough for a sixth of the folded width, each with its full name for VoiceOver.
     static let keys: [(String, String, String)] = [("esc", "esc", "Escape"), ("enter", "⏎", "Enter"), ("up", "↑", "Up"), ("down", "↓", "Down"), ("left", "←", "Left"), ("right", "→", "Right"),
                                                    ("1", "1", "1"), ("2", "2", "2"), ("3", "3", "3"), ("tab", "⇥", "Tab"), ("shift-tab", "⇧⇥", "Shift Tab"), ("ctrl-c", "⌃C", "Control C")]
@@ -241,8 +243,6 @@ struct SessionTerminal: View {
         .tint(k == "ctrl-c" ? .red : nil)
         .accessibilityLabel(name)
     }
-    // Every key in view at once: one row when there's room, two on the folded screen, so the numbers and Ctrl-C are
-    // never cut off when a menu needs them.
     // Every key in view at once, as few rows as fit: twelve across, six, or four, the keys flexing to the column's width
     // so they sit flush with the answers above and the box below (designer gate, 2026-11-19: a fixed two-row grid ran
     // 16 pt wider than the box folded upright, and past a narrow pane under the rail on its side).
@@ -252,6 +252,9 @@ struct SessionTerminal: View {
             keyGrid(6)
             keyGrid(4)
         }
+        // 4 pt in each side: the grid's bordered keys drew about 8 pt wider than the answers and the box, folded and on
+        // its side (designer gate 4, 2026-11-19); inset, their edges meet the answers' and the box's.
+        .padding(.horizontal, 4)
         .frame(maxWidth: .infinity)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
@@ -368,23 +371,27 @@ struct SessionTerminal: View {
     // keyboard up is shorter than it is wide too, and stays one column.
     // Folded on its side the tab rail stands over the page's trailing strip without taking it from the page's safe area,
     // and the keys and the box ran under it (designer gate, 2026-11-19): how much of this page it covers, from the window.
+    // Only what overlaps the page counts: the page's own safe area already leaves out a rail that takes part in it (adding
+    // the trailing safe area again, and taking the widest tab-bar container rather than the rail's own edge, left the
+    // right pane about 90 pt short of the rail; designer gate 4, 2026-11-19). The innermost edge found wins.
     static func rail(_ g: GeometryProxy) -> CGFloat {
         #if os(iOS)
         guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return 0 }
         let page = g.frame(in: .global)
-        var found: CGFloat = 0
+        var edge: CGFloat?
         func look(_ v: UIView) {
             guard !v.isHidden, v.alpha > 0.01 else { return }
             let name = String(describing: type(of: v))
             if v is UITabBar || name.contains("TabBar") || name.contains("TabSidebar") {
                 let f = v.convert(v.bounds, to: win)
                 // Upright along the trailing edge: the rail, not the bar along the foot.
-                if f.height > f.width * 2, f.width < 160, f.midX > win.bounds.midX { found = max(found, page.maxX - f.minX); return }
+                if f.height > f.width * 2, f.width < 160, f.midX > win.bounds.midX { edge = max(edge ?? f.minX, f.minX) }
             }
             v.subviews.forEach(look)
         }
         look(win)
-        return min(max(found, g.safeAreaInsets.trailing), page.width / 3)
+        guard let edge else { return 0 }
+        return min(max(page.maxX - edge, 0), page.width / 3)
         #else
         return 0
         #endif
@@ -410,7 +417,11 @@ struct SessionTerminal: View {
                 controls(lead: { if case .panes = mode { return screenTop } else { return 0 } }())
             }
             // The parts move to their new places in the Screen's own spring as the hinge moves.
-            .animation(RemoteScreenView.posture, value: mode)
+            // Only within one kind (the crease moving): between one column and two panes the parts glided across each
+            // other, the answers drawn over the terminal card for a moment as the page turned (designer gate 4,
+            // 2026-11-19). A change of kind lands in place, under the system's own turn.
+            .animation(mode.kind == drawnKind ? RemoteScreenView.posture : nil, value: mode)
+            .onChange(of: mode.kind, initial: true) { _, k in drawnKind = k }
             .onChange(of: live, initial: true) { _, m in if !NavTransit.shared.moving() { heldMode = m } }
             .onChange(of: NavTransit.shared.active) { _, now in if !now { heldMode = live } }
         }
@@ -438,7 +449,10 @@ struct SessionTerminal: View {
 // foot, the screen taking the rest), stacked either side of a crease across, or a pane each side of the hinge. The same
 // two children in every mode, so nothing in them is made anew when the Duo folds.
 struct SessionFoldLayout: Layout {
-    enum Mode: Equatable { case column, stacked(above: CGFloat, below: CGFloat), panes(seam: CGFloat, gutter: CGFloat) }
+    enum Mode: Equatable {
+        case column, stacked(above: CGFloat, below: CGFloat), panes(seam: CGFloat, gutter: CGFloat)
+        var kind: Int { switch self { case .column: 0; case .stacked: 1; case .panes: 2 } }
+    }
     var mode: Mode
     // Folded on its side, the width the tab rail covers at the trailing edge: the right pane stops short of it.
     var trail: CGFloat = 0

@@ -269,7 +269,6 @@ struct DashboardTab: View {
         .accessibilityLabel(name)
         .accessibilityIdentifier("chip." + id)
         .accessibilityAddTraits(on ? .isSelected : [])
-        .id(id)
     }
 
     var showOnMac: some View {
@@ -279,16 +278,16 @@ struct DashboardTab: View {
                     // Clear of the header above (it was cut to "oards", CI 68b580c).
                     // In line with the headings, clear of the card's rounded corner (it cut "Boards" to "3oards", CI 64e4a2c).
                     Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20)
-                    chips(shown: (running ? st?.board : nil).map { "board." + $0 }) {
-                        ForEach(ConsolePlace.boards, id: \.id) { b in
+                    ChipRow(ids: ConsolePlace.boards.map { "board." + $0.id }, lit: { running ? st?.board.map { "board." + $0 } : nil }) { id in
+                        if let b = ConsolePlace.boards.first(where: { "board." + $0.id == id }) {
                             let on = running && st?.board == b.id
-                            chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: "board." + b.id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
+                            chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
                         }
                     }
                     Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 4)
-                    chips(shown: onMac.map { "page." + $0 }) {
-                        ForEach(ConsolePlace.pages, id: \.id) { p in
-                            chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: "page." + p.id) { remote.send(model, "page:" + p.id, "page", p.id) }
+                    ChipRow(ids: ConsolePlace.pages.map { "page." + $0.id }, lit: { onMac.map { "page." + $0 } }) { id in
+                        if let p = ConsolePlace.pages.first(where: { "page." + $0.id == id }) {
+                            chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: id) { remote.send(model, "page:" + p.id, "page", p.id) }
                         }
                     }
                 }
@@ -315,36 +314,56 @@ struct DashboardTab: View {
         .disabled(!running)
         .opacity(running ? 1 : 0.4)
     }
-    // A row of chips that scrolls sideways out to the display's edges, its first chip lined up with the cards.
-    // The first chip in line with the headings; the row fades out at its end rather than cutting a chip in half.
-    // The row follows what's lit: the page on the Mac's screen was a blue sliver cut by the pane's edge when it was the
-    // fourth chip or later (CI 7809d95, open flat; designer gate 2026-11-19). In place as the row appears, glided after.
-    func chips<C: View>(shown: String?, @ViewBuilder _ content: () -> C) -> some View {
-        ChipRow(shown: shown, content: content())
-    }
 }
 
-// The chip row's scroll, following the lit chip: scrollTo in onAppear ran before the List had laid the row out, and the
-// change never fired (designer gate, 2026-11-19); a scroll position keyed by the chips' .id() never matched, since it
-// reads the ForEach's own ids (third gate). Now scrollTo, which finds a chip by its .id(), from a task keyed by the lit
-// chip, after a turn of the run loop: in place the first time, glided on every change after, whether from a tap or the
-// Mac's own (Boards take turns).
+// A row of chips that scrolls sideways out to the display's edges, its first chip in line with the headings, fading out
+// at its end rather than cutting a chip in half; it keeps the lit chip (the page or board on the Mac's screen) in view.
+// Three tries by id failed inside the List row (designer gates on 5fdaedf, b6e8a0b, 8dac002): the lit Storage chip stayed
+// off to the right while the row sat at Home. Inside a List, an .id() in a row is a target of the List's own scroll, so
+// ScrollViewReader.scrollTo moved nothing sideways, and scrollPosition(id:) reads the ForEach's ids, which were the bare
+// page names. So nothing here is found by id: each chip's centre is measured in the row's own space and the row is
+// scrolled to an offset, held in a ScrollPosition. The row watches the Console itself, so it follows a change the Mac
+// makes by itself (Boards take turns) as well as a tap, whatever the List does with the row around it.
 struct ChipRow<C: View>: View {
-    let shown: String?
-    let content: C
+    let ids: [String]
+    let lit: () -> String?
+    let chip: (String) -> C
+    init(ids: [String], lit: @escaping () -> String?, @ViewBuilder chip: @escaping (String) -> C) { self.ids = ids; self.lit = lit; self.chip = chip }
+    @ObservedObject private var remote = ConsoleRemote.shared
+    @State private var position = ScrollPosition(x: 0)
+    @State private var mids: [String: CGFloat] = [:]
+    @State private var content: CGFloat = 0
+    @State private var viewport: CGFloat = 0
     @State private var placed = false
+    static var margin: CGFloat { 20 }
+    // The offset that puts a chip's centre (measured in the row, its 20 pt margins included) mid-view, clamped to the row.
+    static func offset(mid: CGFloat, viewport: CGFloat, content: CGFloat) -> CGFloat {
+        min(max(mid - viewport / 2, 0), max(content - viewport, 0))
+    }
+    func follow() {
+        guard let id = lit(), let mid = mids[id], viewport > 0, content > 0 else { return }
+        let x = Self.offset(mid: mid, viewport: viewport, content: content)
+        if placed { withAnimation(Motion.quick) { position.scrollTo(x: x) } } else { position.scrollTo(x: x); placed = true }
+    }
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content } }
-                .contentMargins(.horizontal, 20, for: .scrollContent)
-                .task(id: shown) {
-                    guard let shown else { return }
-                    await Task.yield()
-                    try? await Task.sleep(nanoseconds: 80_000_000)
-                    if placed { withAnimation(Motion.quick) { proxy.scrollTo(shown, anchor: .center) } }
-                    else { proxy.scrollTo(shown, anchor: .center); placed = true }
+        let shown = lit()
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(ids, id: \.self) { id in
+                    chip(id).onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("chiprow")).midX } action: { mids[id] = $0 }
                 }
+            }
+            // Past the last chip, as much room as the fade takes, so the last chip lit can come clear of the fade too.
+            .padding(.leading, Self.margin).padding(.trailing, max(Self.margin, (viewport * 0.14).rounded(.up) + 4))
+            .coordinateSpace(.named("chiprow"))
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { content = $0 }
         }
+        .scrollPosition($position)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewport = $0 }
+        .onChange(of: shown, initial: true) { follow() }
+        // The first time, in place as soon as the chips are measured; after that only a change of page or width moves it.
+        .onChange(of: mids) { if !placed { follow() } }
+        .onChange(of: viewport) { follow() }
         .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
     }
 }
