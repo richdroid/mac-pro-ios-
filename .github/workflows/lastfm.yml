@@ -182,10 +182,11 @@ jobs:
           shot discover-first 1 20 -tab 3
           everything "" 1
           shot scrub 1 9 -tab 0 -panel 1 -pose scrub
-          # Last.fm gone: every call fails; the note shows once it has been away a while (25 s), over what it last said.
-          shot down 1 36 -tab 0 -mockDown YES
-          shot now-down 1 36 -tab 0 -panel 1 -mockDown YES
-          shot charts-down 1 36 -tab 1 -mockDown YES
+          # Last.fm gone: every call fails and nothing kept is used; -mockDown also dates the failures 30 s back, so the note
+          # (shown once it has been away 25 s) is up from the first failed call (run 33's 36 s waits missed it).
+          shot down 1 20 -tab 0 -mockDown YES
+          shot now-down 1 20 -tab 0 -panel 1 -mockDown YES
+          shot discover-down 1 25 -tab 3 -mockDown YES
           early folded
           # The panorama: across Start's four sections and back (a slow drag, then flicks), the title sliding behind.
           STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pan-start 1 28 -tab 0
@@ -262,6 +263,9 @@ jobs:
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
           X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
           film tour-open 3 22 -tab 0 -pose tour
+          # Last, since -fresh empties his history for anything after it: a stretch not yet read from his own history,
+          # asked of Last.fm while it's gone, shows its note.
+          shot charts-down-open 3 25 -tab 1 -period 2 -fresh YES -mockDown YES
           date
           # How long each launch took to its first frame, step by step (-launchLog).
           C=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) && cp "$C/Library/Caches/launch-log.txt" dist/launch.log 2>/dev/null
