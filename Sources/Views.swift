@@ -499,17 +499,22 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("root body")
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
                 // Back to the tab's own start. With a page open on it, the page goes back the way Back takes it, the
                 // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
                 // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
                 // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
-                let open = (t == 0 && (model.history != nil || model.processes != nil || model.nav.settingsOpen)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil) || (t == 5 && model.macPage != nil)
+                let n = model.nav
+                let open = (t == 0 && (n.history != nil || n.processes != nil || n.settingsOpen)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
+                    || (t == 6 && (n.dashHistory != nil || n.dashProcesses != nil || n.dashPage != nil))
                 if open {
-                    if t == 0 { model.history = nil; model.processes = nil; model.nav.settingsOpen = false }
-                    if t == 1 { model.appHistory = nil }
-                    if t == 2 { model.sessionScreen = nil }
-                    if t == 5 { model.macPage = nil }
+                    if t == 0 { n.history = nil; n.processes = nil; n.settingsOpen = false }
+                    if t == 1 { n.appHistory = nil }
+                    if t == 2 { n.sessionScreen = nil }
+                    if t == 5 { n.macPage = nil }
+                    // The Dashboard's page goes back the way Back takes it; rebuilt instead, its stack lost the page with
+                    // no motion and pushed it again at once, as the page was still asked for.
+                    if t == 6 { n.dashHistory = nil; n.dashProcesses = nil; n.dashPage = nil }
                 } else {
                     resets[t, default: 0] += 1
                 }
@@ -780,13 +785,13 @@ struct Screen<Content: View>: View {
             // The This Mac card's readings (MacConsole.swift, ConsoleSummary), from the Control tab's list itself: hung off a
             // card down the page, a List never drew it until scrolled to, so the card came in late and the shots scrolled
             // to nothing (CI 43030e3).
-            .task(id: tab) { if tab == 5, side != .left { await ConsoleSummary.shared.loop(model) } }
+
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
                 // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
-                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
+                if let (t, to) = ["forcequit": (1, "open"), "appsfail": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     // The This Mac card is drawn only once its first reads land: waited for, or the scroll found nothing
                     // and the open portrait and folded shots never showed it (CI d9c229c).
@@ -925,16 +930,17 @@ struct StackPages: ViewModifier {
     @ObservedObject var nav: NavStore
     func body(content: Content) -> some View {
         content
-            // Status's histories, and the Dashboard's (on whichever of the two is in front, so only one stack takes it).
-            .navigationDestination(item: (tab == 0 && model.tab != 6) || (tab == 6 && model.tab == 6) ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6) }
             // Settings, behind the gear beside Status's name.
             .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true) }
-            // All processes, from Status itself; from a history, that page opens them over itself.
-            .navigationDestination(item: ((tab == 0 && model.tab != 6) || (tab == 6 && model.tab == 6)) && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            // All processes, from the tab itself; from a history, that page opens them over itself.
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
             .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
-            .navigationDestination(item: (tab == 5 && model.tab != 6) || (tab == 6 && model.tab == 6) ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
+            // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
+            .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 6 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
                 switch p {
                 case .health: MacHealthView(model: model)
                 case .restart: MacRestartView(model: model)
@@ -949,12 +955,48 @@ struct StackPages: ViewModifier {
             }
     }
 }
-// Processes over a history, the same way.
+// Processes over a history, the same way, on the stack the history is on.
 struct ProcessesOverHistory: ViewModifier {
     let model: AppModel
     @ObservedObject var nav: NavStore
+    @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: $nav.processes) { ProcessesView(first: $0, model: model) }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model) }
+    }
+}
+// A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.
+private struct OnDashboardKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var onDashboard: Bool { get { self[OnDashboardKey.self] } set { self[OnDashboardKey.self] = newValue } } }
+
+// The Mac's jobs and its restart, on Control with the other things done by hand.
+struct RunOnMacSection: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var summary = ConsoleSummary.shared
+    var body: some View {
+        Section {
+            if summary.mp {
+                Button { model.macPage = .actions } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bolt").foregroundStyle(macBlue).frame(width: 28)
+                        Text("Actions").foregroundStyle(Color.primary)
+                        Spacer(minLength: 8)
+                        Text("Clean, ship, tests").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        RowChevron()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Button(role: .destructive) { model.macPage = .restart } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.clockwise").frame(width: 28)
+                    Text("Restart the Mac…")
+                    Spacer(minLength: 8)
+                    RowChevron()
+                }
+                .contentShape(Rectangle())
+            }
+        } header: { Text("Run on the Mac") }
     }
 }
 
@@ -973,45 +1015,76 @@ struct WebTile: View {
     var spark: [Double] = []
     var top: Double?
     var read: (Double) -> String = { _ in "" }
+    // The Dashboard's tiles are these too, so the two tabs' tiles are one thing (2026-11-18): its icon before the name,
+    // an orange light before a figure that wants a look, and a small screen when the Mac's Console shows this page.
+    var symbol: String? = nil
+    var good: Bool? = nil
+    var onMac = false
     var open: () -> Void = {}
-    var figure: Text {
+    // Shorter second lines, for a detail that won't fit whole (the TV's show without its episode).
+    var details: [String] = []
+    // Shorter figures likewise: a figure is never shrunk, so every tile in a row is one size (designer gate, 2026-11-18).
+    var figures: [String] = []
+    func figureText(_ value: String) -> Text {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
         let small = Font.system(size: 17, weight: .semibold)
-        // "%" is a unit like the others (designer, resize gate): small beside its number.
+        guard value.first?.isNumber == true else { return Text(value).font(big) }
         if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
         guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
         return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
     }
-    var body: some View {
-        Button(action: open) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
-                }
-                // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
-                // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
-                // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
-                figure.lineLimit(1).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
-                    // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
-                    // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
-                    // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
-                    .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
-                Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-                if spark.count > 1 {
-                    // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
-                    SparkLine(values: spark, top: top)
-                        .frame(height: 42).padding(.top, 8)
-                }
+    var face: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 5) {
+                if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18) }
+                // Whole, never "Temperatu…" (CI c4f3c64, folded): a little smaller first.
+                Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+                // The page on the Mac's screen now: the Console light's green dot beside its name (one glyph, one job; the
+                // window glyph is the Show key's and Screen's). The chevron stays: the tile still opens.
+                if onMac { Circle().fill(Color.green).frame(width: 7, height: 7).accessibilityLabel("On the Mac’s screen") }
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+            // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
+            // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
+            // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
+            HStack(spacing: 7) {
+                if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
+                ViewThatFits(in: .horizontal) {
+                    ForEach([value] + figures, id: \.self) { v in figureText(v).lineLimit(1).fixedSize() }
+                    figureText(figures.last ?? value).lineLimit(1)
+                }
+                .contentTransition(.numericText())
+                // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
+                // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
+                // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
+                .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
+            }
+            // The longest that fits whole, never cut with an ellipsis.
+            ViewThatFits(in: .horizontal) {
+                ForEach([detail] + details, id: \.self) { d in Text(d).lineLimit(1).fixedSize() }
+                Text(details.last ?? detail).lineLimit(1)
+            }
+            .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+            if spark.count > 1 {
+                // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
+                SparkLine(values: spark, top: top)
+                    .frame(height: 42).padding(.top, 8)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        // Sized to its three lines with even padding: nothing in a tile shrinks or wraps, so every tile in a row is one
+        // height without a fixed one (a fixed 98 left a band under the text, designer gate 2026-11-18).
+        .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+
+    }
+    var body: some View {
+        Button(action: open) { face }
         .buttonStyle(PressStyle())
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("tile." + title)
         .accessibilityAction(named: "Show the past 24 hours", open)
     }
 }
@@ -1160,7 +1233,7 @@ struct Hero: View {
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
             HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale, fresh: model.gotFresh, route: model.route, pulse: model.pulse) {
-                model.tab = 5; model.macPage = .health
+                model.tab = 6; model.macPage = .health
             }
             .padding(.top, 9)
         }
@@ -1189,7 +1262,8 @@ struct HeroChips: View {
         HStack(spacing: 6) { dot(); Text(text).lineLimit(1); if opens { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) } }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
-    var parts: Int? { healthBad ?? summary.bad }
+    // The build's shot of a part that needs a look ("chipbad"), so the chip's way into Everything can be filmed.
+    var parts: Int? { MacConsole.pose == "chipbad" ? 1 : healthBad ?? summary.bad }
     var health: (Color, String) {
         func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
         if let n = parts, n > 0 { return (.orange, look(n)) }
@@ -1251,12 +1325,13 @@ struct QuickActions: View {
     @State private var done: Set<String> = []
     @State private var fails: [String: String] = [:]
     @State private var successes = 0
+    @State private var failures = 0
     func succeed(_ id: String) {
         fails[id] = nil; done.insert(id); successes += 1
         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); done.remove(id) }
     }
     func fail(_ id: String, _ text: String) {
-        fails[id] = text
+        fails[id] = text; failures += 1
         Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if fails[id] == text { fails[id] = nil } }
     }
     func button(_ id: String, _ icon: String, _ title: String, waits: Bool? = nil, _ action: @escaping () -> Void) -> some View {
@@ -1317,7 +1392,9 @@ struct QuickActions: View {
         .padding(.vertical, 10)
         .animation(Motion.fade, value: fails)
         .animation(Motion.fade, value: done)
-        .sensoryFeedback(trigger: successes) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
+        // Done when the Mac has done it, warn when it hasn't (the shared vocabulary).
+        .haptic(.done, trigger: successes)
+        .haptic(.warn, trigger: failures)
         .task {
             // The build's shot of a success: the tick, held long enough to be photographed.
             guard model.pose == "quickdone" else { return }
@@ -1428,21 +1505,29 @@ struct StatusTab: View {
 struct AppsTab: View {
     @EnvironmentObject var model: AppModel
     @State private var pending: Status.App?
-    @State private var alert: String?
+    // What didn't happen, under the row it happened on (the app's one way of saying a failure, FailText), gone after a
+    // few seconds; it was a modal "That did not work" alert here and nowhere else (2026-11-18, consistency).
+    @State private var failed: (key: String, text: String)?
+    @State private var fails = 0
+    func say(_ key: String, _ text: String?) {
+        guard let text else { return }
+        withAnimation(Motion.quick) { failed = (key, text) }; fails += 1
+        Task { try? await Task.sleep(nanoseconds: 6_000_000_000); if failed?.text == text { withAnimation(Motion.quick) { failed = nil } } }
+    }
     // Quitting, the way the Processes page does it: asked to close first, and Force Quit offered only for an app that
     // was asked and stayed. The two were offered side by side in one alert here (audit, 2026-11-10).
     @State private var forcing: Status.App?
     @State private var working: Int?
     func quit(_ a: Status.App, force: Bool) async {
         working = a.pid; defer { working = nil }
-        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { alert = e; return }
+        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { say("\(a.pid)", "\(a.name) didn’t quit: " + e); return }
         // The Mac gives it a few seconds, and so does this: gone from the list says it quit.
         for _ in 0..<5 {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await model.refresh()
             if !(model.status?.apps.contains { $0.pid == a.pid && $0.mem != nil } ?? false) { return }
         }
-        if force { alert = "\(a.name) is still running." } else { forcing = a }
+        if force { say("\(a.pid)", "\(a.name) is still running.") } else { forcing = a }
     }
     let s: Status
     var side: Side = .all
@@ -1475,7 +1560,13 @@ struct AppsTab: View {
                         VStack(alignment: .leading) {
                             // One line each, so the CPU figure coming and going with each reading never changes the row's height.
                             Text(a.name).lineLimit(1)
-                            Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                            // A quit that didn't happen is said in red in the figures' own place for a few seconds, so the
+                            // rows never move (designer gate, 2026-11-18).
+                            if let f = failed, f.key == "\(a.pid)" {
+                                Text(f.text).font(.footnote).foregroundStyle(.red).lineLimit(1).minimumScaleFactor(0.85).transition(.opacity)
+                            } else {
+                                Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                            }
                         }
                         Spacer(minLength: 8)
                         // The button stays mounted while the quit is in flight, so the questions hung off it can present.
@@ -1504,14 +1595,21 @@ struct AppsTab: View {
             Section {
                 Menu {
                     // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
-                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
-                } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
+                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } }
+                } label: {
+                    // Its failure in the label's place for a few seconds, likewise.
+                    if let f = failed, f.key == "launch" { Label(f.text, systemImage: "exclamationmark.circle").foregroundStyle(.red).lineLimit(1) }
+                    else { Label("Launch another app", systemImage: "plus.square.on.square") }
+                }
                 .place("launch")
             }
-
-            .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
+            .haptic(.warn, trigger: fails)
             // The build's shot of the second question, for an app that was asked to quit and stayed.
-            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
+            .task {
+                if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } }
+                // The build's shot of a quit that didn't happen, said under its row.
+                if model.pose == "appsfail", let a = model.status?.apps.first(where: { $0.mem != nil }) { try? await Task.sleep(nanoseconds: 2_000_000_000); say("\(a.pid)", "\(a.name) didn’t quit: the Mac didn’t answer.") }
+            }
         }
     }
 }
@@ -2448,7 +2546,8 @@ struct ControlTab: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Circle().fill(v.running ? Color.green : Color.red).frame(width: 9, height: 9)
-                                Text(v.name)
+                                // The bridge's own service is named "Dashboard" on the Mac, beside a tab of that name here: said by what it does.
+                                Text(v.label == "local.mac-dash" ? "Phone link" : v.name)
                                 Spacer()
                                 // Only a service that's down has anything to restart.
                                 if !v.running {
@@ -2471,14 +2570,15 @@ struct ControlTab: View {
                 // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
                 ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.os.isEmpty ? (p.online ? "Connected" : "Offline") : "\(p.os) · \(p.online ? "Connected" : "Offline")") }
                 if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
-            } header: { Text("Remote access") } footer: {
+            // Named by what it holds, not "Remote access" (Status has a card of that name with other rows) nor the
+            // plumbing's name (designer, 2026-11-18).
+            } header: { Text("Reaching the Mac") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
-            // Connections, fans and temperatures, updates, storage and startup items, each its own page (2026-11-13).
-            MacConsoleSections()
-            // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
-            MacPowerSections()
-                .onReceive(model.nav.$macPage.dropFirst()) { p in if p == nil { Task { await ConsoleSummary.shared.readAll(model.api) } } }
+            // Connections, fans, updates, storage, startup items and Everything were here too, as rows into the same pages
+            // the Dashboard's tiles open; they live on the Dashboard now (2026-11-18: "the app is a mess and needs to be
+            // streamlined"). What's run by hand stays here: the Mac's jobs and its restart.
+            RunOnMacSection()
         }
     }
 }
@@ -2601,7 +2701,10 @@ final class HealthSummary: ObservableObject {
     // The programs the Mac says aren't responding ("1 program stuck: Safari; a restart clears it"), by name, for the
     // restart question to offer closing them first.
     @Published private(set) var stuck: [String] = []
+    // The whole report last read, for Everything's page to open on.
+    private(set) var last: MacReport?
     func set(_ r: MacReport?) {
+        if let r { last = r }
         let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false }
         var names: [String] = []
         if let p = r?.parts.first(where: { $0.part == "stuck" && $0.bad }), let c = p.say.components(separatedBy: ";").first?.range(of: ": ") {

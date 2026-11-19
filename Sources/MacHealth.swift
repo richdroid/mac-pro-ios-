@@ -390,6 +390,12 @@ struct MacHealthView: View {
     @ObservedObject private var watch = RestartWatch.shared
     @State private var report: MacReport?
     @State private var misses = MissClock()
+    // Opens on the health the app last had (Status's chip and the Dashboard's tile already said it), not "Checking the
+    // Mac…": the chip said "1 needs a look" and the page it opened said it was checking (designer gate, 2026-11-18).
+    init(model: AppModel) {
+        self.model = model
+        _report = State(initialValue: Self.posed(model.pose)?.report ?? HealthSummary.shared.last)
+    }
     @State private var away = false
     @State private var fixing: Date?
     @State private var fixNote: String?
@@ -750,7 +756,7 @@ struct MacHealthView: View {
         case "health", "healthmemory": return (r([:]), false)
         case "healthbad": return (r(two), false)
         // One part that needs his hands, as in Richard's screenshot of 2026-11-12: named in the card, first in the list.
-        case "healthone": return (r(["stuck": "1 program stuck: Safari; a restart clears it"]), false)
+        case "healthone", "chipbad": return (r(["stuck": "1 program stuck: Safari; a restart clears it"]), false)
         case "healthfixing": return (r(two), true)
         case "healthstuck", "didntconfirm": return (r([:]), false)
         case "healthback": return (r(["sessions": "3 of 6 kept running · 2 others"], fixed: ["letterboxd": "Sign-in relay started"]), false)

@@ -374,7 +374,7 @@ struct SessionTerminal: View {
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
         .pushedTitle()
         .preferredColorScheme(.dark)
-        .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
+        .haptic(.tap, trigger: sends)
         .task {
             while !Task.isCancelled {
                 // Not under the Mac's screen, which has the link to itself while it's open.

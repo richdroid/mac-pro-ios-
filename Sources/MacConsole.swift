@@ -142,6 +142,15 @@ struct StartupItem: Decodable, Identifiable, Equatable {
     var mine: Bool { editable == true }
 }
 struct StartupFeed: Decodable, Equatable { var t: Double?; var items: [StartupItem] }
+// The TV as the bridge reads it (GET /api/tv/status), only what the Dashboard's tile says.
+struct TVGlance: Decodable, Equatable {
+    struct Session: Decodable, Equatable { var playing: Bool?; var description: [String]? }
+    struct Music: Decodable, Equatable { var title: String?; var artist: String?; var playing: Bool? }
+    var online: Bool?
+    var screen: String?
+    var session: Session?
+    var music: Music?
+}
 
 // What the Mac said an action did: done with its words, or why not.
 struct MacActionResult: Decodable, Equatable {
@@ -160,7 +169,10 @@ extension API {
         if code == 404 { return nil }
         if code == 401 || code == 403 { throw APIError.signInNeeded }
         guard code == 200 else { throw APIError.badResponse }
-        return try JSONDecoder().decode(T.self, from: d)
+        let v = try JSONDecoder().decode(T.self, from: d)
+        // Kept, so the page (and the Dashboard's tile) opens on what the Mac last said, then quietly updates.
+        if !path.contains("?") { FeedCache.save(path, d) }
+        return v
     }
     // An action. Only a request that never got an answer throws; a refusal comes back as the Mac's reason.
     func macDo(_ path: String, _ body: [String: Any], timeout: TimeInterval = 60) async throws -> MacActionResult {
@@ -181,6 +193,18 @@ extension API {
 }
 
 // One feed read every few seconds while its page is up: what it last said, when, and whether the Mac has gone quiet.
+// The last answer of each of the Mac's feeds, on disk in Caches (nothing personal beyond what Status's cache holds).
+nonisolated enum FeedCache {
+    static let dir: URL = {
+        let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("feeds", isDirectory: true)
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }()
+    static func file(_ path: String) -> URL { dir.appendingPathComponent(path.replacingOccurrences(of: "/", with: "_") + ".json") }
+    static func save(_ path: String, _ d: Data) { try? d.write(to: file(path), options: .atomic) }
+    static func load(_ path: String) -> Data? { try? Data(contentsOf: file(path)) }
+}
+
 @MainActor
 final class FeedReader<T: Decodable & Equatable>: ObservableObject {
     @Published var value: T?
@@ -191,7 +215,12 @@ final class FeedReader<T: Decodable & Equatable>: ObservableObject {
     @Published var unsupported = false
     let path: String
     private var misses = MissClock()
-    init(_ path: String) { self.path = path }
+    // What the Mac last said, at once: a page or tile drawn with a dash or "Reading…" and filled a second later read as
+    // the app loading (designer gate, 2026-11-18; the 11-11 rule: the last reading at once, refreshed quietly).
+    init(_ path: String) {
+        self.path = path
+        if MacConsole.pose.isEmpty, let d = FeedCache.load(path) { value = try? JSONDecoder().decode(T.self, from: d) }
+    }
     func set(_ v: T) { value = v; lastRead = Date(); away = false }
     func read(_ api: API, query: String = "") async {
         do {
@@ -273,98 +302,8 @@ extension MacPage {
     }
 }
 
-// MARK: - The Control tab's section
-
-// Rows into each page, each with what the Mac last said, in words that name the part. Read every 30 s while Control is
-// up; a row whose feed the bridge lacks is left out, and the section goes when none is there.
-struct MacConsoleSections: View {
-    @EnvironmentObject private var noticeState: NoticeStore
-    @EnvironmentObject var model: AppModel
-    // Read by ConsoleSummary, whose loop hangs off the Health card (always on the page): a .task here would never start
-    // while this section has nothing to show, so it never would have (CI ee040e3: no This Mac card at all).
-    @ObservedObject private var summary = ConsoleSummary.shared
-    @ObservedObject private var links = ConsoleSummary.shared.links
-    @ObservedObject private var fans = ConsoleSummary.shared.fans
-    @ObservedObject private var temps = ConsoleSummary.shared.temps
-    @ObservedObject private var updates = ConsoleSummary.shared.updates
-    @ObservedObject private var storage = ConsoleSummary.shared.storage
-    @ObservedObject private var startup = ConsoleSummary.shared.startup
-    var mp: Bool { summary.mp }
-    // Nothing is said while the Mac is away: the summaries are only ever what it said last, never passed off as now.
-    var quiet: Bool { model.problem != nil }
-    var anything: Bool { [mp, links.value != nil, fans.value != nil, updates.value != nil, storage.value != nil, startup.value != nil].contains(true) }
-
-    func row(_ title: String, _ symbol: String, _ page: MacPage, summary: String?, good: Bool? = nil, alts: [String]? = nil) -> some View {
-        Button { model.macPage = page } label: {
-            HStack(spacing: 10) {
-                // The row's name is never cut; its summary gives way first (CI 9abf65f: "Fans & tem…"). An icon column and a
-                // fixed-size name, not a Label: a fixed-size Label drew its icon and no name (CI d9c229c).
-                Image(systemName: symbol).foregroundStyle(macBlue).frame(width: 28)
-                Text(title).foregroundStyle(Color.primary).lineLimit(1).fixedSize().layoutPriority(1)
-                Spacer(minLength: 8)
-                if let summary, !quiet {
-                    HStack(spacing: 6) {
-                        if let good { Circle().fill(good ? Color.green : Color.red).frame(width: 8, height: 8) }
-                        // The longest that fits whole.
-                        ViewThatFits(in: .horizontal) {
-                            ForEach(alts ?? MacConsole.shorter(summary), id: \.self) { t in Text(t).lineLimit(1).fixedSize().monospacedDigit() }
-                        }
-                    }
-                    .font(.footnote).foregroundStyle(.secondary)
-                }
-                RowChevron()
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-    var fanLine: String? {
-        let f = fans.value?.fans.first, h = temps.value?.hottest
-        switch (f, h) {
-        case let (f?, h?): return "\(MacConsole.rpm(f.rpm)) · \(h.name) \(MacConsole.degrees(h.c))"
-        case let (f?, nil): return MacConsole.rpm(f.rpm)
-        case let (nil, h?): return "\(h.name) \(MacConsole.degrees(h.c))"
-        default: return nil
-        }
-    }
-    var updateLine: (String, Bool?)? {
-        guard let u = updates.value else { return nil }
-        let waiting = (u.macos.pending ?? []).count + ((u.brew?.outdated ?? []).count)
-        if u.macos.pending == nil { return (u.macos.checking == true ? "Checking…" : "macOS \(u.macos.current.split(separator: " ").first ?? "")", nil) }
-        if waiting == 0 { return ("Up to date", true) }
-        let first = u.macos.pending?.first?.label ?? u.brew?.outdated?.first?.name ?? ""
-        // Never a string ending in an ellipsis: the row drops the name when the room is short (MacConsole.shorter).
-        return (waiting == 1 ? "\(first) waiting" : "\(waiting) waiting: \(first)", nil)
-    }
-    var storageLine: String? {
-        guard let v = storage.value?.volumes.first(where: { $0.isInternal == true }) ?? storage.value?.volumes.first else { return nil }
-        return "\(Format.bytes(v.free)) free of \(Format.bytes(v.total))"
-    }
-    // Kept-running agents that aren't, by name; timed ones idle between runs by design and aren't counted.
-    var startupLine: (String, Bool)? {
-        guard let items = startup.value?.items else { return nil }
-        let mine = items.filter(\.mine)
-        let stopped = StartupView.stopped(mine).map(StartupRow.name)
-        return stopped.isEmpty ? ("None stopped", true) : (MacConsole.named(stopped, "stopped"), false)
-    }
-
-    var body: some View {
-        Group {
-            if anything {
-                Section {
-                    if let l = links.value { let s = MacConsole.linkSummary(l); row("Connections", "point.3.connected.trianglepath.dotted", .links, summary: s.text, good: s.good).id("macctl") }
-                    if fans.value != nil || temps.value != nil { row("Fans & heat", "fan", .fans, summary: fanLine).id(links.value == nil ? "macctl" : "macfansrow") }
-                    if updates.value != nil { row("Updates", "arrow.down.circle", .updates, summary: updateLine?.0, good: updateLine?.1) }
-                    if storage.value != nil { row("Storage", "internaldrive", .storage, summary: storageLine) }
-                    if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine?.0, good: startupLine?.1) }
-                    if mp { row("Actions", "bolt", .actions, summary: "Clean, ship, tests") }
-                } header: { Text("This Mac") }
-            }
-        }
-    }
-}
-
-// The This Mac card's readings, every 30 s while Control is up, and at once on coming back from one of its pages.
+// The Dashboard tiles' readings from the Mac's own pages, every 30 s while the Dashboard is up, and at once on coming
+// back from one of its pages.
 @MainActor
 final class ConsoleSummary: ObservableObject {
     static let shared = ConsoleSummary()
@@ -374,6 +313,8 @@ final class ConsoleSummary: ObservableObject {
     let updates = FeedReader<UpdatesFeed>("/api/mac/updates")
     let storage = FeedReader<StorageFeed>("/api/mac/storage")
     let startup = FeedReader<StartupFeed>("/api/mac/startup")
+    // The TV, for the Dashboard's tile (Richard, 2026-11-13: "integrate all work into it including chumby and google tv status").
+    let tv = FeedReader<TVGlance>("/api/tv/status")
     @Published var mp = false
     func readAll(_ api: API) async {
         // Asked again until it answers: a Mac away at the first look mustn't hide Actions for good.
@@ -381,6 +322,7 @@ final class ConsoleSummary: ObservableObject {
         await withTaskGroup(of: Void.self) { g in
             g.addTask { await self.links.read(api) }; g.addTask { await self.fans.read(api) }; g.addTask { await self.temps.read(api) }
             g.addTask { await self.updates.read(api) }; g.addTask { await self.storage.read(api) }; g.addTask { await self.startup.read(api) }
+            g.addTask { await self.tv.read(api) }
         }
     }
     func loop(_ model: AppModel) async {
