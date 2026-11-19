@@ -76,7 +76,7 @@ struct PhoneShelfView: View {
                     // One film: its poster at a poster's shape on the left, its name and time beside it, not two empty places.
                     Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) {
                         HStack(alignment: .top, spacing: 12) {
-                            poster(i).aspectRatio(2 / 3, contentMode: .fit)
+                            poster(i).aspectRatio(Self.shape(i), contentMode: .fit)
                             VStack(alignment: .leading, spacing: 4) {
                                 WholeWords(text: i.name, axis: .vertical).font(.headline)
                                 WholeWords(text: Self.status(i), axis: .horizontal).font(.subheadline).foregroundStyle(.secondary)
@@ -96,11 +96,18 @@ struct PhoneShelfView: View {
         }
         .foregroundStyle(.white)
     }
+    // A poster's shape, or a still's when the picture is wider than tall.
+    static func shape(_ i: PhoneShelfEntry.Item) -> CGFloat {
+        guard let s = i.poster?.size, s.height > 0, s.width > s.height else { return 2 / 3 }
+        return 16 / 9
+    }
     static func status(_ i: PhoneShelfEntry.Item) -> String { i.left > 60 ? left(i.left) : (i.line.isEmpty ? "Play on iPhone" : i.line) }
     func tile(_ i: PhoneShelfEntry.Item, big: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             poster(i)
-            WholeWords(text: i.name, axis: .horizontal).font(.caption.weight(.semibold))
+            // Two lines' room in every tile, top-aligned, so the posters stay level whatever each name takes.
+            Text("X\nX").font(.caption.weight(.semibold)).hidden().frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .topLeading) { WholeWords(text: i.name, axis: .vertical).font(.caption.weight(.semibold)) }
             WholeWords(text: Self.status(i), axis: .horizontal).font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -123,14 +130,25 @@ struct PhoneShelfView: View {
 }
 
 // Words never cut and no ellipsis in a widget (the 11-12 ruling): the longest run of whole words, from the start, that fits.
-// Horizontal: one line. Vertical: wrapped onto as many lines as the height allows. The first word alone, if even that is
-// too long, shrinks rather than being cut.
+// Horizontal: one line. Vertical: wrapped onto as many lines as the height allows. A run never ends on "of", "the",
+// "by", "a" or "and", so no lone article; the first content word, if even that is too long, shrinks rather than being cut.
 struct WholeWords: View {
     let text: String
     let axis: Axis.Set
-    var body: some View {
+    static let joiners: Set<String> = ["of", "the", "by", "a", "and"]
+    static func runs(_ text: String) -> [String] {
         let words = text.split(separator: " ").map(String.init)
-        let runs = words.isEmpty ? [text] : (1...words.count).reversed().map { words.prefix($0).joined(separator: " ") }
+        var runs: [String] = []
+        for n in (1...max(words.count, 1)).reversed() where !words.isEmpty {
+            var w = Array(words.prefix(n))
+            if n < words.count { while let l = w.last, joiners.contains(l.lowercased()) { w.removeLast() } }
+            let r = w.joined(separator: " ")
+            if !r.isEmpty, runs.last != r { runs.append(r) }
+        }
+        return runs.isEmpty ? [text] : runs
+    }
+    var body: some View {
+        let runs = Self.runs(text)
         ViewThatFits(in: axis) {
             ForEach(Array(runs.dropLast().enumerated()), id: \.offset) { _, r in
                 if axis == .horizontal { Text(r).lineLimit(1).fixedSize() } else { Text(r).fixedSize(horizontal: false, vertical: true) }
