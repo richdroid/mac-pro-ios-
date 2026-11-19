@@ -250,9 +250,14 @@ struct SessionTerminal: View {
         // How many across is chosen from the column's measured width, not by ViewThatFits: the bordered keys' smallest
         // width (about 54 pt for "esc") let a twelve-across grid overhang the column by 8 pt, and the whole controls stack
         // shifted right off the terminal's edges (designer gates 4 and 5, 2026-11-19). 56 pt a key leaves no overhang.
-        keyGrid(width >= 12 * 56 + 66 ? 12 : width >= 6 * 56 + 30 ? 6 : 4)
-            .frame(maxWidth: .infinity)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        // The column is measured by an empty full-width line above the keys, never by the grid itself: a grid that
+        // overhung read its own overhang as room and kept six across folded on first open (designer gate 6).
+        VStack(spacing: 0) {
+            Color.clear.frame(height: 0).frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            keyGrid(width >= 12 * 56 + 66 ? 12 : width >= 6 * 56 + 30 ? 6 : 4)
+                .frame(maxWidth: .infinity)
+        }
     }
     func keyGrid(_ across: Int) -> some View {
         let rows = stride(from: 0, to: Self.keys.count, by: across).map { Array(Self.keys[$0..<min($0 + across, Self.keys.count)]) }
