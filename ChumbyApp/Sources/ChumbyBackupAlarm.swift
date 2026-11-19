@@ -2,7 +2,7 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(AlarmKit)
+#if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
 import AlarmKit
 #endif
 
@@ -10,14 +10,14 @@ import AlarmKit
 // make, this iPhone keeps an alarm of its own a few minutes later, which sounds through Silent and Focus. Stopping or
 // snoozing the ring (here, on the Chumby, or as the Mac reports it) takes it away or moves it; a ring that ends with
 // nothing reaching the phone is exactly the one it is for. The rules are in ChumbyBackupPlan; this is the AlarmKit end.
-#if canImport(AlarmKit)
+#if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
 struct ChumbyBackupMeta: AlarmMetadata {}
 #endif
 
 // The only place AlarmKit is touched. (The Mac-side typecheck has no AlarmKit, so there it is empty and does nothing.)
 private enum Kit {
     enum Auth { case notDetermined, denied, authorized }
-    #if canImport(AlarmKit)
+    #if canImport(AlarmKit) && !targetEnvironment(macCatalyst)
     private static func auth(_ s: AlarmManager.AuthorizationState) -> Auth {
         switch s { case .authorized: return .authorized; case .denied: return .denied; default: return .notDetermined }
     }
