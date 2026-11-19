@@ -161,7 +161,7 @@ final class ChumbyModel: ObservableObject {
     // Polled readings that came in while a page was moving under his finger, put on screen the moment it settles: a
     // row changing height under a page pulled past its end snaps it back instead of letting it spring (2026-11-08).
     // Only what's polled waits: his own saves, skips and channel choices go straight through, and so does a ring.
-    private var heldSys: (data: Data, fresh: Bool)?
+    private var heldSys: (data: Data, fresh: Bool, at: Date)?
     private var heldState: (data: Data, state: ChumbyState, recent: Bool)?
     private var heldChannels: (data: Data, list: ChannelList)?
     private var heldSongs: History?
@@ -173,7 +173,7 @@ final class ChumbyModel: ObservableObject {
     private var parks: Bool { ScrollHold.holding && stateConfirmed && !alarmsPage && !editingAlarm }
     private func releaseHeld() {
         if heldSys != nil || heldState != nil { SwipeLog.note("held readings landed") }
-        if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh) } }
+        if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh, takenAt: h.at) } }
         if let h = heldState { heldState = nil; if Date() >= stateHold { applyState(h.state, data: h.data, recent: h.recent) } }
         if let h = heldChannels { heldChannels = nil; applyChannels(h.list, data: h.data) }
         if let h = heldSongs { heldSongs = nil; applySongs(h) }
@@ -270,20 +270,12 @@ final class ChumbyModel: ObservableObject {
             // A copy taken before a Stop the Chumby has since taken still says "ringing": it isn't believed (the Mac's
             // copy can be ten seconds old, twice the hold a Stop puts on readings).
             if s.ringing != nil, let stopped = ringStoppedAt, Date().addingTimeInterval(-r.age) < stopped.addingTimeInterval(2) { s.ring = "" }
-            // A level he just set holds until a reading taken after it says so (Richard, 11-18: "system volume control
-            // doesnt work"): the Mac's copy, read again 0.3 s after the press and kept 10 s, still had the old level, and
-            // the slider sprang back to it once the press's 5 s hold ran out.
-            if let p = volumeSent {
-                if s.vol == p.level { volumeSent = nil }
-                else if Date().timeIntervalSince(p.at) < 15 { s.vol = p.level }
-                else { volumeSent = nil }
-            }
             readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
-            if parks, s.ringing == sys.ringing { SwipeLog.note("sys held"); heldSys = (r.data, fresh); return }
+            if parks, s.ringing == sys.ringing { SwipeLog.note("sys held"); heldSys = (r.data, fresh, readingAt); return }
             SwipeLog.note("sys landed")
-            applySys(s, data: r.data, fresh: fresh)
+            applySys(s, data: r.data, fresh: fresh, takenAt: readingAt)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
             // The Mac answered and says the Chumby doesn't. Said only once that has lasted too: the Mac's own try can
@@ -304,8 +296,16 @@ final class ChumbyModel: ObservableObject {
             if now.timeIntervalSince(troubleSince ?? now) >= Self.patience, fallback.isEmpty || triedRoutes.count == 2 { set(\.offline, true) }
         }
     }
-    private func applySys(_ s: Sys, data: Data, fresh: Bool) {
+    private func applySys(_ s: Sys, data: Data, fresh: Bool, takenAt: Date) {
         sysBytes = fresh ? data : Data()
+        // A level he just set shows until a reading taken after it could have landed says otherwise (VolumeHold), the
+        // same rule for every reading, parked or not. While it shows over the reading, the same bytes are read again
+        // rather than skipped, so the Chumby's own level comes back if the hold lets go.
+        var s = s
+        if s.vol >= 0 { reportedVol = s.vol }
+        let v = VolumeHold.shown(reported: s.vol, takenAt: takenAt, hold: volumeHold, now: Date())
+        volumeHold = v.hold
+        if v.vol != s.vol { s.vol = v.vol; sysBytes = Data() }
         do {
             if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
             if s.ringing == nil, snoozedAt != nil { snoozedAt = nil }
@@ -546,14 +546,29 @@ final class ChumbyModel: ObservableObject {
     }
     // The Chumby's volume, set from the phone (Sounds and Home's Playing card, the mute key): shown at once, held until the
     // Chumby reports it, never sent under an alarm (the ring sets its own volume and puts his back after).
-    private var volumeSent: (level: Int, at: Date)?
+    // Every place that shows or sets it (Home's Playing card, Sounds' Now, the mute key) goes through here and reads
+    // sys.vol, so they can't disagree. Shortcuts and Control Center use the same ChumbyAPI.setVolume.
+    private var volumeHold: VolumeHold?
+    // The level the Chumby itself last reported, for a send that didn't get through.
+    private var reportedVol = -1
     // False when it wasn't sent (an alarm is ringing): the caller's slider goes back to the Chumby's level.
     @discardableResult func setVolume(_ v: Int, id: String) -> Bool {
         let level = min(max(v, 0), 100)
         if let why = alarmBusy, sys.ringing != nil { fail(id, "Not while \(why)."); return false }
-        volumeSent = (level, Date())
+        if reportedVol < 0 { reportedVol = sys.vol }
+        let sent = VolumeHold(level: level, sentAt: Date())
+        volumeHold = sent
         if sys.vol != level { sys.vol = level }
-        cmd("volume", String(level), id: id, holdFor: 2)
+        tick()
+        hold(2)
+        Task { [weak self] in
+            do { try await self?.api?.setVolume(level, checkRing: false) } catch {
+                guard let self else { return }
+                self.fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))")
+                // Not sent: back to what the Chumby has, unless a newer level went out meanwhile.
+                if self.volumeHold?.sentAt == sent.sentAt { self.volumeHold = nil; if self.reportedVol >= 0 { self.sys.vol = self.reportedVol } }
+            }
+        }
         return true
     }
     // True once the Chumby took it, for a caller that says so.
