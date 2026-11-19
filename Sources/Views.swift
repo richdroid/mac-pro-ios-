@@ -1591,8 +1591,8 @@ struct AppsTab: View {
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
                     .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
                 }
-            }
-            Section {
+                // The last row of the open apps' own card, as Add an app is the last row of the iPhone's apps above: a
+                // card of one row of its own was drawn as a lone capsule under the list (2026-11-18, streamlining).
                 Menu {
                     // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
                     ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } }
@@ -2458,6 +2458,13 @@ struct ControlTab: View {
         if model.pose == "controlbusy" { drafts.typed = "correct horse"; busy = ["type"]; fails["forget"] = Self.undone("forget") + Phrase.macAway }
     }
     var locked: Bool { s.screen == "locked" }
+    // The Screen from Control too, as in build 276 (Richard, 2026-11-12), now a row of the login card: its own card of one
+    // row, with a line of gestures the Screen's own guide teaches, was a lone capsule between two cards (2026-11-18,
+    // "the app is a mess and needs to be streamlined"). The login and the Mac's screen are one job: seeing the Mac.
+    var openScreen: some View {
+        Button("Open Screen") { model.openScreen() }
+            .disabled(model.problem != nil || model.needsSignIn)
+    }
     var displayOn: Bool { s.displayOn ?? (s.screen != "display off") }
     var typingReady: Bool { s.macLogin || s.typing == "trusted" }
 
@@ -2473,6 +2480,7 @@ struct ControlTab: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                    openScreen
                     if locked {
                         actButton("Unlock", "unlock") { act("unlock") { await model.run("mac-unlock") } }
                         failLine("unlock")
@@ -2490,15 +2498,12 @@ struct ControlTab: View {
                         act("login") { await model.runSealed("mac-login", secret: p) }
                     }.disabled(drafts.macPassword.isEmpty && !busy.contains("login"))
                     failLine("login")
+                    openScreen
                 }
-            } header: { Text(s.macLogin ? "Mac login" : "Log in to this Mac") } footer: {
+            } header: { Text(s.macLogin ? "Login and screen" : "Log in to this Mac") } footer: {
                 // As in build 276 (Richard, 2026-11-12: "there should be plenty of info and such everywhere and functions").
                 Text(s.macLogin ? "It stays logged in after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
             }
-            // The Screen from Control too, with how it's worked, as in build 276 (Richard, 2026-11-12).
-            Section {
-                Button("Open Screen") { model.openScreen() }
-            } header: { Text("Screen") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
             SendSection(route: model.route)
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
