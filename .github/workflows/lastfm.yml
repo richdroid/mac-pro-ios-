@@ -14,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 240
+    timeout-minutes: 255
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,8 +42,8 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        # Run 32 reached 105 minutes in the flat films and lost the rest of them.
-        timeout-minutes: 140
+        # Run 32 reached 105 minutes in the flat films and lost the rest of them; run 34 reached 140 there.
+        timeout-minutes: 160
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -136,7 +136,8 @@ jobs:
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" $APP || true
             if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; return; fi
-            [ -x /tmp/lfm-shrink ] && { /tmp/lfm-shrink dist/lfm-$name.mp4 small/lfm-$name.mp4 || echo "shrink failed: $name"; } &
+            # One shrink at a time (lockf): run 34 had several at once beside the simulator, ten failed, and the shots ran slow.
+            [ -x /tmp/lfm-shrink ] && { lockf /tmp/lfm-shrink.lock /tmp/lfm-shrink dist/lfm-$name.mp4 small/lfm-$name.mp4 || echo "shrink failed: $name"; } &
             SHRINKS="$SHRINKS $!"
           }
           # The shots so far, published while the rest is still being taken, so a pass can be looked at before the run ends.
@@ -152,7 +153,7 @@ jobs:
           everything() {
             local x=$1 d=$2
             shot start$x $d 9 -tab 0
-            shot now$x $d 8 -tab 0 -panel 1
+            shot now$x $d 12 -tab 0 -panel 1
             shot now-idle$x $d 8 -tab 0 -panel 1 -playing NO
             shot lately$x $d 9 -tab 0 -panel 2
             shot story$x $d 9 -tab 0 -panel 3
@@ -174,6 +175,10 @@ jobs:
             shot name-story$x $d 9 -tab 0 -panel 3 -mockName midnightsignal
           }
           date
+          # Before anything else, since -fresh empties his history (the sync film after it starts from nothing anyway): a
+          # stretch not yet read from his own history, asked of Last.fm while it's gone, shows its note. Run 34 had it last
+          # and the step's time limit came first.
+          shot charts-down 1 25 -tab 1 -period 2 -fresh YES -mockDown YES
           # Folded, upright. The first launch: the whole history read in, filmed on You, slowed so it can be seen.
           STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 0 -fresh YES -mockSyncSlow YES -pose sync
           # Read in full at normal speed for everything after (the slowed read above may not have finished), then the
@@ -263,9 +268,6 @@ jobs:
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
           X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
           film tour-open 3 22 -tab 0 -pose tour
-          # Last, since -fresh empties his history for anything after it: a stretch not yet read from his own history,
-          # asked of Last.fm while it's gone, shows its note.
-          shot charts-down-open 3 25 -tab 1 -period 2 -fresh YES -mockDown YES
           date
           # How long each launch took to its first frame, step by step (-launchLog).
           C=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) && cp "$C/Library/Caches/launch-log.txt" dist/launch.log 2>/dev/null
