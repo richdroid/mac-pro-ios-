@@ -85,8 +85,10 @@ final class ConsoleRemote: ObservableObject {
     static let shared = ConsoleRemote()
     // The Console as it last said, at once on opening, so the card doesn't sit on "Looking at the Mac…" (designer gate,
     // 2026-11-18); the first reading replaces it a moment later.
-    @Published var state: ConsoleState? = UserDefaults.standard.data(forKey: "consoleState").flatMap { try? JSONDecoder().decode(ConsoleState.self, from: $0) }
-    @Published var read = UserDefaults.standard.data(forKey: "consoleState") != nil
+    // Not for the build's posed Consoles, which are set once as they're first read.
+    private static let kept: ConsoleState? = MacConsole.pose.isEmpty ? UserDefaults.standard.data(forKey: "consoleState").flatMap { try? JSONDecoder().decode(ConsoleState.self, from: $0) } : nil
+    @Published var state: ConsoleState? = ConsoleRemote.kept
+    @Published var read = ConsoleRemote.kept != nil
     @Published var unsupported = false
     // The button waiting for the Console's answer, and what it said when it said no.
     @Published var busy: String?
