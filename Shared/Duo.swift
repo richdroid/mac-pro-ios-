@@ -554,6 +554,8 @@ struct SideRailTabs<Content: View>: View {
     static var cell: CGFloat { 44 }
     static var inset: CGFloat { 5 }
     static var margin: CGFloat { 10 }
+    static var width: CGFloat { cell + inset * 2 }
+    private var column: CGFloat { max(edge, Self.margin * 2 + Self.width) }
     var body: some View {
         ZStack {
             ForEach(items) { it in
@@ -567,10 +569,17 @@ struct SideRailTabs<Content: View>: View {
                 }
             }
         }
-        .environment(\.sideRail, edge + Self.margin * 2 + Self.cell + Self.inset * 2)
+        // The rail stands in the system's own side strip, under its gear or Back, so the page keeps clear of that strip
+        // only (or of the rail, were it the wider): one column of chrome, not two (gate on e6af881).
+        .environment(\.sideRail, column)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
-        .overlay(alignment: .bottomTrailing) { rail.padding(.trailing, Self.margin).padding(.bottom, Self.margin + 2) }
+        .overlay(alignment: .bottomTrailing) {
+            // Centred in the strip, measured from the display's edge.
+            rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.margin + 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .ignoresSafeArea(.container, edges: .trailing)
+        }
     }
     private var rail: some View {
         VStack(spacing: 2) {
