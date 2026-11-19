@@ -19,10 +19,31 @@ enum PhoneSheets {
         return r.nsImage
         #endif
     }
+    // A poster as a real one is laid out: the title in a band across the top, a face-height bright shape under it, the
+    // credits block at the foot. Tiles crop from the top down, so the band must survive in every one.
+    @MainActor static func poster(_ title: String) -> TVImage? {
+        let r = ImageRenderer(content: ZStack(alignment: .top) {
+            LinearGradient(colors: [Color(red: 0.12, green: 0.18, blue: 0.3), Color(red: 0.7, green: 0.35, blue: 0.15), Color(red: 0.08, green: 0.05, blue: 0.05)], startPoint: .top, endPoint: .bottom)
+            VStack(spacing: 0) {
+                Text(title.uppercased()).font(.system(size: 34, weight: .black)).tracking(4).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(.vertical, 14).background(Color.black.opacity(0.55))
+                Ellipse().fill(Color(red: 0.95, green: 0.8, blue: 0.65)).frame(width: 90, height: 115).padding(.top, 30)
+                Spacer()
+                Text("AL PACINO  ROBERT DE NIRO\nA MICHAEL MANN FILM").font(.system(size: 11, weight: .semibold)).multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.7)).padding(.bottom, 14)
+            }
+        }.frame(width: 240, height: 360))
+        r.scale = 1
+        #if canImport(UIKit)
+        return r.uiImage
+        #else
+        return r.nsImage
+        #endif
+    }
     typealias Item = PhoneShelfEntry.Item
     @MainActor static func items() -> (tall: Item, wide: Item, long: Item, bare: Item, episode: Item) {
         let tall = Item(type: "movie", imdb: "tt0000001", video: "tt0000001", name: "Heat", line: "", progress: 0.42, left: 5880,
-                        poster: art(240, 360, Color(red: 0.75, green: 0.3, blue: 0.2), Color(red: 0.15, green: 0.1, blue: 0.2), "2:3"))
+                        poster: poster("Heat"))
         let wide = Item(type: "series", imdb: "tt0000002", video: "tt0000002:1:3", name: "Twin Peaks", line: "S1 E3", progress: 0.7, left: 840,
                         poster: art(400, 225, Color(red: 0.2, green: 0.5, blue: 0.4), Color(red: 0.05, green: 0.15, blue: 0.2), "16:9"))
         let long = Item(type: "movie", imdb: "tt0000003", video: "tt0000003", name: "The Assassination of Jesse James by the Coward Robert Ford",

@@ -65,43 +65,77 @@ struct PhoneShelfView: View {
             if entry.items.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Image(systemName: "play.rectangle").font(.title2).foregroundStyle(TVLook.accent)
-                    Text("Nothing played on this iPhone yet").font(.subheadline.weight(.semibold)).lineLimit(3).minimumScaleFactor(0.85)
+                    Text(family == .systemSmall ? "Nothing played yet" : "Nothing played on this iPhone yet").font(.subheadline.weight(.semibold)).lineLimit(3).minimumScaleFactor(0.85)
                     Text("Play on iPhone from any film or show.").font(.caption).foregroundStyle(.secondary).lineLimit(2).minimumScaleFactor(0.85)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else if family == .systemSmall, let i = entry.items.first {
                 tile(i, big: true).widgetURL(Self.link(i))
             } else {
-                // Always three places: one or two played so far keep a poster's width, not the whole widget's.
-                HStack(spacing: 10) {
-                    ForEach(0..<3, id: \.self) { n in
-                        if entry.items.indices.contains(n) {
-                            let i = entry.items[n]
+                if entry.items.count == 1, let i = entry.items.first {
+                    // One film: its poster at a poster's shape on the left, its name and time beside it, not two empty places.
+                    Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) {
+                        HStack(alignment: .top, spacing: 12) {
+                            poster(i).aspectRatio(2 / 3, contentMode: .fit)
+                            VStack(alignment: .leading, spacing: 4) {
+                                WholeWords(text: i.name, axis: .vertical).font(.headline)
+                                WholeWords(text: Self.status(i), axis: .horizontal).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                } else {
+                    // Two share the width in halves; three in thirds.
+                    HStack(spacing: 10) {
+                        ForEach(Array(entry.items.prefix(3).enumerated()), id: \.offset) { _, i in
                             Link(destination: Self.link(i) ?? URL(string: "tvremoteapp://")!) { tile(i, big: false) }
-                        } else { Color.clear }
+                        }
                     }
                 }
             }
         }
         .foregroundStyle(.white)
     }
+    static func status(_ i: PhoneShelfEntry.Item) -> String { i.left > 60 ? left(i.left) : (i.line.isEmpty ? "Play on iPhone" : i.line) }
     func tile(_ i: PhoneShelfEntry.Item, big: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            // The poster fills the room the tile is given, never more: loose in the ZStack, a poster filled to the tile's
-            // width came out taller than the tile and pushed its name and time off the bottom (a still, wider, ran into
-            // the tile beside it).
-            ZStack(alignment: .bottom) {
-                Color.white.opacity(0.1)
-                    .overlay { if let p = i.poster { Image(tv: p).resizable().widgetAccentedRenderingMode(.fullColor).scaledToFill() } else { Image(systemName: "film").foregroundStyle(.white.opacity(0.5)) } }
-                    .clipped()
-                GeometryReader { g in
-                    ZStack(alignment: .leading) { Color.white.opacity(0.3); TVLook.accent.frame(width: g.size.width * min(max(i.progress, 0), 1)) }
-                }
-                .frame(height: 3)
+            poster(i)
+            WholeWords(text: i.name, axis: .horizontal).font(.caption.weight(.semibold))
+            WholeWords(text: Self.status(i), axis: .horizontal).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+    func poster(_ i: PhoneShelfEntry.Item) -> some View {
+        // The poster fills the room the tile is given, never more: loose in the ZStack, a poster filled to the tile's
+        // width came out taller than the tile and pushed its name and time off the bottom (a still, wider, ran into
+        // the tile beside it). Cropped from the top down, so a poster's title and faces stay in.
+        ZStack(alignment: .bottom) {
+            Color.white.opacity(0.1)
+                .overlay(alignment: .top) { if let p = i.poster { Image(tv: p).resizable().widgetAccentedRenderingMode(.fullColor).scaledToFill() } }
+                .overlay { if i.poster == nil { Image(systemName: "film").foregroundStyle(.white.opacity(0.5)) } }
+                .clipped()
+            GeometryReader { g in
+                ZStack(alignment: .leading) { Color.white.opacity(0.3); TVLook.accent.frame(width: g.size.width * min(max(i.progress, 0), 1)) }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            Text(i.name).font(.caption.weight(.semibold)).lineLimit(1)
-            Text(i.left > 60 ? Self.left(i.left) : (i.line.isEmpty ? "Play on iPhone" : i.line)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            .frame(height: 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+// Words never cut and no ellipsis in a widget (the 11-12 ruling): the longest run of whole words, from the start, that fits.
+// Horizontal: one line. Vertical: wrapped onto as many lines as the height allows. The first word alone, if even that is
+// too long, shrinks rather than being cut.
+struct WholeWords: View {
+    let text: String
+    let axis: Axis.Set
+    var body: some View {
+        let words = text.split(separator: " ").map(String.init)
+        let runs = words.isEmpty ? [text] : (1...words.count).reversed().map { words.prefix($0).joined(separator: " ") }
+        ViewThatFits(in: axis) {
+            ForEach(Array(runs.dropLast().enumerated()), id: \.offset) { _, r in
+                if axis == .horizontal { Text(r).lineLimit(1).fixedSize() } else { Text(r).fixedSize(horizontal: false, vertical: true) }
+            }
+            Text(runs.last ?? text).lineLimit(1).minimumScaleFactor(0.5)
         }
     }
 }
