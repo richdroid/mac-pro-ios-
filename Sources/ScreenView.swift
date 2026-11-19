@@ -938,7 +938,7 @@ struct RemoteScreenView: View {
         let rtt = observed.pingRTT.map { " · \(Int($0.rounded())) ms" } ?? ""
         let t = screen.timings
         let f = { (v: Double?) in v.map { String(format: "%.1f s", $0) } ?? "–" }
-        let first = t.map { " · \($0.deep ? 32 : 16)-bit, in \(f($0.signedIn)), first \(f($0.firstPixels)), whole \(f($0.firstPicture)), \($0.firstBytes / 1024) KB" } ?? ""
+        let first = t.map { " · \($0.video ? "video" : "\($0.deep ? 32 : 16)-bit"), in \(f($0.signedIn)), first \(f($0.firstPixels)), whole \(f($0.firstPicture)), \($0.firstBytes / 1024) KB" } ?? ""
         return Text("\(rate.frames) fps shown · \(rate.updates) sent by the Mac · \(RemoteScreen.pipeline) in flight\(rtt) · \(observed.movesPerSecond) moves/s\(first)")
             .font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.white)
             .padding(.horizontal, 8).padding(.vertical, 4)
