@@ -29,8 +29,10 @@ struct DashboardTab: View {
         Group {
             switch side {
             case .all: screenCard; tiles; showOnMac
-            case .left: screenCard; tiles
-            case .right: showOnMac
+            // Open flat, the Console and what's on its screen on the left, the Mac's tiles filling the right: the screen's
+            // two settings alone left the right pane half empty (CI 5ee8ad1).
+            case .left: screenCard; showOnMac
+            case .right: tiles
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
