@@ -270,6 +270,14 @@ final class ChumbyModel: ObservableObject {
             // A copy taken before a Stop the Chumby has since taken still says "ringing": it isn't believed (the Mac's
             // copy can be ten seconds old, twice the hold a Stop puts on readings).
             if s.ringing != nil, let stopped = ringStoppedAt, Date().addingTimeInterval(-r.age) < stopped.addingTimeInterval(2) { s.ring = "" }
+            // A level he just set holds until a reading taken after it says so (Richard, 11-18: "system volume control
+            // doesnt work"): the Mac's copy, read again 0.3 s after the press and kept 10 s, still had the old level, and
+            // the slider sprang back to it once the press's 5 s hold ran out.
+            if let p = volumeSent {
+                if s.vol == p.level { volumeSent = nil }
+                else if Date().timeIntervalSince(p.at) < 15 { s.vol = p.level }
+                else { volumeSent = nil }
+            }
             readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
@@ -524,6 +532,16 @@ final class ChumbyModel: ObservableObject {
                 sys.night = v == "off" ? 1 : 0
             }
         }
+    }
+    // The Chumby's volume, set from the phone (Sounds and Home's Playing card, the mute key): shown at once, held until the
+    // Chumby reports it, never sent under an alarm (the ring sets its own volume and puts his back after).
+    private var volumeSent: (level: Int, at: Date)?
+    func setVolume(_ v: Int, id: String) {
+        let level = min(max(v, 0), 100)
+        if let why = alarmBusy, sys.ringing != nil { fail(id, "Not while \(why)."); return }
+        volumeSent = (level, Date())
+        if sys.vol != level { sys.vol = level }
+        cmd("volume", String(level), id: id, holdFor: 2)
     }
     // True once the Chumby took it, for a caller that says so.
     @discardableResult func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) -> Task<Bool, Never> {

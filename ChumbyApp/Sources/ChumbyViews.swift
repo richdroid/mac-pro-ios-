@@ -1768,6 +1768,8 @@ struct ChannelsTab: View {
                 let j = try await model.api?.post("chedit", extra: "&p=" + ChumbyAPI.enc(u.id), body: ChumbyAPI.form(o))
                 // The Chumby always says how many it couldn't fetch, so only a real one is worth a word. A plain save says
                 // nothing: the switch or picker already shows the change.
+                // Saved on the Chumby but not played yet: an alarm rang as it arrived, and it doesn't reload the channel then.
+                if j?["held"] as? Bool == true { heldForAlarm = true; model.note("chedit", "Saved. The channel picks it up once the alarm is over.") }
                 if let n = j?["missing"] as? Int, n > 0 { model.fail("chedit", n == 1 ? "One widget couldn’t be downloaded to the Chumby." : "\(n) widgets couldn’t be downloaded to the Chumby.") }
                 // The Chumby's own list now holds this; what was kept here goes once it's read back, and the rows on screen
                 // are left as they are (they already show it), so nothing redraws.
@@ -2159,7 +2161,7 @@ struct NowPlaying: View {
     @State private var dragging = false
     let tab: Int
     let failID: String
-    func set(_ v: Int) { volume = Double(v); model.cmd("volume", String(v), id: failID) }
+    func set(_ v: Int) { volume = Double(v); model.setVolume(v, id: failID) }
     // The song playing, when the Chumby says its player is going and Pandora's history has a song from the last few
     // minutes; otherwise nothing is named rather than an old song.
     var nowSong: Song? {
@@ -2229,7 +2231,7 @@ struct NowPlaying: View {
                 .buttonStyle(.borderless).accessibilityLabel(volume > 0 ? "Mute" : "Unmute")
                 Slider(value: $volume, in: 0...100, step: 1) { e in
                     dragging = e
-                    if !e { if volume > 0 { lastVolume = Int(volume) }; model.cmd("volume", String(Int(volume)), id: failID) }
+                    if !e { if volume > 0 { lastVolume = Int(volume) }; model.setVolume(Int(volume), id: failID) }
                 }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
                 Text("\(Int(volume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
             }
