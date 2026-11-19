@@ -286,9 +286,7 @@ struct HistoryView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5).place("title"); staleLine; readout.place("readout"); range.place("range"); chart.frame(height: 260).opacity(stale ? staleDim : 1).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
-                        // 20 pt from the display's edge, where every list's cards and every tab's title are (PageLead), as
-                        // in two panes here: at 16 the title and cards sat 4 pt left of the page Back came from.
-                        .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
+                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
                 }
                 .scrollsUnder()
                 .keepsPlace("history-\(metric.key)", proxy)
