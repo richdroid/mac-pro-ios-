@@ -101,7 +101,7 @@ struct EntryRow: View {
                 VStack(alignment: .leading, spacing: S.pair / 2) {
                     // Two lines before a name is ever cut short (review 2026-11-14, item 6).
                     Text(e.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2).multilineTextAlignment(.leading)
-                    if e.kind != .artists { Text(e.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1) }
+                    if e.kind != .artists { Text(e.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2) }
                     else if let s = e.secs { Text(duration(s)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
                     if let peak, peak > 0, e.plays > 0 {
                         // His plays as a bar in the cover's colour against the list's most played: the row's width shows
@@ -173,7 +173,7 @@ struct Panorama: View {
                     }
                 }
                 .padding(.bottom, ranks ? S.gap : S.pair)
-                Text(e.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                Text(e.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
                 Text(caption(e)).font(.footnote).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
             }
             .frame(width: S.tile, alignment: .leading)

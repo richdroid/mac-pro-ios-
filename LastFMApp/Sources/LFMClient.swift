@@ -111,8 +111,11 @@ actor LastFM {
 
     private func fetch(_ method: String, _ params: [String: String], _ ck: String?, retry: Bool = true) async throws -> J {
         if mock {
-            // About a real reply's wait, or a slow one (-mockSyncSlow YES) so the build can film the history arriving.
-            try? await Task.sleep(nanoseconds: UserDefaults.standard.bool(forKey: "mockSyncSlow") ? 90_000_000 : 12_000_000)
+            // About a real reply's wait, or a slow one (-mockSyncSlow YES) so the build can film the history arriving: slow
+            // enough that the read lasts the whole film (at 90 ms the reading card was gone by the first frame, run 32).
+            try? await Task.sleep(nanoseconds: UserDefaults.standard.bool(forKey: "mockSyncSlow") ? 400_000_000 : 12_000_000)
+            // Last.fm gone (-mockDown YES): every call fails, so the build can shoot the app's notes for it.
+            if UserDefaults.standard.bool(forKey: "mockDown") { throw LFMError.http(503) }
             let o = MockLastFM.shared.respond(method, params)
             if let ck, let d = try? JSONSerialization.data(withJSONObject: o) { DiskCache.write(ck, d) }
             return J(o)

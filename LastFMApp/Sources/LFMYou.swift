@@ -315,7 +315,7 @@ struct WeekHub: View {
                 }
             }
             .padding(.bottom, title == "new to you" ? S.pair : S.gap)
-            Text(a.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+            Text(a.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
             Text("\(a.plays) \(a.plays == 1 ? "play" : "plays")").font(.footnote).monospacedDigit().foregroundStyle(S.soft)
         }
         .frame(width: S.tile, alignment: .leading)
@@ -343,10 +343,22 @@ struct YearsSection: View {
         // The year the read has reached; every year before it is still to come.
         let reached = sync.complete || sync.coveredFrom == .max ? (sync.complete ? first : last + 1) : cal.component(.year, from: Date(timeIntervalSince1970: TimeInterval(sync.coveredFrom)))
         VStack(alignment: .leading, spacing: S.head) {
-            SectionHead(text: sync.complete ? "your years" : "reading your history",
-                        trailing: sync.complete ? nil : "\(Int((sync.fraction * 100).rounded(.down)))%")
+            SectionHead(text: sync.complete ? "your years" : "reading your history")
             VStack(alignment: .leading, spacing: S.inner) {
                 if !sync.complete {
+                    // How far it has read as a bar, not a percentage ticking up (Richard took every count-up out,
+                    // 2026-11-18; run 32 still had this one).
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.1))
+                            Capsule().fill(S.accent).frame(width: max(6, g.size.width * CGFloat(min(max(sync.fraction, 0), 1))))
+                        }
+                    }
+                    .frame(height: 6)
+                    .animation(.smooth(duration: 0.6), value: sync.fraction)
+                    .accessibilityElement()
+                    .accessibilityLabel("Reading your history")
+                    .accessibilityValue("\(Int((sync.fraction * 100).rounded(.down))) percent")
                     // No running count: a number ticking up through a few minutes of reading is noise (Richard,
                     // 2026-11-18: "i hate the running total scrobble thing how the number goes up"). How far back it
                     // has reached, in words, and the percentage in the head.
@@ -551,7 +563,7 @@ struct NewCard: View {
                     HStack(spacing: S.gap) {
                         ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 260, corner: 10).frame(width: 84).zoomSource("new|\(a.name)")
                         VStack(alignment: .leading, spacing: S.pair) {
-                            Text(a.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                            Text(a.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
                             if let f = a.first {
                                 Text("First played \(Self.day(f))").font(.subheadline).foregroundStyle(S.soft)
                             }

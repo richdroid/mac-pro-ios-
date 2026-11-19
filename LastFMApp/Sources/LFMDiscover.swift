@@ -183,7 +183,7 @@ struct ArtistRec: View {
                 HStack(spacing: S.inner) {
                     ArtView(ArtRef(artist: r.name, album: r.album, url: r.image), px: 300, corner: 10).frame(width: 84).zoomSource("rec|\(r.id)")
                     VStack(alignment: .leading, spacing: S.pair) {
-                        Text(r.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text(r.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
                         Text("Because you play \(r.because.joined(separator: " and "))").font(.subheadline).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
                         if say { Text(r.plays == 0 ? "New to you" : "You: \(plays(r.plays))").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85)) }
                     }
@@ -206,8 +206,8 @@ struct TrackRec: View {
                 HStack(spacing: S.gap) {
                     ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("try|\(s.id)")
                     VStack(alignment: .leading, spacing: S.pair / 2) {
-                        Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                        Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
                     }
                     Spacer(minLength: 0)
                 }

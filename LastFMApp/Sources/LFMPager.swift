@@ -109,6 +109,16 @@ struct Pager: View {
                     // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20: every
                     // posed section showed the first).
                     .task { await place(reader) }
+                    // Asked to move from outside (a stretch chosen, a link): by position, and if the scroll hasn't got
+                    // there once the move has had time, put there directly, so the names and the page never disagree.
+                    .onChange(of: page) { _, p in
+                        guard let i = panels.firstIndex(where: { $0.id == p }) else { return }
+                        if position != p { withAnimation(.snappy(duration: 0.4)) { position = p } }
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 600_000_000)
+                            if page == p, abs(motion.f - CGFloat(i)) > 0.02 { reader.scrollTo(p, anchor: .leading) }
+                        }
+                    }
                     // A pivot's pages slide up under its names: faded there, not cut. A panorama's next section is a
                     // hint at the far edge: it fades to nothing across the peek, so no half word or cut picture sits
                     // there, nothing runs under the side bar, and the section left behind stops at the leading edge
@@ -134,7 +144,6 @@ struct Pager: View {
             .ignoresSafeArea(.container, edges: .vertical)
         }
         .sensoryFeedback(look == .pivot ? .tick : .snap, trigger: landed)
-        .onChange(of: page) { _, p in if position != p { withAnimation(.snappy(duration: 0.4)) { position = p } } }
         // The tab tapped again: back to the first section first, then to the top.
         .onChange(of: top) { _, _ in
             if let first = panels.first?.id, page != first { withAnimation(.snappy(duration: 0.45)) { position = first } }
@@ -172,8 +181,11 @@ struct Pager: View {
             .onChange(of: top) { _, _ in if page == p.id { withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } } }
             .task {
                 guard let a = Pose.anchor, page == p.id else { return }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                withAnimation(.smooth) { proxy.scrollTo(a, anchor: .top) }
+                // Again as the page fills above it (covers and cards arriving push it down).
+                for _ in 0..<3 {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    withAnimation(.smooth) { proxy.scrollTo(a, anchor: .top) }
+                }
             }
         }
     }

@@ -216,9 +216,16 @@ struct ChartsTab: View {
     @Environment(\.paneLayout) private var pane
     @State private var picking = false
     @State private var all = false
-    @State private var page = 0
+    // The stretch it opens on, from the start: set in onAppear it came after the pager had fixed where it begins, and a
+    // chart opened on a year showed the week's figures under names with none lit (run 32).
+    @State private var page: Int
+    init(top: Int) {
+        self.top = top
+        _page = State(initialValue: Self.pages(ChartsModel.shared.period).firstIndex(of: ChartsModel.shared.period) ?? 0)
+    }
     private var m: ChartsModel { ChartsModel.shared }
-    private var pages: [Period] { if case .week = m.period { return Period.rolling + [m.period] }; return Period.rolling }
+    private var pages: [Period] { Self.pages(m.period) }
+    private static func pages(_ p: Period) -> [Period] { if case .week = p { return Period.rolling + [p] }; return Period.rolling }
     var body: some View {
         Group {
             if pane {
@@ -231,7 +238,21 @@ struct ChartsTab: View {
                         .padding(.top, S.head)
                     }
                 } right: {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { list(m.entries); BumpSection() }.padding(.top, S.section) }
+                    Page(top: top) {
+                        VStack(alignment: .leading, spacing: S.section) {
+                            // Never a bare pane while a stretch is worked out: the spinner, or the note when it's empty.
+                            if m.entries.isEmpty {
+                                if m.cache[m.key(m.period, m.kind)] == nil {
+                                    ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section * 2)
+                                } else {
+                                    Text("Nothing in the top \(m.kind.noun) for this stretch.").font(.body).foregroundStyle(S.soft)
+                                        .padding(.horizontal, S.margin)
+                                }
+                            }
+                            list(m.entries); BumpSection()
+                        }
+                        .padding(.top, S.section)
+                    }
                 }
             } else {
                 Pager(.pivot, page: $page, top: top,
@@ -243,7 +264,7 @@ struct ChartsTab: View {
                                   // comes for, and it sat more than a screen down under the picture (review, run 27).
                                   content(p, onlyLeft: false, collage: false)
                                   list(m.cache[m.key(p, m.kind)]?.0 ?? [])
-                                  collage(m.cache[m.key(p, m.kind)]?.0 ?? [], current: p == m.period)
+                                  collage(m.cache[m.key(p, m.kind)]?.0 ?? [], current: p == m.period).id("collage")
                                   // The last twelve weeks are three months: they belong on that page.
                                   if p == .days(90) { BumpSection() }
                               }
@@ -252,7 +273,7 @@ struct ChartsTab: View {
                       })
             }
         }
-        .onAppear { m.appear(); page = pages.firstIndex(of: m.period) ?? 0 }
+        .onAppear { m.appear(); if let i = pages.firstIndex(of: m.period), i != page { page = i } }
         .onChange(of: page) { _, i in if i < pages.count, pages[i] != m.period { m.period = pages[i] } }
         .onChange(of: m.period) { _, p in all = false; if let i = pages.firstIndex(of: p), i != page { page = i } }
         .onChange(of: m.kind) { _, _ in all = false }
@@ -331,18 +352,26 @@ struct ChartsTab: View {
                                 Text("\(Int((abs(c) * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit()
                             }
                             .foregroundStyle(.white)
-                            Text("against \(p.before)").font(.subheadline).foregroundStyle(S.soft)
+                            // One line on every page, so what follows sits at the same height on each ("against the
+                            // 3 months before" wrapped and moved "top albums", run 32).
+                            Text("vs \(p.before)").font(.subheadline).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.8)
                         }
                         .accessibilityElement(children: .combine)
                     }
                     Spacer(minLength: 0)
                 }
-                FigureGrid(items: [
-                    s.secs.map { (duration($0), "listening") },
-                    (number(s.artists), "artists"),
-                    (number(s.albums), "albums"),
-                    (number(s.tracks), "tracks"),
-                ].compactMap { $0 })
+                // The four small figures in one row in every posture: two rows of them folded filled the first screen
+                // before the list he comes for (run 32).
+                HStack(alignment: .top, spacing: S.gap) {
+                    ForEach(Array([
+                        s.secs.map { (duration($0), "listening") },
+                        (number(s.artists), "artists"),
+                        (number(s.albums), "albums"),
+                        (number(s.tracks), "tracks"),
+                    ].compactMap { $0 }.enumerated()), id: \.offset) { _, f in
+                        Figure(value: f.0, label: f.1, size: 24).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
             .padding(.horizontal, S.margin)
         }

@@ -357,7 +357,7 @@ struct AlbumPage: View {
                             HStack(spacing: S.gap) {
                                 Text("\(k + 1)").font(.body.weight(.light)).monospacedDigit().foregroundStyle(S.soft).frame(width: 26, alignment: .trailing)
                                 VStack(alignment: .leading, spacing: S.pair) {
-                                    Text(t.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                                    Text(t.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
                                     GeometryReader { g in
                                         Capsule().fill(n > 0 ? tint : .white.opacity(0.12)).frame(width: n > 0 ? max(4, g.size.width * CGFloat(n) / CGFloat(peak)) : 4, height: 4)
                                     }

@@ -23,27 +23,28 @@ struct MixName: View {
     @Environment(\.accessibilityReduceMotion) private var still
     var body: some View {
         let name = text.lowercased()
-        // One copy and the air after it; enough copies to cover the width, so the line never runs out as it drifts.
-        let unit = max(textWidth(name, size: size, tracking: -2) + size * 0.5, 1)
         GeometryReader { g in
-            let copies = Int((g.size.width / unit).rounded(.up)) + 1
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: !moving || still)) { tl in
-                // About 14 pt a second: slower than anything he does, so it reads as a layer behind, not a ticker.
-                let t = moving && !still ? tl.date.timeIntervalSinceReferenceDate : 0
-                let x = -CGFloat((t * 14).truncatingRemainder(dividingBy: Double(unit)))
-                HStack(spacing: 0) {
-                    ForEach(0..<copies, id: \.self) { _ in
-                        Text(name).font(.system(size: size, weight: .thin)).tracking(-2).lineLimit(1).fixedSize()
-                            .frame(width: unit, alignment: .leading)
-                    }
+            let room = max(g.size.width - S.margin * 2 + 8, 1)
+            let natural = max(textWidth(name, size: size, tracking: -2), 1)
+            // Always whole: set smaller until it fits the band, and left out when even half size wouldn't fit. A word
+            // cut at the display's edge or at the fold read as broken ("ard li", run 32).
+            let fit = min(size, size * room / natural)
+            let slack = max(0, room - natural * fit / size)
+            if fit >= size * 0.5 {
+                TimelineView(.animation(minimumInterval: 1 / 30, paused: !moving || still || slack < 2)) { tl in
+                    // A slow sway across the room it has, about 10 pt a second: a layer behind, not a ticker.
+                    let t = moving && !still ? tl.date.timeIntervalSinceReferenceDate : 0
+                    let period = max(Double(slack) / 10, 1) * 2
+                    let phase = (t.truncatingRemainder(dividingBy: period)) / period
+                    let x = slack * CGFloat(0.5 - 0.5 * cos(phase * 2 * .pi))
+                    Text(name).font(.system(size: fit, weight: .thin)).tracking(-2 * fit / size).lineLimit(1).fixedSize()
+                        .foregroundStyle(.white.opacity(0.13))
+                        .offset(x: S.margin - 4 + x)
+                        .frame(width: g.size.width, height: g.size.height, alignment: .leading)
                 }
-                .offset(x: x + S.margin - 8)
-                .foregroundStyle(.white.opacity(0.13))
             }
-            .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
-            .clipped()
         }
-        .frame(height: ceil(size * 1.22))
+        .frame(height: ceil(size * 1.2))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -107,7 +108,7 @@ struct RotationMosaic: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(number(e.plays)).font(.system(size: 34, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                     Text(e.album).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-                    Text(e.artist).font(.footnote).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                    Text(e.artist).font(.footnote).foregroundStyle(.white.opacity(0.8)).lineLimit(2)
                 }
                 .padding(10)
             }
@@ -138,6 +139,9 @@ struct RotationMosaic: View {
 // The artist on now in the middle, the artists like them around, a line to each as heavy as his own plays of them. A
 // neighbour he's never played is drawn lighter, on a dashed line, and says so. Every one opens its page. Covers square,
 // like every artist in the app (an artist is drawn with their most played album).
+// The ring only where it has the room to stay clean (open upright). Narrower (folded, a pane open flat) eight covers
+// and their names around one cover piled into each other (run 32), so there it is a plain grid: four across, each name
+// whole on two lines, his plays under it.
 struct MixView: View {
     let artist: String
     let center: ArtRef
@@ -145,7 +149,8 @@ struct MixView: View {
     @State private var shown = false
     @State private var width: CGFloat = 360
     @Environment(\.accessibilityReduceMotion) private var still
-    @ScaledMetric(relativeTo: .caption) private var label: CGFloat = 32
+    // Room under or over a satellite's cover for its name on two lines and his plays.
+    @ScaledMetric(relativeTo: .caption) private var label: CGFloat = 48
     struct Node: Identifiable, Equatable {
         var id: String { name.lowercased() }
         let name: String
@@ -154,42 +159,14 @@ struct MixView: View {
         var art: ArtRef
     }
     static let most = 8
+    static let ringWidth: CGFloat = 600
     var body: some View {
         let nodes = Array(ring.prefix(Self.most))
-        let height = min(max(width * 0.82, 300), 400) + label
         Group {
             if nodes.count >= 3 {
                 VStack(alignment: .leading, spacing: S.head) {
                     SectionHead(text: "mix", trailing: "like \(artist)")
-                    ZStack {
-                        let layout = place(nodes, in: CGSize(width: width, height: height))
-                        // The lines first, under the covers: his plays as weight, faint where he has none.
-                        Canvas { ctx, _ in
-                            let peak = max(1, nodes.map(\.plays).max() ?? 1)
-                            for (n, p) in zip(nodes, layout.points) {
-                                var path = Path(); path.move(to: layout.center); path.addLine(to: p)
-                                let w = n.plays > 0 ? 1 + 4 * CGFloat(log(Double(n.plays) + 1) / log(Double(peak) + 1)) : 0.75
-                                ctx.stroke(path, with: .color(.white.opacity(n.plays > 0 ? 0.42 : 0.14)), style: StrokeStyle(lineWidth: w, lineCap: .round, dash: n.plays > 0 ? [] : [3, 4]))
-                            }
-                        }
-                        .opacity(shown ? 1 : 0)
-                        Opens(route: .artist(artist)) {
-                            ArtView(center, px: 400, corner: 14).frame(width: layout.core, height: layout.core)
-                                .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
-                        }
-                        .position(layout.center)
-                        .accessibilityLabel(artist)
-                        .accessibilityHint("Shows the artist")
-                        ForEach(Array(nodes.enumerated()), id: \.element.id) { k, n in
-                            let p = k < layout.points.count ? layout.points[k] : layout.center
-                            satellite(n, side: layout.side(n.match))
-                                .position(shown ? p : layout.center)
-                                .opacity(shown ? 1 : 0)
-                                .scaleEffect(shown ? 1 : 0.4)
-                                .animation(still ? nil : .spring(response: 0.55, dampingFraction: 0.78).delay(0.04 * Double(k)), value: shown)
-                        }
-                    }
-                    .frame(height: height)
+                    if width >= Self.ringWidth { ringView(nodes) } else { grid(nodes) }
                 }
                 .transition(.opacity)
             }
@@ -198,22 +175,96 @@ struct MixView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .task(id: artist) { await load() }
     }
-    private func satellite(_ n: Node, side: CGFloat) -> some View {
+
+    private func grid(_ nodes: [Node]) -> some View {
+        let cols = width < 330 ? 3 : 4
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: S.gap, alignment: .top), count: cols), alignment: .leading, spacing: S.inner) {
+            ForEach(Array(nodes.enumerated()), id: \.element.id) { k, n in
+                Opens(route: .artist(n.name), zoom: "mix|\(n.id)") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ArtView(n.art, px: 300, corner: 8).aspectRatio(1, contentMode: .fit).zoomSource("mix|\(n.id)")
+                            .opacity(n.plays > 0 ? 1 : 0.72)
+                        words(n, align: .leading)
+                    }
+                }
+                .opacity(shown ? 1 : 0)
+                .offset(y: shown ? 0 : 10)
+                .animation(still ? nil : .smooth(duration: 0.4).delay(0.04 * Double(k)), value: shown)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(n.name), " + (n.plays > 0 ? plays(n.plays) : "new to you"))
+                .accessibilityAddTraits(.isButton)
+            }
+        }
+    }
+
+    private func words(_ n: Node, align: HorizontalAlignment) -> some View {
+        VStack(alignment: align, spacing: 0) {
+            Text(n.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: false)
+                .multilineTextAlignment(align == .leading ? .leading : .center)
+            Text(n.plays > 0 ? plays(n.plays) : "new to you").font(.caption2).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func ringView(_ nodes: [Node]) -> some View {
+        let height = min(max(width * 0.62, 300), 420) + label * 2
+        let layout = place(nodes, in: CGSize(width: width, height: height))
+        return ZStack {
+            // The lines first, under the covers, from the edge of the cover in the middle to the edge of each
+            // satellite's cover: his plays as weight, faint where he has none. A name always sits on the far side of its
+            // cover from the middle, so no line runs through a word.
+            Canvas { ctx, _ in
+                let peak = max(1, nodes.map(\.plays).max() ?? 1)
+                for (n, q) in zip(nodes, layout.points) {
+                    let dx = q.x - layout.center.x, dy = q.y - layout.center.y
+                    let m = max(abs(dx), abs(dy), 1)
+                    let t0 = (layout.core / 2 + 4) / m, t1 = 1 - (layout.side(n.match) / 2 + 4) / m
+                    guard t1 > t0 else { continue }
+                    var path = Path()
+                    path.move(to: CGPoint(x: layout.center.x + dx * t0, y: layout.center.y + dy * t0))
+                    path.addLine(to: CGPoint(x: layout.center.x + dx * t1, y: layout.center.y + dy * t1))
+                    let w = n.plays > 0 ? 1 + 4 * CGFloat(log(Double(n.plays) + 1) / log(Double(peak) + 1)) : 0.75
+                    ctx.stroke(path, with: .color(.white.opacity(n.plays > 0 ? 0.42 : 0.14)), style: StrokeStyle(lineWidth: w, lineCap: .round, dash: n.plays > 0 ? [] : [3, 4]))
+                }
+            }
+            .opacity(shown ? 1 : 0)
+            Opens(route: .artist(artist)) {
+                ArtView(center, px: 400, corner: 14).frame(width: layout.core, height: layout.core)
+                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+            }
+            .position(layout.center)
+            .accessibilityLabel(artist)
+            .accessibilityHint("Shows the artist")
+            ForEach(Array(nodes.enumerated()), id: \.element.id) { k, n in
+                let q = k < layout.points.count ? layout.points[k] : layout.center
+                let above = q.y < layout.center.y - 1
+                let side = layout.side(n.match)
+                // The stack's middle, so its cover's middle lands on the ring.
+                let p = CGPoint(x: q.x, y: q.y + (above ? -1 : 1) * (label + 4) / 2)
+                satellite(n, side: side, above: above)
+                    .position(shown ? p : layout.center)
+                    .opacity(shown ? 1 : 0)
+                    .scaleEffect(shown ? 1 : 0.4)
+                    .animation(still ? nil : .spring(response: 0.55, dampingFraction: 0.78).delay(0.04 * Double(k)), value: shown)
+            }
+        }
+        .frame(height: height)
+    }
+
+    private func satellite(_ n: Node, side: CGFloat, above: Bool) -> some View {
         Opens(route: .artist(n.name), zoom: "mix|\(n.id)") {
             VStack(spacing: 4) {
+                if above { words(n, align: .center).frame(width: Self.wordsWidth, height: label, alignment: .bottom) }
                 ArtView(n.art, px: 200, corner: 8).frame(width: side, height: side).zoomSource("mix|\(n.id)")
                     .opacity(n.plays > 0 ? 1 : 0.72)
-                VStack(spacing: 0) {
-                    Text(n.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                    Text(n.plays > 0 ? plays(n.plays) : "new to you").font(.caption2).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
-                }
-                .frame(width: max(side + 28, 84))
+                if !above { words(n, align: .center).frame(width: Self.wordsWidth, height: label, alignment: .top) }
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(n.name), " + (n.plays > 0 ? plays(n.plays) : "new to you"))
         .accessibilityAddTraits(.isButton)
     }
+    static let wordsWidth: CGFloat = 120
     private struct Layout {
         let center: CGPoint
         let points: [CGPoint]
@@ -222,19 +273,17 @@ struct MixView: View {
         let large: CGFloat
         func side(_ match: Double) -> CGFloat { small + (large - small) * CGFloat(min(max(match, 0), 1)) }
     }
-    // The cover in the middle; the ring on an ellipse that fills the room, starting at the top, each satellite's centre
-    // placed so its cover and its two lines of words stay inside.
+    // The cover in the middle; the satellites' covers on an ellipse that fills the room, each with its words on the
+    // outside kept inside the frame.
     private func place(_ nodes: [Node], in size: CGSize) -> Layout {
-        let core = min(112, size.height * 0.3)
-        let small: CGFloat = 46, large: CGFloat = size.width >= 560 ? 76 : 64
-        // The cover sits a little above the satellite's point and its words below; centre on the cover.
-        let c = CGPoint(x: size.width / 2, y: (size.height - label) / 2 + 6)
-        let rx = max(60, size.width / 2 - max(large + 28, 84) / 2 - 2)
-        let ry = max(60, (size.height - label) / 2 - large / 2 - 4)
+        let core = min(112, size.height * 0.26)
+        let small: CGFloat = 50, large: CGFloat = 72
+        let c = CGPoint(x: size.width / 2, y: size.height / 2)
+        let rx = max(60, size.width / 2 - Self.wordsWidth / 2 - 2)
+        let ry = max(60, size.height / 2 - large / 2 - label - 6)
         let pts = nodes.indices.map { i -> CGPoint in
             let a = -Double.pi / 2 + Double(i) / Double(nodes.count) * 2 * .pi + (nodes.count % 2 == 0 ? .pi / Double(nodes.count) : 0)
-            // Offset by half the words so the cover, not the whole stack, sits on the ring.
-            return CGPoint(x: c.x + rx * CGFloat(cos(a)), y: c.y + ry * CGFloat(sin(a)) + label / 2)
+            return CGPoint(x: c.x + rx * CGFloat(cos(a)), y: c.y + ry * CGFloat(sin(a)))
         }
         return Layout(center: c, points: pts, core: core, small: small, large: large)
     }

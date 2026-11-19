@@ -40,7 +40,7 @@ struct RiverCard: View {
                             Opens(route: .artist(l.artist), zoom: nil) {
                                 HStack(spacing: 8) {
                                     Circle().fill(vivid(ArtRef(artist: l.artist, album: l.album, url: l.image))).frame(width: 10, height: 10)
-                                    Text(l.artist).font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(1)
+                                    Text(l.artist).font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(2)
                                     Spacer(minLength: 0)
                                     Text(compact(l.total)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
                                 }
@@ -225,7 +225,7 @@ struct ErasSection: View {
             HStack(spacing: S.gap) {
                 ArtView(ref, px: 156, corner: 6).frame(width: S.art).zoomSource("era|\(e.from)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(e.artist).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                    Text(e.artist).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
                     Text("\(monthShort(e.from)) – \(monthShort(e.to))").font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
                 }
                 Spacer(minLength: 8)
@@ -247,7 +247,7 @@ struct ErasSection: View {
                 LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.4), .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: S.pair) {
                     Text(monthName(t.month)).font(.system(size: 44, weight: .thin)).tracking(-1).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
-                    Text(t.artist).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(1)
+                    Text(t.artist).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(2)
                     HStack(spacing: S.gap) {
                         Text("\(Int((t.share * 100).rounded()))%").font(.system(size: 24, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
                         Text("of the month, \(plays(t.plays))").font(.subheadline).foregroundStyle(.white.opacity(0.85))
@@ -322,7 +322,7 @@ struct RecordsSection: View {
                 VStack(alignment: .leading, spacing: S.pair) {
                     Text(number(r.plays)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                     Text(what).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                    Text(name).font(.subheadline).foregroundStyle(.white.opacity(0.85)).lineLimit(1)
+                    Text(name).font(.subheadline).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
                     Text(LocalDay.date(r.day).formatted(.dateTime.month(.wide).day().year())).font(.subheadline).foregroundStyle(.white.opacity(0.7))
                 }
                 .padding(S.inner)

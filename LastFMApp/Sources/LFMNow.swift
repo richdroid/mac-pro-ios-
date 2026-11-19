@@ -43,7 +43,7 @@ ArtView(s.art, px: 300, corner: 10).frame(width: 80).zoomSource("last|\(s.id)")
                     .lineLimit(1)
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
                     Text(s.title).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(2)
-                    Text(s.artist).font(.body).foregroundStyle(S.soft).lineLimit(1)
+                    Text(s.artist).font(.body).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
@@ -160,13 +160,12 @@ struct NowHero: View {
                     }
                 }
                 .padding(.horizontal, S.margin)
-            }
-            // Zune HD's Now Playing: the artist's name huge and faint behind the song, drifting while it plays, running
-            // off both edges of the display; the cover passes in front of it. Gone when nothing plays.
-            .background(alignment: .bottomLeading) {
+                // Zune HD's Now Playing: the artist's name huge and faint, drifting while it plays. A band of its own
+                // under the song, never behind its words (it ran through "Orchard Lights / Velvet Rooms", run 32), and
+                // always whole in its pane. Gone when nothing plays.
                 if playing {
-                    MixName(text: s.artist, size: layout == .wide ? 150 : 120, moving: true)
-                        .offset(y: layout == .wide ? 24 : 18)
+                    MixName(text: s.artist, size: layout == .wide ? 110 : 84, moving: true)
+                        .padding(.top, -S.pair)
                         .id(s.artist).transition(.opacity)
                 }
             }
@@ -250,8 +249,8 @@ struct NowHero: View {
             .foregroundStyle(.white.opacity(0.85))
             .padding(.bottom, S.pair)
             Text(s.title).font(.system(.title, weight: .bold)).foregroundStyle(.white).lineLimit(2)
-            Text(s.artist).font(.title3).foregroundStyle(.white.opacity(0.85)).lineLimit(1)
-            if !s.album.isEmpty { Text(s.album).font(.body).foregroundStyle(S.soft).lineLimit(1) }
+            Text(s.artist).font(.title3).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
+            if !s.album.isEmpty { Text(s.album).font(.body).foregroundStyle(S.soft).lineLimit(2) }
             // A line of its own, its place held so the page doesn't jump when it's known.
             if line {
                 Text(depthLine(s, playing) ?? " ").font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
@@ -471,12 +470,26 @@ struct RunRow: View {
             Button(action: toggle) {
                 HStack(spacing: S.gap) {
                     ArtView(newest.art, px: 156, corner: 6).frame(width: S.art)
-                    VStack(alignment: .leading, spacing: S.pair / 2) {
-                        Text(newest.album).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                        Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
+                    // The time beside the names when all of them fit whole; when narrow (folded, "Velvet Ro… / 6 songs
+                    // · O…" beside "9:20 PM – 9:38 PM", run 32) it goes on a line of its own under them, and the names
+                    // take two lines before they're ever cut.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: S.gap) {
+                            VStack(alignment: .leading, spacing: S.pair / 2) {
+                                Text(newest.album).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                                Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
+                            }
+                            .fixedSize()
+                            Spacer(minLength: 8)
+                            Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).fixedSize()
+                        }
+                        VStack(alignment: .leading, spacing: S.pair / 2) {
+                            Text(newest.album).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                            Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(2)
+                            Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.85)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Spacer(minLength: 8)
-                    Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).fixedSize()
                     Image(systemName: "chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
                         .rotationEffect(.degrees(open ? 180 : 0))
                 }
@@ -506,8 +519,8 @@ struct TrackRow: View {
             HStack(spacing: S.gap) {
                 ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("recent|\(s.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                    Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                    Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                    Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 8)
                 if s.loved { Image(systemName: "heart.fill").font(.footnote).foregroundStyle(S.accent).accessibilityLabel("Loved") }

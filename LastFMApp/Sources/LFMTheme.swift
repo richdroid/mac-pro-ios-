@@ -300,7 +300,7 @@ enum Pose {
     static var tab: Int { UserDefaults.standard.integer(forKey: "tab") }
     static var panel: Int { UserDefaults.standard.integer(forKey: "panel") }
     // Where on the page a pose's state is: scrolled to, so the shot shows it (-pose scrub held an hour off the screen).
-    static var anchor: String? { name == "scrub" ? "day" : name == "sync" ? "reading" : nil }
+    static var anchor: String? { name == "scrub" ? "day" : name == "sync" ? "reading" : name == "collage" ? "collage" : nil }
 }
 
 // For the build's films (-launchLog YES, never on the phone): how long after the process began each step of a launch

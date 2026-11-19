@@ -237,8 +237,8 @@ struct LibraryTab: View {
             HStack(spacing: S.gap) {
                 ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("loved|\(s.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(l.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                    Text(l.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                    Text(l.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                    Text(l.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: S.pair / 2) {

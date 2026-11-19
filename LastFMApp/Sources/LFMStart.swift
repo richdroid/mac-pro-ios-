@@ -144,8 +144,8 @@ struct NowStrip: View {
                             }
                         }
                         .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
-                        Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                        Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
