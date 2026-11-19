@@ -290,8 +290,8 @@ struct RingReport: Decodable, Equatable {
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.
-struct ChannelList: Decodable {
-    struct Channel: Decodable { let id: String; let list: [[String]]; let conf: [[String]] }
+struct ChannelList: Decodable, Equatable {
+    struct Channel: Decodable, Equatable { let id: String; let list: [[String]]; let conf: [[String]] }
     let cur: String?; let channels: [Channel]; let names: [[String]]?
 }
 

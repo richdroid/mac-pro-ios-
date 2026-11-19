@@ -2025,6 +2025,7 @@ struct ChannelsTab: View {
                 }
             }.foregroundStyle(.tint)
             .disabled(jumpable.isEmpty)
+            .id("jumprow")
             if let j = jumped { RowNote(icon: "checkmark.circle", text: "Showing \(j) on the Chumby", color: .secondary).transition(.opacity) }
             Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
         } header: {
@@ -2090,7 +2091,11 @@ struct ChannelsTab: View {
             posed = true
             Task {
                 // For the build's film: a jump to the channel's second widget, said once the Chumby has taken it.
-                if ChumbyModel.pose == "jumpdemo" { try? await Task.sleep(nanoseconds: 3_000_000_000); if jumpable.count > 1 { jump(jumpable[1]) }; return }
+                if ChumbyModel.pose == "jumpdemo" {
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { scroll.scrollTo("jumprow", anchor: .center) }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000); if let n = jumpable.last { jump(n) }
+                    return
+                }
                 // For the build: the channel's list in Edit, its delete controls and grips.
                 if ChumbyModel.pose == "chedit" { try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { reordering = true }; return }
                 // For the build's film: Edit, the last widget moved to the top, the second taken out, Done (the save goes, and the
@@ -2120,6 +2125,13 @@ struct ChannelsTab: View {
         .onChange(of: model.chosenChannel) { _, c in if let c { followPlaying(c.name, chosen: true) } }
         // The Chumby's own switches too (its nightly times, a tap on the device), so the list is always the channel showing.
         .onChange(of: model.sys.chan) { _, _ in followPlaying(showing) }
+        // The Chumby's own list, read again (on opening, after a save, a pull): the rows follow it unless something of his is
+        // still on its way or being edited. They were filled once from the kept copy and never again, so a list changed
+        // elsewhere, or a kept copy from before, stayed on screen (widget management "buggy", 11-18).
+        .onChange(of: model.channelData) { _, _ in
+            guard unsent == nil, !reordering, !adding, edited[picked] == nil, !picked.isEmpty else { return }
+            withAnimation(.snappy) { pick() }
+        }
         .onChange(of: model.state.channel) { _, _ in followPlaying(showing) }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
         .onDisappear { flush() }
