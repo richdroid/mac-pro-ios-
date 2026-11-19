@@ -225,6 +225,7 @@ actor HistoryDB {
     func start() {
         guard !running else { return }
         running = true
+        caughtUp = false
         Task {
             await load()
             onProgress?()
@@ -260,7 +261,16 @@ actor HistoryDB {
         let db = HistoryDB.shared
         if pin == 0 || done.isEmpty {
             pin = Int(Clock.now.timeIntervalSince1970)
-            guard let j = try? await LastFM.shared.call("user.getrecenttracks", ["limit": "200", "page": "1", "to": "\(pin)"], keep: false) else { stuck(); return }
+            // The first page, asked until it comes (it used to give up on one miss, and the read sat at 0 % until the
+            // app was next opened).
+            var first: J?
+            for tries in 1...8 {
+                if let j = try? await LastFM.shared.call("user.getrecenttracks", ["limit": "200", "page": "1", "to": "\(pin)"], keep: false) { first = j; break }
+                stuck()
+                try? await Task.sleep(nanoseconds: UInt64(min(30, pow(2, Double(tries)))) * 1_000_000_000)
+            }
+            guard let j = first else { return }
+            stuckSince = nil
             let pages = j["recenttracks"]["@attr"]["totalPages"].int ?? 0
             total = j["recenttracks"]["@attr"]["total"].int ?? 0
             done = [Bool](repeating: false, count: max(pages, 0))
@@ -326,7 +336,7 @@ actor HistoryDB {
     // After the first read, only what's new since the newest play kept.
     func catchUp() async {
         let db = HistoryDB.shared
-        guard let newest = await db.newest() else { return }
+        guard let newest = await db.newest() else { caughtUp = true; return }
         var page = 1
         while page < 50 {
             guard let j = try? await LastFM.shared.call("user.getrecenttracks", ["limit": "200", "page": "\(page)", "from": "\(newest + 1)"], keep: false) else { return }
@@ -336,12 +346,21 @@ actor HistoryDB {
             if page >= pages || rows.isEmpty { break }
             page += 1
         }
+        caughtUp = true
         save()
         onProgress?()
     }
 
-    // Plays the app saw arrive while it was open.
+    // Plays the app saw arrive while it was open. Only once the history has caught up since the last opening: the
+    // catch-up starts from the newest play kept, so the screen's newest plays going in first moved that point past
+    // everything played while the app was closed, and those plays never came (a hole in the streak and the counts after
+    // a few days away). Until then the catch-up brings them itself; if it couldn't, it's tried again from here.
+    @ObservationIgnored private var caughtUp = false
     func keep(_ s: [Scrobble]) async {
+        guard complete, caughtUp else {
+            if complete, !running { start() }
+            return
+        }
         let rows = s.compactMap { x -> Row? in x.date.map { Row(uts: Int($0.timeIntervalSince1970), artist: x.artist, album: x.album, track: x.title, image: x.image) } }
         read += await HistoryDB.shared.insert(rows)
     }

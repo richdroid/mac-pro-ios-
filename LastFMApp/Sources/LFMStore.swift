@@ -61,9 +61,11 @@ struct Profile: Sendable {
     var todaySecs: Int?                // today's listening time, once enough of its lengths are known
     var loadingMore = false
     var reachedEnd = false
-    // Failing since; the app says so only once it's been a while (never on one miss, never on opening).
+    // Failing since; the app says so only once it's been a while (never on one miss, never on opening). `trouble` is
+    // stored, set by the poll itself: worked out from the clock, nothing told the screens when 25 s had passed, so the
+    // note could stay away however long Last.fm was gone.
     var failingSince: Date?
-    var trouble: Bool { failingSince.map { Date().timeIntervalSince($0) > 25 } ?? false }
+    private(set) var trouble = false
     // The song the hero shows: the one on now, else the last one played.
     var hero: Scrobble? { nowPlaying ?? recent.first }
     var opened: Scrobble?              // the track whose page is up
@@ -92,6 +94,9 @@ struct Profile: Sendable {
     func start() {
         // The history loads first; insights follow it (HistorySync's onProgress), the kept ones showing meanwhile.
         sync.start()
+        // Back from the background (hours, maybe), the first look is a full page again: thirty would leave today's
+        // figures and the day counting only the last thirty plays until he scrolled.
+        polled = false
         polling?.cancel()
         polling = Task {
             await loadProfile()
@@ -103,8 +108,8 @@ struct Profile: Sendable {
     }
     func stop() { polling?.cancel(); polling = nil }
 
-    private func loadProfile() async {
-        if let j = try? await LastFM.shared.call("user.getinfo", fresh: 600), let p = Profile.parse(j) { profile = p }
+    private func loadProfile(fresh: TimeInterval = 600) async {
+        if let j = try? await LastFM.shared.call("user.getinfo", fresh: fresh), let p = Profile.parse(j) { profile = p }
     }
 
     func refresh() async {
@@ -115,15 +120,19 @@ struct Profile: Sendable {
             let before = recent.first?.id, playingBefore = nowPlaying?.id
             apply(j)
             failingSince = nil
+            if trouble { withAnimation(.smooth) { trouble = false } }
             if recent.first?.id != before || nowPlaying?.id != playingBefore {
                 WidgetCenter.shared.reloadTimelines(ofKind: "now")
             }
             if recent.first?.id != before {
                 await sync.keep(Array(recent.prefix(200)))
                 workInsights()
+                // A new scrobble moves his total too (it was asked once per opening, so it sat still while he listened).
+                if before != nil { await loadProfile(fresh: 60) }
             }
         } catch {
             if failingSince == nil { failingSince = Date() }
+            if let f = failingSince, Date().timeIntervalSince(f) > 25, !trouble { withAnimation(.smooth) { trouble = true } }
         }
     }
 
