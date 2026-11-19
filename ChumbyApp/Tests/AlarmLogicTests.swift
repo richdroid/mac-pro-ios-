@@ -387,5 +387,33 @@ do {
     expect(o.alarmForm().contains { $0.0 == "1_own" && $0.1 == "1" }, "and every save says so, or the Chumby puts the shared set back")
 }
 
+section("The phone's backup alarm")
+do {
+    let daily = alarm("Work", "daily", "420")
+    let cal = alarm("Calendar: Dentist", "once", mins(at(2026, 11, 11, 13)))
+    let nap = alarm("Nap", "once", mins(at(2026, 11, 11, 10)))
+    let offA = alarm("Weekend", "daily", "480", on: false)
+    let far = once("Later", at(2026, 11, 14, 8))
+    let rs = BackupPlan.rings(in: state([daily, cal, nap, offA, far]), now: now)
+    expect(rs.map(\.at) == [at(2026, 11, 11, 13), at(2026, 11, 12, 7)], "36 hours of real rings; nap, off and far-off alarms get none")
+    let ids = (1...9).map { UUID(uuidString: "00000000-0000-0000-0000-00000000000\($0)")! }
+    var n = 0; func mk() -> UUID { n += 1; return ids[n - 1] }
+    let r1 = BackupPlan.reconcile(kept: [], wanted: rs, delay: 5, now: now, makeID: mk)
+    expect(r1.add.map(\.fireAt) == [at(2026, 11, 11, 13, 5), at(2026, 11, 12, 7, 5)], "each backup is its ring plus the delay")
+    expect(BackupPlan.reconcile(kept: r1.entries, wanted: rs, delay: 5, now: now, makeID: mk).add.isEmpty, "syncing again changes nothing")
+    let r2 = BackupPlan.reconcile(kept: r1.entries, wanted: [rs[1]], delay: 10, now: now, makeID: mk)
+    expect(r2.cancel.count == 2 && r2.add.count == 1 && r2.add[0].fireAt == at(2026, 11, 12, 7, 10), "a ring no longer wanted is cancelled; a new delay moves the rest")
+    let during = at(2026, 11, 11, 13, 2)
+    expect(BackupPlan.handled(r1.entries, now: during, name: "Dentist").cancel.map(\.ringAt) == [at(2026, 11, 11, 13)], "stopping cancels the ring in progress, found by name")
+    expect(BackupPlan.handled(r1.entries, now: now).cancel.isEmpty, "with nothing ringing, nothing is cancelled")
+    let sn = BackupPlan.snoozed(r1.entries, now: during, name: nil, until: at(2026, 11, 11, 13, 9), delay: 5, makeID: mk)
+    expect(sn.add.map(\.fireAt) == [at(2026, 11, 11, 13, 14)] && sn.cancel.count == 1, "a snooze moves the backup to its end plus the delay")
+    expect(BackupPlan.reconcile(kept: sn.entries, wanted: [rs[1]], delay: 5, now: at(2026, 11, 11, 13, 3), makeID: mk).cancel.isEmpty, "a snoozed backup still ahead survives a sync")
+    expect(BackupPlan.reconcile(kept: sn.entries, wanted: [], delay: 5, now: at(2026, 11, 11, 13, 20), makeID: mk).entries.isEmpty, "and is dropped once it has passed")
+    expect(BackupPlan.signal(["ring": NSNull()], now: now) == .over && BackupPlan.signal(["ring": ["over": true]], now: now) == .over, "a push with ring null or over ends it")
+    expect(BackupPlan.signal(["ring": ["snoozed": true, "name": "Work", "until": 1000.0]], now: now) == .snoozed(name: "Work", until: Date(timeIntervalSince1970: 1000)), "a snoozed push carries its end")
+    expect(BackupPlan.signal(["ring": ["snoozed": false, "name": "Work"]], now: now) == nil && BackupPlan.signal([:], now: now) == nil, "a ringing push or none says nothing")
+}
+
 print(failures == 0 ? "ok: \(checks) checks" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

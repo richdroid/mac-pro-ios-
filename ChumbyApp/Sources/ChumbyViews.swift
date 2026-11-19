@@ -2705,6 +2705,7 @@ struct TinkerTab: View {
             ReachRow()
             NightSettings()
             NotifySettings()
+            BackupAlarmSettings()
             if !wide { xWidget }
             } right: {
             Section {

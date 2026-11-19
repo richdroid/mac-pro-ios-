@@ -6,5 +6,5 @@ cd "$(dirname "$0")/.."
 OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 S=ChumbyApp/Sources
 cp ChumbyApp/Tests/AlarmLogicTests.swift "$OUT/main.swift"
-swiftc -swift-version 5 -O -o "$OUT/tests" "$S/ChumbyAPI.swift" "$S/CalendarPlanner.swift" "$S/AlarmChange.swift" "$OUT/main.swift" 2>&1 | grep -E "error|warning: unre" || true
+swiftc -swift-version 5 -O -o "$OUT/tests" "$S/ChumbyAPI.swift" "$S/CalendarPlanner.swift" "$S/AlarmChange.swift" "$S/ChumbyBackupPlan.swift" "$OUT/main.swift" 2>&1 | grep -E "error|warning: unre" || true
 TZ=America/New_York "$OUT/tests"

@@ -113,6 +113,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSCalendarsFullAccessUsageDescription: Chumby sets your alarms from what's on your calendar. Nothing leaves your phone but the alarm times and titles sent to your Chumby.
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.Chumby.calendar]
+        NSAlarmKitUsageDescription: So your iPhone can wake you if the Chumby alarm doesn't.
         NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
         # Where the app hands the Mac its notification token; baked in at signing, like DefaultAddress, never in the repo.
         MacAddress: ""

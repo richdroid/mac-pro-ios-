@@ -313,6 +313,15 @@ final class ChumbyModel: ObservableObject {
             // An alarm just ended: what it woke him to goes into Pandora's history song by song, so "Woke up to" (and its
             // widget) reads it again soon after and a few times more, rather than waiting out the usual five minutes.
             if sys.ringing != nil, s.ringing == nil { songsAfterRing() }
+            // Stopped or snoozed on the Chumby, seen fresh: the phone's backup for that ring goes or moves with it.
+            if fresh {
+                if sys.ringing != nil, s.ringing == nil { ChumbyBackupAlarm.shared.handled(name: sys.ringing?.name) }
+                else if let r = s.ringing, r.snoozed, sys.ringing?.snoozed != true {
+                    let mins = Double(state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
+                    let until = state.ringingNow?.until.flatMap { $0 > Date().timeIntervalSince1970 ? Date(timeIntervalSince1970: $0) : nil } ?? Date().addingTimeInterval(mins * 60)
+                    ChumbyBackupAlarm.shared.snoozed(name: r.name, until: until)
+                }
+            }
             // What this phone saw of the ring, for "Woke up to": only fresh readings, never an old copy from the Mac.
             if fresh {
                 if let r = s.ringing { RingSeen.saw(snoozed: r.snoozed, until: r.snoozed ? state.ringingNow?.until.flatMap { $0 > 0 ? $0 : nil } : nil) }
@@ -393,6 +402,8 @@ final class ChumbyModel: ObservableObject {
         }
         deviceState = s
         if !stateKnown { stateKnown = true }
+        // The phone's own backup alarm for each ring coming up (ChumbyBackupAlarm).
+        ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()))
         if let d = doubted, Self.skipAgrees(s.skipped, d) { doubted = nil; letGo("skip") }
         // A change that didn't get through, which the Chumby now matches anyway (put right on the Chumby, say), is done.
         pending.removeAll { p in
@@ -614,6 +625,8 @@ final class ChumbyModel: ObservableObject {
                 withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
                 RingSeen.stopped(at: tapped)
                 ringStoppedAt = Date()
+                // the phone's backup alarm for this ring goes with it (ChumbyBackupAlarm)
+                ChumbyBackupAlarm.shared.handled(name: was.components(separatedBy: "\t").dropFirst().first)
                 // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
                 await ChumbyRingCard.over()
                 Task { await ChumbyRingCard.handled() }
@@ -653,11 +666,15 @@ final class ChumbyModel: ObservableObject {
                 }
                 Task { await ChumbyRingCard.handled() }
                 let end = until ?? snoozeEnds?.timeIntervalSince1970
+                // the phone's backup alarm moves to the snooze's end plus its delay (ChumbyBackupAlarm)
+                ChumbyBackupAlarm.shared.snoozed(name: was.components(separatedBy: "\t").dropFirst().first,
+                                                 until: end.map { Date(timeIntervalSince1970: $0) } ?? Date().addingTimeInterval(9 * 60))
                 await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = end; $0.problem = nil }
                 await ChumbyRingCard.clearNotice()
                 return true
             case .nothingRinging:
                 withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
+                ChumbyBackupAlarm.shared.handled(name: was.components(separatedBy: "\t").dropFirst().first)
                 await ChumbyRingCard.over()
                 return true
             case .unconfirmed:
