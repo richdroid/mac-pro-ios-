@@ -1036,7 +1036,9 @@ struct WebTile: View {
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
-                if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18) }
+                // One box for every glyph: the thermometer is taller than the name's line and made its tile 1 pt taller than
+                // the tile beside it (designer gate, 2026-11-19).
+                if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18, height: 16) }
                 // Whole, never "Temperatu…" (CI c4f3c64, folded): a little smaller first.
                 Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 0)

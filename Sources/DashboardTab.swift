@@ -257,6 +257,7 @@ struct DashboardTab: View {
         .accessibilityLabel(name)
         .accessibilityIdentifier("chip." + id)
         .accessibilityAddTraits(on ? .isSelected : [])
+        .id(id)
     }
 
     var showOnMac: some View {
@@ -266,14 +267,14 @@ struct DashboardTab: View {
                     // Clear of the header above (it was cut to "oards", CI 68b580c).
                     // In line with the headings, clear of the card's rounded corner (it cut "Boards" to "3oards", CI 64e4a2c).
                     Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20)
-                    chips {
+                    chips(shown: (running ? st?.board : nil).map { "board." + $0 }) {
                         ForEach(ConsolePlace.boards, id: \.id) { b in
                             let on = running && st?.board == b.id
                             chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: "board." + b.id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
                         }
                     }
                     Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 4)
-                    chips {
+                    chips(shown: onMac.map { "page." + $0 }) {
                         ForEach(ConsolePlace.pages, id: \.id) { p in
                             chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: "page." + p.id) { remote.send(model, "page:" + p.id, "page", p.id) }
                         }
@@ -304,9 +305,15 @@ struct DashboardTab: View {
     }
     // A row of chips that scrolls sideways out to the display's edges, its first chip lined up with the cards.
     // The first chip in line with the headings; the row fades out at its end rather than cutting a chip in half.
-    func chips<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content() } }
-            .contentMargins(.horizontal, 20, for: .scrollContent)
+    // The row follows what's lit: the page on the Mac's screen was a blue sliver cut by the pane's edge when it was the
+    // fourth chip or later (CI 7809d95, open flat; designer gate 2026-11-19). In place as the row appears, glided after.
+    func chips<C: View>(shown: String?, @ViewBuilder _ content: () -> C) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content() } }
+                .contentMargins(.horizontal, 20, for: .scrollContent)
+                .onAppear { if let shown { proxy.scrollTo(shown, anchor: .center) } }
+                .onChange(of: shown) { _, to in if let to { withAnimation(Motion.quick) { proxy.scrollTo(to, anchor: .center) } } }
+        }
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
     }
 }
