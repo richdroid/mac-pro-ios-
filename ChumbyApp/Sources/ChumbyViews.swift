@@ -2756,10 +2756,12 @@ struct TinkerTab: View {
     var body: some View {
         TwoPane {
             PageTitle("Enjoy tinkering?")
+            // CI's still of the Backup words (-pose backup): it comes first, in view without a scroll
+            if ChumbyModel.pose == "backup" { BackupAlarmSettings() }
             ReachRow()
             NightSettings()
             NotifySettings()
-            BackupAlarmSettings()
+            if ChumbyModel.pose != "backup" { BackupAlarmSettings() }
             if !wide { xWidget }
             } right: {
             Section {
