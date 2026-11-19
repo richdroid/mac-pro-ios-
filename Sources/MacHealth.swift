@@ -399,6 +399,8 @@ struct MacHealthView: View {
     @State private var away = false
     @State private var fixing: Date?
     @State private var fixNote: String?
+    @State private var quitting: Int?
+    @State private var quitNote: String?
     @State private var now = Date()
     @State private var fixingWhat = ""
     // Folded and upright, the parts opened to say what they are; open flat, the one shown in the right pane.
@@ -471,7 +473,7 @@ struct MacHealthView: View {
         return .green
     }
 
-    @ViewBuilder var hero: some View {
+    @ViewBuilder func hero(_ side: Side) -> some View {
         if let line = bannerLine {
             HeroCard(symbol: line.symbol, color: line.color, title: line.title, detail: line.detail) {
                 if watch.stuck(now) { Button("Stop waiting") { withAnimation(Motion.quick) { watch.done() } }.buttonStyle(.bordered) }
@@ -487,7 +489,9 @@ struct MacHealthView: View {
         } else if badGroups.isEmpty {
             HeroCard(symbol: "checkmark.circle.fill", color: .green, title: "Everything’s running", detail: nil) { EmptyView() }
         } else {
-            VStack(spacing: 16) { ForEach(badGroups) { g in problem(g) } }
+            // Open flat the right pane says the part whole with its fix, so the hero beside it only names it (designer
+            // gate, 2026-11-19: the right pane repeated the hero).
+            VStack(spacing: 16) { ForEach(badGroups) { g in problem(g, actions: side != .left) } }
         }
     }
     // A part that needs a look: its name, what's wrong, and the one thing to do, on its button.
@@ -496,23 +500,49 @@ struct MacHealthView: View {
         let fixable = parts(g).contains { $0.bad && MacParts.fixable.contains($0.part) }
         return !fixable && (["stuck", "memory"].contains(p?.part ?? "") || p.flatMap { MacParts.hand($0.part) } == nil)
     }
-    func problem(_ g: MacGroup) -> some View {
+    // What's said under a part that needs a look, beyond its state: what he can do himself.
+    func note(_ g: MacGroup) -> String? {
         let p = parts(g).first(where: \.bad)
         let fixPart = parts(g).first { $0.bad && MacParts.fixable.contains($0.part) }
         let hand = p.flatMap { MacParts.hand($0.part) }
         // The Restart button says what it does; a hand line that only says "restarting clears this" isn't said again.
-        let note: String? = startingWindow || fixPart != nil ? nil : needsRestart(g) && p?.part == "stuck" ? nil : hand ?? "A restart may bring it back."
-        return HeroCard(symbol: g.symbol, color: startingWindow ? .orange : .red, title: g.name,
-                        detail: p.map { (startingWindow ? "Still starting: " : "") + MacGroup.human(g, $0) },
-                        note: note, tintDetail: true) {
-            if !startingWindow {
-                if let fixPart {
-                    Button { Task { await fix() } } label: { Text(MacGroup.fixLabel(fixPart.part)) }
-                        .buttonStyle(.borderedProminent).tint(macBlue)
-                } else if needsRestart(g) {
-                    restartAction
-                }
+        return startingWindow || fixPart != nil ? nil : needsRestart(g) && p?.part == "stuck" ? nil : hand ?? "A restart may bring it back."
+    }
+    // A program that isn't responding, open on the Mac, that quitting would clear without a restart.
+    func stuckApp(_ g: MacGroup) -> Status.App? {
+        guard let p = parts(g).first(where: { $0.bad && $0.part == "stuck" }), let c = p.say.components(separatedBy: ";").first?.range(of: ": ") else { return nil }
+        let names = String(p.say.components(separatedBy: ";").first![c.upperBound...]).components(separatedBy: ", ")
+        return names.lazy.compactMap { n in model.status?.apps.first { $0.mem != nil && $0.name.caseInsensitiveCompare(n) == .orderedSame } }.first
+    }
+    // The part's one thing to do: its fix; for one program hung, quitting it first and Restart second (designer gate,
+    // 2026-11-19: Restart the Mac was offered for a single hung app); else Restart.
+    @ViewBuilder func actions(_ g: MacGroup) -> some View {
+        let fixPart = parts(g).first { $0.bad && MacParts.fixable.contains($0.part) }
+        if !startingWindow {
+            if let fixPart {
+                Button { Task { await fix() } } label: { Text(MacGroup.fixLabel(fixPart.part)) }
+                    .buttonStyle(.borderedProminent).tint(macBlue)
+            } else if needsRestart(g) {
+                if let a = stuckApp(g) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button { Task { quitting = a.pid; quitNote = await model.run("app-quit", ["pid": a.pid]).map { "Didn’t quit: " + $0 }; await model.refresh(); quitting = nil } } label: {
+                            HStack(spacing: 6) { Text("Quit \(a.name)"); if quitting == a.pid { ProgressView().controlSize(.small) } }
+                        }
+                        .buttonStyle(.borderedProminent).tint(macBlue).disabled(quitting != nil)
+                        if let quitNote { Text(quitNote).font(.footnote).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+                        restartAction
+                    }
+                } else { restartAction }
             }
+        }
+    }
+    func problem(_ g: MacGroup, actions shown: Bool = true) -> some View {
+        let p = parts(g).first(where: \.bad)
+        return HeroCard(symbol: g.symbol, color: startingWindow ? .orange : .red, title: g.name,
+                        // Open flat the right card says what's wrong; the hero beside it only names the part (third gate).
+                        detail: shown ? p.map { (startingWindow ? "Still starting: " : "") + MacGroup.human(g, $0) } : nil,
+                        note: shown ? note(g) : nil, tintDetail: true) {
+            if shown { actions(g) }
         }
     }
     // The one way to a restart, in one look wherever it is: red, bordered.
@@ -580,6 +610,11 @@ struct MacHealthView: View {
                 if ls.isEmpty || isBad(g) || down {
                     Text(stateLine(g)).foregroundStyle(isBad(g) && !down ? dot(g) : Color.primary).fixedSize(horizontal: false, vertical: true)
                 }
+                // Open flat, the part that needs a look is said whole here with its fix; the hero beside it only names it.
+                if panes, isBad(g), !down, report != nil {
+                    if let n = note(g) { Text(n).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                    actions(g).padding(.top, 4)
+                }
                 // While the Mac is away what the links last said is last known, never current.
                 let lastKnown = down || links.away
                 // A part that is down says so once above; its links' rows beside it could disagree (and did, on a part named
@@ -620,7 +655,7 @@ struct MacHealthView: View {
                     // The page's usual room under its name (the list's 16 pt put the hero 20 pt under it against 43 elsewhere).
                     .listSectionSpacing(.custom(33))
                 if side != .right {
-                    Section { hero }
+                    Section { hero(side) }
                         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
                     if let fixNote { Section { FailText(fixNote) } }
                     Section {
@@ -756,7 +791,8 @@ struct MacHealthView: View {
         case "health", "healthmemory": return (r([:]), false)
         case "healthbad": return (r(two), false)
         // One part that needs his hands, as in Richard's screenshot of 2026-11-12: named in the card, first in the list.
-        case "healthone", "chipbad": return (r(["stuck": "1 program stuck: Safari; a restart clears it"]), false)
+        // Google Chrome: a program open in the build's Mac, so the page can offer to quit it.
+        case "healthone", "chipbad": return (r(["stuck": "1 program stuck: Google Chrome; a restart clears it"]), false)
         case "healthfixing": return (r(two), true)
         case "healthstuck", "didntconfirm": return (r([:]), false)
         case "healthback": return (r(["sessions": "3 of 6 kept running · 2 others"], fixed: ["letterboxd": "Sign-in relay started"]), false)

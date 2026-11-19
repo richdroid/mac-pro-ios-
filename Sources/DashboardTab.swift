@@ -16,7 +16,7 @@ struct DashboardTab: View {
     @ObservedObject private var tv = ConsoleSummary.shared.tv
     @Environment(\.openURL) private var openURL
     @ObservedObject private var watch = RestartWatch.shared
-    @Environment(\.horizontalSizeClass) private var size
+    @ObservedObject private var health = HealthSummary.shared
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -166,6 +166,15 @@ struct DashboardTab: View {
     static func shorter(_ f: String?) -> [String] {
         switch f { case "All running": ["Running"]; case "Up to date": ["Current"]; case "Restarting": ["Restart"]; default: [] }
     }
+    func everything(_ bad: Int?) -> TileData {
+        let open = { model.macPage = .health }
+        if watch.active { return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: "Restarting", line: "Getting everything up", page: "everything", open: open) }
+        guard let n = bad, n > 0 else {
+            return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: bad.map { _ in "All running" }, line: bad.map { _ in checkedLine }, good: bad.map { _ in true }, page: "everything", open: open)
+        }
+        let w = health.say(n)
+        return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: w.figure, line: w.line, good: false, alts: w.alts, figs: w.figs, page: "everything", open: open)
+    }
     var tileData: [TileData] {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net
         let temps = store.live?.temps ?? s.temps ?? []
@@ -182,15 +191,17 @@ struct DashboardTab: View {
         var t: [TileData] = [
             // CPU and Memory as on Status, each opening its own history by the same name ("Mac Pro" opened a page called CPU).
             TileData(id: "cpu", title: "CPU", symbol: "gauge.with.dots.needle.67percent", figure: "\(cpu.total)%", line: String(format: "Load %.2f", (store.live?.load ?? s.load).first ?? 0), page: "overview") { model.history = .cpu },
-            TileData(id: "memory", title: "Memory", symbol: "memorychip", figure: "\(memPct)%", line: "\(Format.bytes(mem.used)) of \(Format.bytes(mem.total))", page: "overview") { model.history = .memory },
+            TileData(id: "memory", title: "Memory", symbol: "memorychip", figure: "\(memPct)%", line: "\(Format.bytes(mem.used)) of \(Format.bytes(mem.total))", alts: [Format.bytes(mem.used)], page: "overview") { model.history = .memory },
             // Named as the page it opens, so the fans are findable from here (Richard, 2026-11-13: "fan speed").
             TileData(id: "temps", title: "Fans & heat", symbol: "thermometer.medium", figure: warmest.map { MacConsole.degrees($0.c) },
                      line: verdict.map { v in v == "Normal" || near == nil ? warmest.map { "\($0.name), the warmest" } ?? v : "\(v) · \(near!.name) \(MacConsole.degrees(near!.c))" } ?? warmest.map { "\($0.name), the warmest" },
-                     good: verdict.map { $0 == "Normal" }, page: "temps") { model.macPage = .fans },
-            TileData(id: "everything", title: "Everything", symbol: "checklist", figure: watch.active ? "Restarting" : bad.map { $0 == 0 ? "All running" : "\($0)" }, line: watch.active ? "Getting everything up" : bad.map { $0 == 0 ? checkedLine : $0 == 1 ? "part needs a look" : "parts need a look" }, good: watch.active ? nil : bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
-            TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", page: "overview") { model.history = .download },
+                     good: verdict.map { $0 == "Normal" }, alts: [verdict == nil || verdict == "Normal" || near == nil ? warmest?.name : near?.name].compactMap { $0 }, page: "temps") { model.macPage = .fans },
+            // One part down is named ("Programs", "needs a look"), two or more named as a count always is; the count alone
+            // until the Mac's report agrees with it (designer gate, 2026-11-19: "1 / part needs a look" named nothing).
+            everything(bad),
+            TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", alts: ["down"], page: "overview") { model.history = .download },
             TileData(id: "processes", title: "Processes", symbol: "cpu", figure: top.map { "\(Int($0.cpu.rounded()))%" }, line: top?.name, page: "processes") { model.processes = .cpu },
-            TileData(id: "storage", title: "Storage", symbol: "internaldrive", figure: Format.bytes(s.disk.free), line: "free of \(Format.bytes(s.disk.total))", page: "storage") { model.macPage = .storage },
+            TileData(id: "storage", title: "Storage", symbol: "internaldrive", figure: Format.bytes(s.disk.free), line: "free of \(Format.bytes(s.disk.total))", alts: ["free"], page: "storage") { model.macPage = .storage },
         ]
         // The tiles from the Mac's own pages hold their places from the first draw, a dash until they're read, and go
         // only for a Mac whose bridge hasn't the feed: arriving a moment late, they moved the tiles after them (CI 68b580c).
@@ -216,16 +227,18 @@ struct DashboardTab: View {
             t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, alts: [ep ?? song].compactMap { $0 }, page: "tv", open: tvOpen))
         } else if !tv.unsupported { t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", page: "tv", open: tvOpen)) }
         if let w = s.usage.plan?.sevenDay {
-            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, page: "activity") { model.tab = 2 })
+            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, alts: ["of the week"], page: "activity") { model.tab = 2 })
         }
         return t
     }
 
-    // The same tiles as Status's (WebTile), two across folded and three open, each opening the phone's page for it.
+    // The same tiles as Status's (WebTile), each opening the phone's page for it: two across where a tile would be narrower
+    // than 175 pt (folded upright, a pane open flat), three where there's room (open upright, and folded on its side, where
+    // two across made the short page twice as long to scroll). Chosen from the width in the one layout pass (TileGrid),
+    // never read back afterwards, so the first frame is already the right grid.
     var tiles: some View {
         Section {
-            let cols = size == .regular ? 3 : 2
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: cols), spacing: 12) {
+            TileGrid {
                 ForEach(tileData) { d in
                     WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open, details: d.alts, figures: d.figs.isEmpty ? Self.shorter(d.figure) : d.figs)
                 }
@@ -265,16 +278,16 @@ struct DashboardTab: View {
                     // Clear of the header above (it was cut to "oards", CI 68b580c).
                     // In line with the headings, clear of the card's rounded corner (it cut "Boards" to "3oards", CI 64e4a2c).
                     Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20)
-                    chips {
-                        ForEach(ConsolePlace.boards, id: \.id) { b in
+                    ChipRow(ids: ConsolePlace.boards.map { "board." + $0.id }, lit: { running ? st?.board.map { "board." + $0 } : nil }) { id in
+                        if let b = ConsolePlace.boards.first(where: { "board." + $0.id == id }) {
                             let on = running && st?.board == b.id
-                            chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: "board." + b.id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
+                            chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
                         }
                     }
                     Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 4)
-                    chips {
-                        ForEach(ConsolePlace.pages, id: \.id) { p in
-                            chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: "page." + p.id) { remote.send(model, "page:" + p.id, "page", p.id) }
+                    ChipRow(ids: ConsolePlace.pages.map { "page." + $0.id }, lit: { onMac.map { "page." + $0 } }) { id in
+                        if let p = ConsolePlace.pages.first(where: { "page." + $0.id == id }) {
+                            chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: id) { remote.send(model, "page:" + p.id, "page", p.id) }
                         }
                     }
                 }
@@ -301,11 +314,99 @@ struct DashboardTab: View {
         .disabled(!running)
         .opacity(running ? 1 : 0.4)
     }
-    // A row of chips that scrolls sideways out to the display's edges, its first chip lined up with the cards.
-    // The first chip in line with the headings; the row fades out at its end rather than cutting a chip in half.
-    func chips<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) { content() } }
-            .contentMargins(.horizontal, 20, for: .scrollContent)
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+}
+
+// A row of chips that scrolls sideways out to the display's edges, its first chip in line with the headings, fading out
+// at its end rather than cutting a chip in half; it keeps the lit chip (the page or board on the Mac's screen) in view.
+// Three tries by id failed inside the List row (designer gates on 5fdaedf, b6e8a0b, 8dac002): the lit Storage chip stayed
+// off to the right while the row sat at Home. Inside a List, an .id() in a row is a target of the List's own scroll, so
+// ScrollViewReader.scrollTo moved nothing sideways, and scrollPosition(id:) reads the ForEach's ids, which were the bare
+// page names. So nothing here is found by id: each chip's centre is measured in the row's own space and the row is
+// scrolled to an offset, held in a ScrollPosition. The row watches the Console itself, so it follows a change the Mac
+// makes by itself (Boards take turns) as well as a tap, whatever the List does with the row around it.
+struct ChipRow<C: View>: View {
+    let ids: [String]
+    let lit: () -> String?
+    let chip: (String) -> C
+    init(ids: [String], lit: @escaping () -> String?, @ViewBuilder chip: @escaping (String) -> C) { self.ids = ids; self.lit = lit; self.chip = chip }
+    @ObservedObject private var remote = ConsoleRemote.shared
+    @State private var position = ScrollPosition(x: 0)
+    @State private var mids: [String: CGFloat] = [:]
+    @State private var content: CGFloat = 0
+    @State private var viewport: CGFloat = 0
+    @State private var placed = false
+    static var margin: CGFloat { 20 }
+    // The offset that puts a chip's centre (measured in the row, its 20 pt margins included) mid-view, clamped to the row.
+    static func offset(mid: CGFloat, viewport: CGFloat, content: CGFloat) -> CGFloat {
+        min(max(mid - viewport / 2, 0), max(content - viewport, 0))
+    }
+    func follow() {
+        guard let id = lit(), let mid = mids[id], viewport > 0, content > 0 else { return }
+        let x = Self.offset(mid: mid, viewport: viewport, content: content)
+        if placed { withAnimation(Motion.quick) { position.scrollTo(x: x) } } else { position.scrollTo(x: x); placed = true }
+    }
+    var body: some View {
+        let shown = lit()
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(ids, id: \.self) { id in
+                    chip(id).onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("chiprow")).midX } action: { mids[id] = $0 }
+                }
+            }
+            // Past the last chip, as much room as the fade takes, so the last chip lit can come clear of the fade too.
+            .padding(.leading, Self.margin).padding(.trailing, max(Self.margin, (viewport * 0.14).rounded(.up) + 4))
+            .coordinateSpace(.named("chiprow"))
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { content = $0 }
+        }
+        .scrollPosition($position)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewport = $0 }
+        .onChange(of: shown, initial: true) { follow() }
+        // The first time, in place as soon as the chips are measured; after that only a change of page or width moves it.
+        .onChange(of: mids) { if !placed { follow() } }
+        .onChange(of: viewport) { follow() }
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+    }
+}
+
+// The Dashboard's tiles in even columns: three across when each would be at least 175 pt wide, else two (twelve tiles fill
+// either whole). Every tile in a row is offered the row's height, laid out from the width alone.
+struct TileGrid: Layout {
+    var spacing: CGFloat = 12
+    static func columns(_ width: CGFloat) -> Int { width >= 175 * 3 + 12 * 2 ? 3 : 2 }
+    struct Cache { var width: CGFloat = -1; var rows: [CGFloat] = [] }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache.width = -1 }
+    private func cell(_ width: CGFloat) -> (Int, CGFloat) {
+        let n = Self.columns(width)
+        return (n, max((width - spacing * CGFloat(n - 1)) / CGFloat(n), 0))
+    }
+    private func rows(_ width: CGFloat, _ subviews: Subviews, _ cache: inout Cache) -> [CGFloat] {
+        if cache.width == width { return cache.rows }
+        let (n, w) = cell(width)
+        var r: [CGFloat] = []
+        for (i, v) in subviews.enumerated() {
+            let h = v.sizeThatFits(ProposedViewSize(width: w, height: nil)).height
+            if i % n == 0 { r.append(h) } else { r[r.count - 1] = max(r[r.count - 1], h) }
+        }
+        cache.width = width; cache.rows = r
+        return r
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = proposal.width ?? 400
+        let r = rows(width, subviews, &cache)
+        return CGSize(width: width, height: r.reduce(0, +) + spacing * CGFloat(max(r.count - 1, 0)))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let r = rows(bounds.width, subviews, &cache)
+        let (n, w) = cell(bounds.width)
+        var y = bounds.minY
+        for (row, h) in r.enumerated() {
+            for c in 0..<n {
+                let i = row * n + c
+                guard i < subviews.count else { break }
+                subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (w + spacing), y: y), proposal: ProposedViewSize(width: w, height: h))
+            }
+            y += h + spacing
+        }
     }
 }

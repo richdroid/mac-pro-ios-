@@ -176,6 +176,9 @@ struct OTAOfferSheet: View {
     // As tall as what's in it, measured, so it sits low over the page whatever the posture.
     @State private var height: CGFloat = 430
     var body: some View {
+        // In a scroll view that only moves when it must: turned sideways folded (about 400 pt tall) the sheet can't be as
+        // tall as three or four updates make it, and Update, at its foot, was cut off below the screen with no way to it.
+        ScrollView {
         VStack(spacing: 20) {
             Image(systemName: "arrow.down.circle.fill")
                 .font(.system(size: 52)).foregroundStyle(.white, macBlue)
@@ -213,9 +216,13 @@ struct OTAOfferSheet: View {
         }
         .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 8)
         .frame(maxWidth: 520)
-        .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity)
+        }
+        // Centred in the sheet: on its side folded the rail's strip was taken off one side only, and the content sat off
+        // the sheet's middle by its width (designer gate, 2026-11-19). It's 520 pt at most, clear of the rail either way.
+        .ignoresSafeArea(.container, edges: .horizontal)
+        .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.height(height)])
         .presentationDragIndicator(.visible)
     }

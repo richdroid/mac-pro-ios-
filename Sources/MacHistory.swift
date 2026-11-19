@@ -273,11 +273,15 @@ struct HistoryView: View {
             if panes {
                 // The name first in the left pane, carried unseen in the right so both start level (PaneHeading).
                 FoldSplit {
-                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5); staleLine; readout; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
-                        .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
+                    // 20 pt from the display's edge, on the tabs' title line: the pane's own 14 pt outer air plus 6 (it was
+                    // 20 more, the title at 35; designer gate, 2026-11-19).
+                    // The figure moved to the right pane, where it heads the figures and the period, and gave the chart its
+                    // height: open flat the right pane stood half empty under Processes (designer gate 4, 2026-11-19).
+                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5); staleLine; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
+                        .padding(.leading, 6).padding(.trailing, 20).padding(.top, 4).padding(.bottom, 20)
                 } right: {
                     ScrollView {
-                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false, nudge: 5); range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false, nudge: 5); readout; range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
                             .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
                     }
                     .scrollsUnder()
@@ -286,7 +290,8 @@ struct HistoryView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5).place("title"); staleLine; readout.place("readout"); range.place("range"); chart.frame(height: 260).opacity(stale ? staleDim : 1).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
-                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+                        // 20 pt from the display's edge like every list and tab title (16 put the title at 17).
+                        .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
                 }
                 .scrollsUnder()
                 .keepsPlace("history-\(metric.key)", proxy)

@@ -1036,7 +1036,9 @@ struct WebTile: View {
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
-                if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18) }
+                // One box for every glyph: the thermometer is taller than the name's line and made its tile 1 pt taller than
+                // the tile beside it (designer gate, 2026-11-19).
+                if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18, height: 16) }
                 // Whole, never "Temperatu…" (CI c4f3c64, folded): a little smaller first.
                 Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 0)
@@ -1258,15 +1260,27 @@ struct HeroChips: View {
     @ObservedObject private var summary = HealthSummary.shared
     var openHealth: () -> Void = {}
     // `opens`: the chip is a way in (Health, when parts need a look), and shows it the way a row does.
-    func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String, opens: Bool = false) -> some View {
-        HStack(spacing: 6) { dot(); Text(text).lineLimit(1); if opens { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) } }
+    // `short`: what the chip says when the whole doesn't fit beside the other chip, never an ellipsis (designer gate,
+    // 2026-11-19: folded it read "Programs need…"; now just the part's name beside the orange dot).
+    func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String, short: String? = nil, opens: Bool = false) -> some View {
+        let d = dot()
+        return ViewThatFits(in: .horizontal) {
+            chipFace(d, text, opens: opens, whole: true)
+            if let short { chipFace(d, short, opens: opens, whole: true) }
+            chipFace(d, short ?? text, opens: opens, whole: false)
+        }
+        .accessibilityElement(children: .ignore).accessibilityLabel(text)
+    }
+    func chipFace<D: View>(_ dot: D, _ text: String, opens: Bool, whole: Bool) -> some View {
+        HStack(spacing: 6) { dot; Text(text).lineLimit(1).fixedSize(horizontal: whole, vertical: false); if opens { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) } }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
     // The build's shot of a part that needs a look ("chipbad"), so the chip's way into Everything can be filmed.
     var parts: Int? { MacConsole.pose == "chipbad" ? 1 : healthBad ?? summary.bad }
     var health: (Color, String) {
         func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
-        if let n = parts, n > 0 { return (.orange, look(n)) }
+        // The part named, as the Dashboard's tile names it (designer gate, 2026-11-19).
+        if let n = parts, n > 0 { return (.orange, summary.say(n).chip) }
         let said = alerts ?? []
         if !said.isEmpty {
             let tint: Color = said.contains { $0.level == "critical" } ? .red : .orange
@@ -1290,7 +1304,7 @@ struct HeroChips: View {
         } else {
             HStack(spacing: 8) {
                 if (parts ?? 0) > 0 {
-                    Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1, opens: true) }
+                    Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1, short: parts.map { summary.say($0).short }, opens: true) }
                         .buttonStyle(FlatStyle()).accessibilityHint("Opens Everything on the Mac")
                 } else { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
                 if !fresh {
@@ -1512,6 +1526,9 @@ struct AppsTab: View {
     func say(_ key: String, _ text: String?) {
         guard let text else { return }
         withAnimation(Motion.quick) { failed = (key, text) }; fails += 1
+        // The build's posed failure stays up: folded, the open apps are drawn only once scrolled to, and the shot was
+        // taken before the failure was said, or after it had gone (designer gate, 2026-11-19).
+        if model.pose == "appsfail" { return }
         Task { try? await Task.sleep(nanoseconds: 6_000_000_000); if failed?.text == text { withAnimation(Motion.quick) { failed = nil } } }
     }
     // Quitting, the way the Processes page does it: asked to close first, and Force Quit offered only for an app that
@@ -1520,7 +1537,7 @@ struct AppsTab: View {
     @State private var working: Int?
     func quit(_ a: Status.App, force: Bool) async {
         working = a.pid; defer { working = nil }
-        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { say("\(a.pid)", "\(a.name) didn’t quit: " + e); return }
+        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { say("\(a.pid)", "Didn’t quit: " + e); return }
         // The Mac gives it a few seconds, and so does this: gone from the list says it quit.
         for _ in 0..<5 {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -1534,6 +1551,34 @@ struct AppsTab: View {
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     // Its memory, with its helpers', always; the CPU only while it's doing something, so a list of idle apps isn't a column
     // of "0% CPU" and a busy one stands out. Megabytes under a gigabyte: a few hundred MB read as "0.1 GB" in gigabytes.
+    // Each Mac app's glyph: the Mac doesn't send its apps' icons, so a symbol by name, the same one wherever the app is
+    // listed (open, or in Launch another app), and one plain glyph for an app this doesn't know.
+    static func symbol(_ name: String) -> String {
+        switch name {
+        case "Terminal", "iTerm", "iTerm2": "apple.terminal"
+        case "Finder": "folder"
+        case "Safari": "safari"
+        // Safari's compass is Safari's: other browsers are the globe (designer gate, 2026-11-19).
+        case "Google Chrome", "Firefox", "Arc", "Microsoft Edge", "Brave Browser": "globe"
+        case "Music": "music.note"
+        case "Calendar": "calendar"
+        case "Claude": "sparkle"
+        case "Code", "Visual Studio Code", "Xcode": "chevron.left.forwardslash.chevron.right"
+        case "System Settings", "System Preferences": "gearshape"
+        // Its own dot grid, not the globe-like network glyph beside the browsers (designer gate, 2026-11-19).
+        case "Tailscale": "circle.grid.3x3.fill"
+        case "TextEdit", "Notes": "doc.text"
+        case "VLC", "QuickTime Player", "IINA", "TV": "play.rectangle"
+        case "Messages": "message"
+        case "Mail": "envelope"
+        case "Photos": "photo.on.rectangle"
+        case "Preview": "doc.richtext"
+        case "Activity Monitor": "waveform.path.ecg"
+        case "App Store": "bag"
+        case "Screen Sharing": "rectangle.on.rectangle"
+        default: "app"
+        }
+    }
     static func figures(_ a: Status.App) -> String {
         let mem = Format.memory(a.mem ?? 0), cpu = a.cpu ?? 0
         return cpu >= 1 ? "\(mem) · \(Int(cpu.rounded()))% CPU" : mem
@@ -1557,6 +1602,9 @@ struct AppsTab: View {
                     // dim grey ✕ read as unavailable though it worked (Richard, 2026-11-07: "the greyed out xs when they r
                     // seemingly actionable r confusing and fucked"). Never a swipe (no swipe-to-delete on glass cards).
                     HStack(spacing: 12) {
+                        // A glyph like every other row's: the Mac doesn't send its apps' icons, so each app has a symbol of its
+                        // own, in one box (designer gate, 2026-11-19).
+                        Image(systemName: Self.symbol(a.name)).font(.body).foregroundStyle(macBlue).frame(width: 26, height: 22)
                         VStack(alignment: .leading) {
                             // One line each, so the CPU figure coming and going with each reading never changes the row's height.
                             Text(a.name).lineLimit(1)
@@ -1591,11 +1639,11 @@ struct AppsTab: View {
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
                     .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
                 }
-            }
-            Section {
+                // The last row of the open apps' own card, as Add an app is the last row of the iPhone's apps above: a
+                // card of one row of its own was drawn as a lone capsule under the list (2026-11-18, streamlining).
                 Menu {
                     // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
-                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } }
+                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } label: { Label(name, systemImage: Self.symbol(name)) } }
                 } label: {
                     // Its failure in the label's place for a few seconds, likewise.
                     if let f = failed, f.key == "launch" { Label(f.text, systemImage: "exclamationmark.circle").foregroundStyle(.red).lineLimit(1) }
@@ -1608,7 +1656,7 @@ struct AppsTab: View {
             .task {
                 if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } }
                 // The build's shot of a quit that didn't happen, said under its row.
-                if model.pose == "appsfail", let a = model.status?.apps.first(where: { $0.mem != nil }) { try? await Task.sleep(nanoseconds: 2_000_000_000); say("\(a.pid)", "\(a.name) didn’t quit: the Mac didn’t answer.") }
+                if model.pose == "appsfail", let a = model.status?.apps.first(where: { $0.mem != nil }) { try? await Task.sleep(nanoseconds: 2_000_000_000); say("\(a.pid)", "Didn’t quit: no answer from the Mac") }
             }
         }
     }
@@ -1813,6 +1861,11 @@ struct LimitsSection: View {
             // What went wrong reading the API, said under the dials, without the Mac's "Couldn't read API usage:" lead-in.
             if let a = api, let e = a.error, !APIUsageNotes.refused(e) { Text(APIUsageNotes.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3) }
             if model.apiSetup { APIKeyRow().transition(.opacity) }
+            // The week's one model, said here rather than as a card of one row further down (UsageDetail).
+            if let only = UsageDetail.models(u).first, UsageDetail.models(u).count == 1 {
+                Text("\(modelName(only.key)) · \(Format.count(only.value.tokens)) tokens · \(only.value.messages.formatted()) replies in 7 days")
+                    .font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(2)
+            }
     }
     @ViewBuilder var limitsFooter: some View {
             VStack(alignment: .leading, spacing: 6) {
@@ -1852,7 +1905,8 @@ struct UsageDetail: View {
     @EnvironmentObject var model: AppModel
     let s: Status
     var u: Status.Usage { s.usage }
-    var models: [(key: String, value: Status.ModelTally)] { u.week.models.filter { $0.value.tokens > 0 }.sorted { $0.value.tokens > $1.value.tokens } }
+    var models: [(key: String, value: Status.ModelTally)] { Self.models(u) }
+    static func models(_ u: Status.Usage) -> [(key: String, value: Status.ModelTally)] { u.week.models.filter { $0.value.tokens > 0 }.sorted { $0.value.tokens > $1.value.tokens } }
     func spend(_ x: Status.APIUsage.Spend?) -> String { x.map { "\(LimitsSection.money($0.cost)) · \(Format.count($0.tokens)) tokens" } ?? "–" }
     var body: some View {
         Section("Tokens per hour, last 24 hours") {
@@ -1881,7 +1935,9 @@ struct UsageDetail: View {
                 LabeledContent("This week", value: spend(a.week))
             }
         }
-        if !models.isEmpty {
+        // One model is a line in the Limits card (LimitsSection): its own card was a card of one row (designer gate,
+        // 2026-11-19).
+        if models.count > 1 {
             Section("By model, last 7 days") {
                 // Two lines a model, its figures under its name: one model alone was a one-line row, which the system
                 // draws as a capsule beside the rounded cards (designer, 2026-11-11).
@@ -2438,10 +2494,11 @@ struct ControlTab: View {
         }
     }
     // A row's button with its action's state at the row's end: waiting, then done.
-    func actButton(_ title: String, _ key: String, role: ButtonRole? = nil, _ action: @escaping () -> Void) -> some View {
+    // `glyph`: in the list's icon box, so a card of action rows has one edge for its names (designer gate, 2026-11-19).
+    func actButton(_ title: String, _ key: String, role: ButtonRole? = nil, glyph: String? = nil, _ action: @escaping () -> Void) -> some View {
         Button(role: role, action: action) {
             HStack {
-                Text(title)
+                if let glyph { Label(title, systemImage: glyph) } else { Text(title) }
                 Spacer(minLength: 8)
                 if busy.contains(key) { ProgressView() }
                 else if ticked.contains(key) { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(.green).transition(.opacity).accessibilityLabel("Done") }
@@ -2458,6 +2515,15 @@ struct ControlTab: View {
         if model.pose == "controlbusy" { drafts.typed = "correct horse"; busy = ["type"]; fails["forget"] = Self.undone("forget") + Phrase.macAway }
     }
     var locked: Bool { s.screen == "locked" }
+    // The Screen from Control too, as in build 276 (Richard, 2026-11-12), now a row of the login card: its own card of one
+    // row, with a line of gestures the Screen's own guide teaches, was a lone capsule between two cards (2026-11-18,
+    // "the app is a mess and needs to be streamlined"). The login and the Mac's screen are one job: seeing the Mac.
+    var openScreen: some View {
+        // A glyph like every other action row, Status's Screen glyph (designer gate, 2026-11-19: a bare blue line between
+        // a status row and a red one).
+        Button { model.openScreen() } label: { Label("Open Screen", systemImage: "macwindow") }
+            .disabled(model.problem != nil || model.needsSignIn)
+    }
     var displayOn: Bool { s.displayOn ?? (s.screen != "display off") }
     var typingReady: Bool { s.macLogin || s.typing == "trusted" }
 
@@ -2465,19 +2531,21 @@ struct ControlTab: View {
         if side != .right {
             Section {
                 if s.macLogin {
+                    // The dot in the icon box the rows under it use, so the card's three names share one edge (designer
+                    // gate, 2026-11-19: dot, glyph and bare text made three).
                     HStack(spacing: 8) {
-                        Circle().fill(locked ? Color.orange : Color.green).frame(width: 9, height: 9)
-                        Text(locked ? "Locked" : "Logged in")
+                        Label { Text(locked ? "Locked" : "Logged in") } icon: { Circle().fill(locked ? Color.orange : Color.green).frame(width: 9, height: 9) }
                         Spacer()
                         HStack(spacing: 5) { Image(systemName: displayOn ? "sun.max.fill" : "moon"); Text(displayOn ? "Display on" : "Display off") }
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                    openScreen
                     if locked {
-                        actButton("Unlock", "unlock") { act("unlock") { await model.run("mac-unlock") } }
+                        actButton("Unlock", "unlock", glyph: "lock.open") { act("unlock") { await model.run("mac-unlock") } }
                         failLine("unlock")
                     }
-                    actButton("Forget password", "forget", role: .destructive) { confirmForget = true }
+                    actButton("Forget password", "forget", role: .destructive, glyph: "lock.slash") { confirmForget = true }
                         .task { await pose() }
                         .confirmationDialog("Forget the Mac’s password?", isPresented: $confirmForget, titleVisibility: .visible) {
                             Button("Forget password", role: .destructive) { act("forget") { await model.run("mac-logout") } }
@@ -2490,15 +2558,12 @@ struct ControlTab: View {
                         act("login") { await model.runSealed("mac-login", secret: p) }
                     }.disabled(drafts.macPassword.isEmpty && !busy.contains("login"))
                     failLine("login")
+                    openScreen
                 }
-            } header: { Text(s.macLogin ? "Mac login" : "Log in to this Mac") } footer: {
+            } header: { Text(s.macLogin ? "Login and screen" : "Log in to this Mac") } footer: {
                 // As in build 276 (Richard, 2026-11-12: "there should be plenty of info and such everywhere and functions").
                 Text(s.macLogin ? "It stays logged in after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
             }
-            // The Screen from Control too, with how it's worked, as in build 276 (Richard, 2026-11-12).
-            Section {
-                Button("Open Screen") { model.openScreen() }
-            } header: { Text("Screen") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
             SendSection(route: model.route)
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
@@ -2569,7 +2634,7 @@ struct ControlTab: View {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
                 // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
                 ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.os.isEmpty ? (p.online ? "Connected" : "Offline") : "\(p.os) · \(p.online ? "Connected" : "Offline")") }
-                if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
+                if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link(destination: u) { Label("Open public link", systemImage: "globe") } }
             // Named by what it holds, not "Remote access" (Status has a card of that name with other rows) nor the
             // plumbing's name (designer, 2026-11-18).
             } header: { Text("Reaching the Mac") } footer: {
@@ -2703,14 +2768,40 @@ final class HealthSummary: ObservableObject {
     @Published private(set) var stuck: [String] = []
     // The whole report last read, for Everything's page to open on.
     private(set) var last: MacReport?
+    // The parts the last report says need a look, in its order, for the words that name them.
+    @Published private(set) var badParts: [String]?
     func set(_ r: MacReport?) {
-        if let r { last = r }
+        if let r { last = r; let b = r.parts.filter(\.bad).map(\.part); if b != badParts { badParts = b } }
         let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false }
         var names: [String] = []
         if let p = r?.parts.first(where: { $0.part == "stuck" && $0.bad }), let c = p.say.components(separatedBy: ";").first?.range(of: ": ") {
             names = String(p.say.components(separatedBy: ";").first![c.upperBound...]).components(separatedBy: ", ").filter { !$0.isEmpty }
         }
         if names != stuck { stuck = names }
+    }
+    // The parts that need a look by name (one name for two parts he knows as one, like Remote access), only while the
+    // report counts as many as `n`: the status's count and the report arrive separately, and until they agree the count
+    // is said alone, so a tile or chip never names one part beside a "2" (designer gate, 2026-11-19). The build's poses
+    // name their own report's parts.
+    func names(agreeing n: Int, pose: String = MacConsole.pose) -> [String]? {
+        guard n > 0, let ids = MacHealthView.posed(pose).map({ $0.report.parts.filter(\.bad).map(\.part) }) ?? badParts, ids.count == n else { return nil }
+        var out: [String] = []
+        for id in ids { let k = MacParts.name(id); if !out.contains(k) { out.append(k) } }
+        return out
+    }
+    // "TV needs a look", "macOS patches need a look": the verb agrees with the name's last word.
+    static func needs(_ name: String) -> String {
+        let w = name.split(separator: " ").last.map(String.init) ?? name
+        return w.hasSuffix("s") && !w.hasSuffix("ss") ? "need a look" : "needs a look"
+    }
+    // The words for `n` parts needing a look, the same on Status's chip and the Dashboard's tile: one part by its name,
+    // two or more named as a count always is (MacConsole.named), the bare count only until the report is in.
+    func say(_ n: Int) -> (figure: String, figs: [String], line: String, alts: [String], chip: String, short: String) {
+        let count = (figure: "\(n)", figs: [String](), line: n == 1 ? "part needs a look" : "parts need a look", alts: [String](), chip: "\(n) need\(n == 1 ? "s" : "") a look", short: "\(n) to look at")
+        guard let names = names(agreeing: n) else { return count }
+        if names.count == 1 { return (names[0], ["\(n)"], Self.needs(names[0]), [], names[0] + " " + Self.needs(names[0]), names[0]) }
+        let said = MacConsole.named(names, "need a look")
+        return ("\(n)", [], said, [count.line], said, "\(n) need a look")
     }
     // For Status, from a Mac whose status doesn't carry the count: asked once a minute at most.
     func refresh(_ api: API) {
