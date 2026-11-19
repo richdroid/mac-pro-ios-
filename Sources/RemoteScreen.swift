@@ -43,9 +43,11 @@ final class RemoteScreen: ObservableObject {
     // picture's space was black with only the pointer on it, for up to 0.3 s (the designer's fifth review): the waiting
     // sign stays until this.
     @Published private(set) var pictureShown = false
-    func layerShowedPicture() { if !pictureShown { pictureShown = true } }
+    func layerShowedPicture() { if !pictureShown { pictureShown = true }; if macWaking { macWaking = false } }
     // The bridge found the Mac's display asleep and is waking it ({"waking":true}): the 3 to 12 s before the picture
     // that a week of sessions showed are the Mac waking and signing in, and the wait says so rather than "Connecting…".
+    // Latched until the picture is drawn: dropped at sign-in or on a retry, the line went back to "Connecting…" or
+    // through a blank frame to "Waiting…" (the designer's gate, 2026-11-19).
     @Published private(set) var macWaking = false
     @Published var size = CGSize.zero
     // Where the Mac's pointer should be. Not published: it changes at the touch rate, and a published value redrew the
@@ -284,7 +286,7 @@ final class RemoteScreen: ObservableObject {
         // The new connection starts from the last picture, so it fills in over it, never over black.
         let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline, deep: Self.deepColour, seed: hasPicture ? self.decoder?.snapshot().0 : nil)
         self.decoder = decoder
-        running = true; rememberedSpeed = false; macWaking = false; phase = hasPicture ? .reconnecting : .connecting
+        running = true; rememberedSpeed = false; phase = hasPicture ? .reconnecting : .connecting
         watchSlowReconnect()
         task.resume()
         // A connection that hasn't started the picture in 14 s is given up and tried again, rather than left waiting for
@@ -695,7 +697,7 @@ final class RemoteScreen: ObservableObject {
     // How much of the first whole picture is in, for the wait before it's shown.
     var firstPictureProgress: Double? { decoder?.wholeProgress }
     // For the build's shot of the screen when the Mac isn't logged in.
-    func showNeedsLogin() { wanted = false; sample = nil; hasPicture = false; phase = .needsLogin }
+    func showNeedsLogin() { wanted = false; sample = nil; hasPicture = false; macWaking = false; phase = .needsLogin }
     func type(_ text: String) {
         for scalar in text.unicodeScalars { key(scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value) }
     }

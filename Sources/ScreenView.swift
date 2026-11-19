@@ -1341,9 +1341,10 @@ struct RemoteScreenView: View {
                 let part = screen.phase != .connected ? 0 : min(max(screen.firstPictureProgress ?? 0, 0), 1)
                 let long = screen.phase == .connected && ctx.date.timeIntervalSince(shownAt) > 4
                 VStack(spacing: 10) {
-                    // The display asleep, the bridge says so, and the wait names it until the Mac has signed in.
-                    let waking = screen.macWaking && screen.phase != .connected
-                    Text(long ? "Waiting for the Mac’s screen…" : waking ? "Waking the Mac…" : "Connecting…").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                    // The display asleep, the bridge says so, and once said the wait names it until the picture is drawn,
+                    // ahead of "Waiting…", so the line never flips back.
+                    let waking = screen.macWaking
+                    Text(waking ? "Waking the Mac…" : long ? "Waiting for the Mac’s screen…" : "Connecting…").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
                         .contentTransition(.opacity).animation(Motion.fade, value: long).animation(Motion.fade, value: waking)
                     ProgressView(value: part).tint(.white).frame(width: 150)
                         .animation(Motion.quick, value: part)
