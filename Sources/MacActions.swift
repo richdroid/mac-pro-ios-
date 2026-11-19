@@ -186,7 +186,7 @@ enum MacActionChoice: String, AppEnum {
     case status, health, fix, temps, updates, usage, rebootSafe, shipStatus, testQuick, chumbyNightOn, chumbyNightOff, emptyTrash, clearCaches
     static var typeDisplayRepresentation: TypeDisplayRepresentation = "Mac Pro action"
     static var caseDisplayRepresentations: [MacActionChoice: DisplayRepresentation] = [
-        .status: "Everything at a glance", .health: "Everything on the Mac", .fix: "Fix what’s down", .temps: "Temperatures",
+        .status: "Everything at a glance", .health: "Everything", .fix: "Fix what’s down", .temps: "Fans & heat",
         .updates: "Updates", .usage: "Claude usage", .rebootSafe: "Safe to restart?", .shipStatus: "TestFlight status",
         .testQuick: "Translator quick tests", .chumbyNightOn: "Chumby night mode on", .chumbyNightOff: "Chumby night mode off",
         .emptyTrash: "Empty the Trash", .clearCaches: "Clear app caches",
