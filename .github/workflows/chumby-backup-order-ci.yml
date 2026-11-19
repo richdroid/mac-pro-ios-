@@ -31,7 +31,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | grep -E "error:|BUILD" | tail -40
       - name: Stills
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: |
           set +e
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
@@ -39,16 +39,15 @@ jobs:
           xcrun simctl boot "$DEVICE"; xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
           node ci/mock-chumby.js &
-          sleep 2
-          for P in backup none; do
-            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 4 -pose $P
-            sleep 8
-            xcrun simctl io "$DEVICE" screenshot --display=1 dist/tinker-$P-d1.png
+          sleep 5
+          for M in light dark; do
+            xcrun simctl ui "$DEVICE" appearance $M
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 4 -pose backup
+            sleep 30
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/tinker-backup-$M-d1.png
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby
+            sleep 3
           done
-          xcrun simctl ui "$DEVICE" appearance dark
-          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 4 -pose backup
-          sleep 8; xcrun simctl io "$DEVICE" screenshot --display=1 dist/tinker-backup-dark-d1.png
           ls -la dist
       - name: Publish
         if: always()
