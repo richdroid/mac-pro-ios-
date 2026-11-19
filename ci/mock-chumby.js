@@ -1271,11 +1271,14 @@ function mockScreen(req, sock, slow = false, sleepy = false, video = false) {
         if (msgs.length < 1) return;
         msgs = msgs.subarray(1); stage = 3;
         if (replay) {
+          // As from a Mac whose display was asleep: the bridge says it's waking it, and the Mac's first words come 2.5 s on.
+          const waking = Buffer.from(JSON.stringify({ waking: true }));
+          if (!sock.destroyed) { sock.write(Buffer.from([0x81, waking.length])); sock.write(waking); }
           setTimeout(() => {
             const said = Buffer.from(JSON.stringify({ video: true }));
             if (!sock.destroyed) { sock.write(Buffer.from([0x81, said.length])); sock.write(said); }
             frame(replay[0].data); stamp('server init (video)'); play();
-          }, LAG);
+          }, LAG + 2500);
           continue;
         }
         const init = Buffer.alloc(28);

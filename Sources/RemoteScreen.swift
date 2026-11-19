@@ -44,6 +44,9 @@ final class RemoteScreen: ObservableObject {
     // sign stays until this.
     @Published private(set) var pictureShown = false
     func layerShowedPicture() { if !pictureShown { pictureShown = true } }
+    // The bridge found the Mac's display asleep and is waking it ({"waking":true}): the 3 to 12 s before the picture
+    // that a week of sessions showed are the Mac waking and signing in, and the wait says so rather than "Connecting…".
+    @Published private(set) var macWaking = false
     @Published var size = CGSize.zero
     // Where the Mac's pointer should be. Not published: it changes at the touch rate, and a published value redrew the
     // whole screen view on every sample. Whoever draws the pointer listens through `cursorChanged` instead.
@@ -281,7 +284,7 @@ final class RemoteScreen: ObservableObject {
         // The new connection starts from the last picture, so it fills in over it, never over black.
         let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline, deep: Self.deepColour, seed: hasPicture ? self.decoder?.snapshot().0 : nil)
         self.decoder = decoder
-        running = true; rememberedSpeed = false; phase = hasPicture ? .reconnecting : .connecting
+        running = true; rememberedSpeed = false; macWaking = false; phase = hasPicture ? .reconnecting : .connecting
         watchSlowReconnect()
         task.resume()
         // A connection that hasn't started the picture in 14 s is given up and tried again, rather than left waiting for
@@ -368,6 +371,7 @@ final class RemoteScreen: ObservableObject {
         if let on = o["pixelScroll"] as? Bool { pixelScrollAvailable = on }
         // Said before the Mac's first words, so the decoder knows what's coming before it reads them.
         if o["video"] as? Bool == true, Self.videoWanted { decoder?.useVideo() }
+        if o["waking"] as? Bool == true, !macWaking { macWaking = true }
         if let token = o["resume"] as? String { resumeToken = token }
         if o["resumed"] as? Bool == true, resuming === task {
             // Back on the same session: the picture never went, so there's nothing to show but the picture.

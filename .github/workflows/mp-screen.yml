@@ -2,7 +2,7 @@ name: Mac Pro Screen shots
 # Temporary, branch-only: the Mac Pro app's Screen view streaming the Mac as video (the bridge's H.264 path, replayed by
 # the stand-in on 9014 from a stream the bridge's own helper made), in every posture: folded upright and on its side,
 # open upright and open flat, the posture changed while it streams, and the lossless pictures beside it for comparison.
-# For the mp-screen branch's gate. Published to the mp-screen release. Removed before merge.
+# The video stand-in wakes the Mac first ({"waking":true}, 2.5 s). For the mp-screen branch's gate. Published to the mp-screen release. Removed before merge.
 on:
   push:
     branches: [mp-screen]
@@ -64,7 +64,10 @@ jobs:
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${PORT:-9014} -tab 0 -pose screenslow -openScreen YES -showFPS YES "$@"
-            sleep 8
+            # The video stand-in's Mac wakes for 2.5 s first: the wait should say "Waking the Mac…" here.
+            sleep 3.2
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-waking.png
+            sleep 4.8
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
             sleep $length
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
