@@ -76,6 +76,9 @@ jobs:
             shot session$x $d 9 -tab 2 -pose session
             shot macos$x $d 8 -tab 4
             shot settings$x $d 8 -tab 9
+            # Settings is the system's gear in the bar on every tab (plan 2a): tapped from the Dashboard and from macOS.
+            film settings-gear$x $d 3 "tap Settings" -tab 6
+            film settings-gear-macos$x $d 3 "tap Settings" -tab 4
             shot everything$x $d 9 -tab 6 -pose health
             shot everything-one$x $d 9 -tab 6 -pose healthone
             # The Dashboard with one part down: the Everything tile names it.
@@ -137,6 +140,10 @@ jobs:
           film rail-land 1 2 "tap Dashboard;tap Control;tap macOS;tap Claude;tap Apps;tap Status;tap Dashboard;tap tile.CPU;tap Dashboard" -tab 0
           # Turned with a tab under the system's More before (Dashboard): on its side and back, the tab stays in front.
           film rail-turn 1 3 "rotate 3;rotate 1" -tab 6
+          # The gear on its side, beside the drawn rail, from two tabs; and Settings itself there.
+          film settings-gear-land 1 3 "tap Settings" -tab 6
+          film settings-gear-control-land 1 3 "tap Settings" -tab 5
+          shot settings-land 1 8 -tab 9
           # The update offer with two apps ready is taller than the screen on its side: scrolled to its Update button.
           film otaoffer-land 1 3 "drag 0.5 0.8 0.5 0.3 0.4" -tab 1 -pose otaoffer
           $D "$DEVICE" rotate 3; sleep 5

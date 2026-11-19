@@ -22,7 +22,7 @@ struct ConsoleState: Codable, Equatable {
 
 enum ConsolePlace {
     static let pages: [(id: String, name: String, symbol: String)] = [
-        ("home", "Home", "house"), ("overview", "Mac Pro", "gauge.with.dots.needle.67percent"), ("temps", "Temperatures", "thermometer.medium"),
+        ("home", "Home", "house"), ("overview", "Mac Pro", "gauge.with.dots.needle.67percent"), ("temps", "Fans & heat", "thermometer.medium"),
         ("everything", "Everything", "checklist"), ("activity", "What’s happening", "clock.arrow.circlepath"), ("processes", "Processes", "cpu"),
         ("tv", "Google TV", "tv"), ("chumby", "Chumby", "alarm"), ("storage", "Storage", "internaldrive"),
         ("startup", "Startup", "power"), ("updates", "Updates", "arrow.down.circle"), ("logs", "Logs", "doc.text.magnifyingglass"),
@@ -236,60 +236,63 @@ enum MacMirror {
     }
 }
 
-// "Show on Mac": the page he is on, put on the Mac's Console (started first when it isn't open). The button says what the
-// Console answered: a tick when it acked, a mark and the reason when it didn't.
-struct ShowOnMacButton: View {
-    @EnvironmentObject var model: AppModel
-    let page: String
-    @State private var phase = 0   // 0 idle, 1 waiting, 2 acked, 3 failed
-    @State private var why: String?
-    @Environment(\.compactWindow) private var folded
-    var body: some View {
-        Button { go() } label: {
-            HStack(spacing: 6) {
-                Group {
-                    switch phase {
-                    case 1: ProgressView()
-                    case 2: Image(systemName: "checkmark").foregroundStyle(.green)
-                    case 3: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-                    default: Image(systemName: "arrow.up.forward.app").foregroundStyle(macBlue)
-                    }
-                }
-                .font(.title2).frame(width: 28, height: 44)
-                // Open postures have the room to say what it does; folded keeps the glyph alone.
-                if !folded {
-                    Text(phase == 2 ? "Shown" : phase == 3 ? "Not shown" : "Show on Mac")
-                        .font(.subheadline.weight(.medium)).foregroundStyle(phase == 3 ? .orange : phase == 2 ? .green : macBlue)
-                        .lineLimit(1).fixedSize()
-                }
+
+// The Mac follows the phone (plan 2b; Richard, 2026-11-19: "show on mac buttons r out of place and the latter is dumb").
+// While the app is in front, the page he settles on (about a second, once per change) is told to the Console as a
+// "follow", never a "show": the Console turns to it only if it is already on screen with nothing he left running on it,
+// and never starts itself or wakes the display (its side enforces that; nothing here ever sends a start). The ids are
+// the ones "Show on Mac" sent. The Dashboard's chips stay the one deliberate push.
+enum MacFollow {
+    static let defaultsKey = "macFollows"
+    // The Console page for where he is, or nil where there's none to follow to (the Dashboard itself, Settings, Control's
+    // own list, a restart).
+    @MainActor static func page(tab: Int, nav n: NavStore) -> String? {
+        if n.settingsOpen && n.settingsTab == tab { return nil }
+        func of(_ p: MacPage?) -> String? {
+            switch p {
+            case .health: "everything"
+            case .fans: "temps"
+            case .updates: "updates"
+            case .storage: "storage"
+            case .startup: "startup"
+            default: nil
             }
-            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(phase == 1)
-        .accessibilityLabel("Show on the Mac")
-        // The build's films of the button: pressed by itself, a moment after the page is up, and answered well or badly.
-        .task { if ["showonmacfilm", "showonmacfail"].contains(model.pose), page == "overview" || page == "updates" { try? await Task.sleep(nanoseconds: 3_000_000_000); go() } }
-        // The reason at the button, not a modal over the page: the button already says "Not shown".
-        .popover(isPresented: Binding(get: { why != nil }, set: { if !$0 { why = nil } })) {
-            Text(why ?? "").font(.subheadline).padding(14).frame(maxWidth: 280).presentationCompactAdaptation(.popover)
+        func of(_ h: HistoryMetric?) -> String { h?.kind == .temperature ? "temps" : "overview" }
+        switch tab {
+        case 0: return n.processes != nil ? "processes" : of(n.history)
+        case 1, 2: return "activity"
+        case 4: return "updates"
+        case 5: return of(n.macPage)
+        case 6:
+            if n.dashProcesses != nil { return "processes" }
+            if let h = n.dashHistory { return of(h) }
+            return of(n.dashPage)
+        default: return nil
         }
     }
-    func go() {
-        phase = 1
-        Task {
-            var e: String?
-            if model.pose.isEmpty {
-                if (try? await model.api.consoleState())??.running != true { e = await model.api.consoleCommand("show").error }
-                if e == nil { e = await model.api.consoleCommand("page", page).error }
-            } else {
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                if model.pose == "showonmacfail" { e = "The Console didn’t answer. Is the Mac asleep?" }
+}
+// Watches where he is and tells the Mac, settled and only on a change. Drawn as nothing, beside the tabs.
+struct MacFollower: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var nav: NavStore
+    @Environment(\.scenePhase) private var phase
+    @AppStorage(MacFollow.defaultsKey) private var on = true
+    @State private var sent: String?
+    var body: some View {
+        let page = on && phase == .active ? MacFollow.page(tab: model.tab, nav: nav) : nil
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .task(id: page) {
+                // Nowhere to follow to (away, following off, or a page the Console hasn't): the next page is said even if
+                // it's the last one again, since the Mac may have moved meanwhile (the Dashboard's chips, the desk).
+                guard let page else { sent = nil; return }
+                guard page != sent else { return }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                sent = page
+                _ = await model.api.consoleCommand("follow", page)
             }
-            withAnimation(Motion.quick) { phase = e == nil ? 2 : 3 }
-            if let e { why = e }
-            try? await Task.sleep(nanoseconds: 1_800_000_000)
-            withAnimation(Motion.quick) { phase = 0 }
-        }
     }
 }

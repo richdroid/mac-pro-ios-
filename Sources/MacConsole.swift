@@ -352,7 +352,7 @@ struct ConsolePage<Left: View, Right: View>: View {
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false, onMac: ["macfans": "temps", "macupdates": "updates", "macstorage": "storage", "macstartup": "startup"][place]) }
+                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if away, side != .right { Section { StaleLine(lastRead: lastRead) } }
                 Group {

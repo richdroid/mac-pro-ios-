@@ -539,10 +539,11 @@ struct RootView: View {
             // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
             // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
             let n = model.nav
-            let open = (t == 0 && (n.history != nil || n.processes != nil || n.settingsOpen)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
+            let open = (n.settingsOpen && n.settingsTab == t) || (t == 0 && (n.history != nil || n.processes != nil)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
                 || (t == 6 && (n.dashHistory != nil || n.dashProcesses != nil || n.dashPage != nil))
             if open {
-                if t == 0 { n.history = nil; n.processes = nil; n.settingsOpen = false }
+                if n.settingsOpen && n.settingsTab == t { n.settingsOpen = false }
+                if t == 0 { n.history = nil; n.processes = nil }
                 if t == 1 { n.appHistory = nil }
                 if t == 2 { n.sessionScreen = nil }
                 if t == 5 { n.macPage = nil }
@@ -585,6 +586,8 @@ struct RootView: View {
                 Task { await model.refresh() }
             }
         }
+        // The Mac's Console follows the page he's on (MacFollow).
+        .background { MacFollower(nav: model.nav) }
         // The whole window, keyboard or not, so typing never reads as a turn.
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { Self.isSideways($0.size) } action: { sideways = $0 } }
         .onAppear { MacPrefs.shareWithWidgets(); AppBadge.set(updateCount) }
@@ -653,8 +656,6 @@ struct PaneHeading: View {
     // false in a List row: the list's top margin gives the room (PaneHeading.roomAbove), since inside the row it pushed the
     // title into the row's rounded corner and notched its first letter (CI d9c229c: the F of Fans, the M of Mac).
     var roomAbove = true
-    // The Console page that shows the same thing, for "Show on Mac" beside the name.
-    var onMac: String? = nil
     // Where a page's own structure leaves its title off the others' line (CI 9e5c096, measured): always, or only where
     // the clock is on the side (folded and open flat).
     var nudge: CGFloat = 0
@@ -664,8 +665,6 @@ struct PaneHeading: View {
         HStack(alignment: .center) {
             Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 8)
-            // Drawn unseen in the pane that carries the name unseen, so both title rows are as tall and both first cards level.
-            if let onMac { ShowOnMacButton(page: onMac).padding(.trailing, 4).allowsHitTesting(shown) }
         }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, (roomAbove ? Self.roomAbove(statusBarTop) : 0) + nudge + (statusBarTop < 20 ? nudgeSide : 0))
@@ -889,19 +888,6 @@ struct Screen<Content: View>: View {
         HStack(alignment: .center) {
             Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
             Spacer(minLength: 8)
-            // The same page on the Mac's Console: Status is its overview, macOS its updates.
-            // (Unseen and untouchable in the right pane, which carries the row's height so both panes start level.)
-            if let page = [0: "overview", 4: "updates"][tab] { ShowOnMacButton(page: page).allowsHitTesting(side != .right) }
-            // Settings, beside Status's name, the way the App Store keeps its account by its title.
-            if tab == 0 {
-                Button { model.nav.settingsOpen = true } label: {
-                    Image(systemName: "gearshape").font(.title2).foregroundStyle(macBlue).frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Settings")
-                .padding(.trailing, 4)
-                .allowsHitTesting(side != .right)
-            }
         }
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(side == .right ? 0 : 1)
@@ -944,11 +930,15 @@ struct Screen<Content: View>: View {
             // Laid over both panes at once, so open there's one edge, not one per pane.
             .topEdge()
             .navigationTitle(title)
-            // Large open too, so the page's name leads and its section headings follow. Small in the bar, it sat under
-            // headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05).
-            // No bar title at all, in one pane or two: the page's first line carries the name (paneTitle).
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarVisibility(.hidden, for: .navigationBar)
+            // No bar title at all, in one pane or two: the page's first line carries the name (paneTitle). Small in the
+            // bar it sat under headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05).
+            // The bar is shown for its one item, Settings: the system's gear, placed by iOS (the side strip folded and open
+            // flat, the bar along the top open upright), the same on every tab. It was a gear drawn by hand in Status's
+            // title row (Richard, 2026-11-19: "the settings and show on mac buttons r out of place"; plan 2a).
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(removing: .title)
+            .toolbarVisibility(.visible, for: .navigationBar)
+            .settingsItem { model.nav.settingsTab = tab; model.nav.settingsOpen = true }
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
         .onReceive(model.statusStore.$status) { take($0) }
@@ -957,6 +947,18 @@ struct Screen<Content: View>: View {
             guard t == tab, let s = model.status else { return }
             var still = Transaction(); still.disablesAnimations = true
             withTransaction(still) { shown = s }
+        }
+    }
+}
+extension View {
+    // Settings as the system's own bar item, on every tab's root. Not a tab ("never more tabs").
+    func settingsItem(_ open: @escaping () -> Void) -> some View {
+        toolbar {
+            #if os(iOS)
+            ToolbarItem(placement: .topBarTrailing) { Button(action: open) { Label("Settings", systemImage: "gearshape") } }
+            #else
+            ToolbarItem { Button(action: open) { Label("Settings", systemImage: "gearshape") } }
+            #endif
         }
     }
 }
@@ -978,8 +980,8 @@ struct StackPages: ViewModifier {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
             .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom() }
-            // Settings, behind the gear beside Status's name.
-            .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true).railRoom() }
+            // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom() }
             // All processes, from the tab itself; from a history, that page opens them over itself.
             .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom() }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom() }

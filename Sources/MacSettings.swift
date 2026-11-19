@@ -6,6 +6,7 @@ struct MacSettings: View {
     @AppStorage("accent") private var accent = "blue"
     @AppStorage("celsius") private var celsius = false
     @AppStorage("haptics") private var haptics = true
+    @AppStorage(MacFollow.defaultsKey) private var macFollows = true
     @AppStorage("naturalScroll") private var naturalScroll = true
     @AppStorage("liveEvery") private var liveEvery = 1.0
     @AppStorage("fullEvery") private var fullEvery = 10.0
@@ -97,6 +98,8 @@ struct MacSettings: View {
                 Text("The last tab used").tag(-1)
                 Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5); Text("Dashboard").tag(6)
             }
+            // The Mac's Console turns to the page he's on here, when it's already on screen and free (MacFollow).
+            Toggle("Mac follows this iPhone", isOn: $macFollows)
             Toggle("Haptics", isOn: $haptics)
             Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
             AlertSettings()

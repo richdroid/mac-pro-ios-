@@ -8,6 +8,11 @@ struct TermOption: Identifiable, Equatable { let number: Int; let text: String; 
 @MainActor
 enum TermCache {
     static var screens: [String: API.Term] = [:]
+    // What's typed in a session's box, and whether it had the keyboard as the page went: folded on its side the app's
+    // own tab rail takes over from the system's bar (SideRailTabs), and the page is made anew on the turn, so it takes
+    // both back rather than losing his half-typed message and the keyboard (the session-turn film).
+    static var drafts: [String: String] = [:]
+    static var leftTyping: (key: String, at: Date)?
     static func warm(_ api: API, _ keys: [String]) async {
         for k in keys where !Task.isCancelled {
             if let t = try? await api.termScreen(k) { screens[k] = t }
@@ -46,8 +51,10 @@ struct SessionTerminal: View {
         _text = State(initialValue: kept?.text ?? "")
         _running = State(initialValue: kept?.running ?? true)
         _loaded = State(initialValue: kept != nil)
+        _message = State(initialValue: TermCache.drafts[session.key ?? session.name] ?? "")
     }
     @State private var message = ""
+    @FocusState private var typing: Bool
     @State private var misses = MissClock()
     @State private var note: String?
     // A send that didn't reach the session: said until the next one that does, with what was typed put back in the box.
@@ -272,6 +279,15 @@ struct SessionTerminal: View {
             // Short where the column is narrow (a pane folded on its side), so the placeholder is never cut.
             TextField(width > 0 && width < 300 ? "Message" : "Message the session", text: $message, axis: .vertical)
                 .lineLimit(1...5)
+                .focused($typing)
+                .onChange(of: message) { _, m in TermCache.drafts[key] = m.isEmpty ? nil : m }
+                // Made anew on a turn with the keyboard up: the keyboard comes back with the box. Only straight after (a
+                // page left by Back and opened again later starts without it).
+                .onAppear {
+                    if let t = TermCache.leftTyping, t.key == key, Date().timeIntervalSince(t.at) < 2 { typing = true }
+                    TermCache.leftTyping = nil
+                }
+                .onDisappear { if typing { TermCache.leftTyping = (key, Date()) } }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             Button {
@@ -400,7 +416,8 @@ struct SessionTerminal: View {
     func onItsSide(_ w: CGFloat) -> Bool {
         #if os(iOS)
         guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first?.bounds.size else { return false }
-        return win.width > win.height && w >= 560
+        // 500, not 560: the app's own rail on its side takes its room from the page's safe area (railRoom).
+        return win.width > win.height && w >= 500
         #else
         return false
         #endif

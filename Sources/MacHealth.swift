@@ -489,10 +489,17 @@ struct MacHealthView: View {
         } else if badGroups.isEmpty {
             HeroCard(symbol: "checkmark.circle.fill", color: .green, title: "Everything’s running", detail: nil) { EmptyView() }
         } else {
-            // Open flat the right pane says the part whole with its fix, so the hero beside it only names it (designer
-            // gate, 2026-11-19: the right pane repeated the hero).
-            VStack(spacing: 16) { ForEach(badGroups) { g in problem(g, actions: side != .left) } }
+            // Open flat the right pane says the part whole with its fix, so the hero beside it only names the others; the
+            // one on the right isn't named twice (designer gate, 2026-11-19: the right pane repeated the hero; plan 5.7).
+            VStack(spacing: 16) { ForEach(heroGroups(side)) { g in problem(g, actions: side != .left) } }
         }
+    }
+    // The parts the hero names: all that need a look, less the one the right pane already says whole open flat.
+    func heroGroups(_ side: Side) -> [MacGroup] { side == .left ? badGroups.filter { $0.id != picked?.id } : badGroups }
+    // Open flat with the only part that needs a look said on the right, the hero has nothing of its own to say.
+    func heroEmpty(_ side: Side) -> Bool {
+        bannerLine == nil && !(macAction.map { $0.by == "console" && $0.state == "running" } ?? false) && fixing == nil && report != nil
+            && !badGroups.isEmpty && heroGroups(side).isEmpty
     }
     // A part that needs a look: its name, what's wrong, and the one thing to do, on its button.
     func needsRestart(_ g: MacGroup) -> Bool {
@@ -650,13 +657,15 @@ struct MacHealthView: View {
         return ScrollViewReader { proxy in
             List {
                 // 4 pt lower than the list puts it: it sat 4 pt above every other pushed page's title (CI eb0450b: 51 against 55).
-                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false, onMac: "everything").padding(.top, 4) }
+                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false).padding(.top, 4) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                     // The page's usual room under its name (the list's 16 pt put the hero 20 pt under it against 43 elsewhere).
                     .listSectionSpacing(.custom(33))
                 if side != .right {
-                    Section { hero(side) }
-                        .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+                    if !heroEmpty(side) {
+                        Section { hero(side) }
+                            .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+                    }
                     if let fixNote { Section { FailText(fixNote) } }
                     Section {
                         let gs = groups

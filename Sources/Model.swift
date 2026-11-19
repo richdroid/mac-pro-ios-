@@ -68,7 +68,8 @@ final class NavStore: ObservableObject {
     @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
     @Published var appHistory: String?  // the package (TV.ipa) whose Version History is open on the Apps tab's stack
     @Published var macPage: MacPage?  // Everything on the Mac, or Restart the Mac, on the Control tab's stack
-    @Published var settingsOpen = false  // Settings, behind the gear on Status
+    @Published var settingsOpen = false  // Settings, behind the gear in every tab's bar
+    @Published var settingsTab = 0  // the tab whose stack Settings is pushed on (the one the gear was tapped on)
     // The Dashboard's own stack: the same pages, kept apart from Status's and Control's, so a page opened on one tab never
     // turns up on the other's stack too (two pages pushed at once), and re-tapping either tab only closes its own.
     @Published var dashHistory: HistoryMetric?
@@ -149,7 +150,7 @@ final class AppModel: ObservableObject {
     // last tab used opens it there.
     @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab == 9 ? 0 : AppModel.firstTab {
         didSet {
-            if tab == 9 { tab = 0; nav.settingsOpen = true }
+            if tab == 9 { tab = 0; nav.settingsTab = 0; nav.settingsOpen = true }
             if tab != oldValue { tabSince = Date(); Self.arrivedAt = Date() }
         }
     }
@@ -181,7 +182,7 @@ final class AppModel: ObservableObject {
         // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
         if UserDefaults.standard.integer(forKey: "startTab") == 9 { UserDefaults.standard.set(0, forKey: "startTab") }
-        if Self.firstTab == 9 { nav.settingsOpen = true }
+        if Self.firstTab == 9 { nav.settingsTab = 0; nav.settingsOpen = true }
         let h = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         let p = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).
