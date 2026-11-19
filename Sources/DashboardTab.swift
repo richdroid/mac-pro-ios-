@@ -233,7 +233,10 @@ struct DashboardTab: View {
             // The row runs edge to edge of the card; the header is the system's own, laid out as Control's are (its
             // spacing tuned by hand was 2-9 pt off theirs, designer gate 2026-11-18).
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-        } header: { Text("The Mac") }
+        } header: {
+            // Open flat the tiles have the right pane to themselves and start level with the Console's card on the left.
+            if side == .all { Text("The Mac") }
+        }
     }
 
     // MARK: For the Mac's screen: boards and pages
