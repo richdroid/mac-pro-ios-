@@ -109,7 +109,8 @@ enum BackupPlan {
     // Stopped on the Chumby, as the Mac reports it: only the backup of the ring that began at `at` (within 2 minutes, which
     // a snooze doesn't change) and still ahead goes. No time, or no such backup: nothing is cancelled.
     static func stoppedRing(_ entries: [Entry], now: Date, at: Date?) -> Result {
-        guard let at, let e = entries.first(where: { abs($0.ringAt.timeIntervalSince(at)) <= 120 && $0.fireAt > now })
+        guard let at, let e = entries.filter({ abs($0.ringAt.timeIntervalSince(at)) <= 120 && $0.fireAt > now })
+            .min(by: { abs($0.ringAt.timeIntervalSince(at)) < abs($1.ringAt.timeIntervalSince(at)) })
         else { return Result(entries: entries, cancel: [], add: []) }
         return Result(entries: entries.filter { $0.id != e.id }, cancel: [e], add: [])
     }
