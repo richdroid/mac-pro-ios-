@@ -938,7 +938,7 @@ struct RemoteScreenView: View {
         let rtt = observed.pingRTT.map { " · \(Int($0.rounded())) ms" } ?? ""
         let t = screen.timings
         let f = { (v: Double?) in v.map { String(format: "%.1f s", $0) } ?? "–" }
-        let first = t.map { " · \($0.deep ? 32 : 16)-bit, in \(f($0.signedIn)), first \(f($0.firstPixels)), whole \(f($0.firstPicture)), \($0.firstBytes / 1024) KB" } ?? ""
+        let first = t.map { " · \($0.video ? "video" : "\($0.deep ? 32 : 16)-bit"), in \(f($0.signedIn)), first \(f($0.firstPixels)), whole \(f($0.firstPicture)), \($0.firstBytes / 1024) KB" } ?? ""
         return Text("\(rate.frames) fps shown · \(rate.updates) sent by the Mac · \(RemoteScreen.pipeline) in flight\(rtt) · \(observed.movesPerSecond) moves/s\(first)")
             .font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.white)
             .padding(.horizontal, 8).padding(.vertical, 4)
@@ -1341,8 +1341,11 @@ struct RemoteScreenView: View {
                 let part = screen.phase != .connected ? 0 : min(max(screen.firstPictureProgress ?? 0, 0), 1)
                 let long = screen.phase == .connected && ctx.date.timeIntervalSince(shownAt) > 4
                 VStack(spacing: 10) {
-                    Text(long ? "Waiting for the Mac’s screen…" : "Connecting…").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
-                        .contentTransition(.opacity).animation(Motion.fade, value: long)
+                    // The display asleep, the bridge says so, and once said the wait names it until the picture is drawn,
+                    // ahead of "Waiting…", so the line never flips back.
+                    let waking = screen.macWaking
+                    Text(waking ? "Waking the Mac…" : long ? "Waiting for the Mac’s screen…" : "Connecting…").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                        .contentTransition(.opacity).animation(Motion.fade, value: long).animation(Motion.fade, value: waking)
                     ProgressView(value: part).tint(.white).frame(width: 150)
                         .animation(Motion.quick, value: part)
                 }
