@@ -53,11 +53,8 @@ struct Lip: View {
     @State private var pull: CGFloat = 0
     @State private var place = FrameBox()
     var body: some View {
-        let hand = Hand.shared
         let now = TVNow.read(model)
-        let landed = hand.landed
-        let glow = max(hand.glow, hand.committed ? 1 : 0)
-        let tint = landed?.tint ?? TVLook.accent
+        let landed = Hand.shared.landed
         HStack(spacing: 12) {
             Button { if model.tab != 0 { model.tick(); model.tab = 0 } } label: {
                 HStack(spacing: 12) {
@@ -82,23 +79,18 @@ struct Lip: View {
                 guard now.kind == .starting else { return }
                 pull = max(0, min(28, v.translation.height * 0.5))
             }.onEnded { v in
-                if now.kind == .starting, v.translation.height > 36 { Haptic.fire(.tick); HandLog.note("lip pulled: start called off"); model.clearStart() }
+                if now.kind == .starting, v.translation.height > 36 {
+                    Haptic.fire(.tick); HandLog.note("lip pulled: start called off")
+                    // As holding the play key does it: the TV told to stop what it was bringing up, then the start dropped.
+                    model.post("stop-playing", ["pkg": "com.stremio.one"]); model.clearStart()
+                }
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { pull = 0 }
             })
             trailing(now)
         }
         .padding(.leading, 8).padding(.trailing, 6)
         .frame(height: Self.height)
-        .background {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 18, style: .continuous).fill(tint.opacity(0.10 + 0.30 * Double(glow) + (landed != nil ? 0.25 : 0)))
-                    .opacity(glow > 0 || landed != nil ? 1 : 0)
-                RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(tint.opacity(0.15 + 0.85 * Double(glow)), lineWidth: 1 + 1.5 * glow)
-                    .opacity(glow > 0 || landed != nil ? 1 : 0)
-            }
-            .shadow(color: tint.opacity(0.55 * Double(glow)), radius: 6 + 18 * glow, y: 2 + 6 * glow)
-        }
+        .background { LipGlass() }
         .offset(y: pull)
         .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 6)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
@@ -177,5 +169,25 @@ private struct LipClock: View {
         if let d = session.duration, d > 0 { ms = min(ms, d) }
         let s = Int(max(0, ms) / 1000)
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+// The lip's glass and its glow. The only part of the lip that follows a carried card: it brightens and deepens as the card
+// nears, snaps full over the commit line, and takes the colour of what lands. Its own view, so a carry redraws this alone.
+private struct LipGlass: View {
+    var body: some View {
+        let hand = Hand.shared
+        let landed = hand.landed
+        let glow = max(hand.glow, hand.committed ? 1 : 0)
+        let tint = landed?.tint ?? TVLook.accent
+        let lit = glow > 0 || landed != nil
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(tint.opacity(0.10 + 0.30 * Double(glow) + (landed != nil ? 0.25 : 0)))
+                .opacity(lit ? 1 : 0)
+            RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(tint.opacity(0.15 + 0.85 * Double(glow)), lineWidth: 1 + 1.5 * glow)
+                .opacity(lit ? 1 : 0)
+        }
+        .shadow(color: tint.opacity(0.55 * Double(glow)), radius: 6 + 18 * glow, y: 2 + 6 * glow)
     }
 }

@@ -267,6 +267,7 @@ final class TVModel {
         // The light finishes its lap and the picture becomes the TV's own (the Remote reads `played`).
         withAnimation(.easeOut(duration: 0.3)) { starting?.played = true }
         Haptic.fire(.done)
+        HandLog.note(String(format: "haptic tv-confirmed, %.2f s after the send", Date().timeIntervalSince(st.since)))
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             startEndedAt = Date()

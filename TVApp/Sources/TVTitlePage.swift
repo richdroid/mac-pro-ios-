@@ -163,6 +163,12 @@ struct TitlePage: View {
             }
         }
         .task { await st.load(model) }
+        // Called off while it was still starting (the lip pulled down, or Stop held): the card comes back out of the lip.
+        .onChange(of: model.starting) { was, now in
+            guard now == nil, let w = was, !w.played, !w.failed, let tok = st.sentToken, w.token == tok else { return }
+            st.sentToken = nil
+            carry.dropBack()
+        }
         .onChange(of: model.starting?.failed) { _, f in
             guard f == true, let tok = st.sentToken, model.starting?.token == tok || model.startingAvoid.contains(tok) else { return }
             st.failed.formUnion(model.startingAvoid.union([tok]))
@@ -193,11 +199,9 @@ struct TitlePage: View {
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.12)) }
-        .shadow(color: .black.opacity(carry.phase == .held ? 0.55 : 0.35), radius: carry.phase == .held ? 26 : 16, y: carry.phase == .held ? 16 : 8)
-        .scaleEffect(carry.scale)
-        .rotationEffect(.degrees(carry.tilt))
-        .offset(carry.offset)
-        .opacity(carry.opacity)
+        // The carry is read in a modifier of its own: each frame under his finger redraws the card and nothing else on
+        // the page (not the streams, not the episodes).
+        .modifier(Carried(carry: carry))
         .onGeometryChange(for: CGRect.self) { p in
             // The rest, not where the hand has it.
             p.frame(in: .global)
@@ -434,6 +438,20 @@ struct TitlePage: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, -10)
+    }
+}
+
+// Where the hand has the card: its lift, size, tilt and place, all from the one Carry.
+struct Carried: ViewModifier {
+    let carry: Carry
+    func body(content: Content) -> some View {
+        let held = carry.phase == .held
+        content
+            .shadow(color: .black.opacity(held ? 0.55 : 0.35), radius: held ? 26 : 16, y: held ? 16 : 8)
+            .scaleEffect(carry.scale)
+            .rotationEffect(.degrees(carry.tilt))
+            .offset(carry.offset)
+            .opacity(carry.opacity)
     }
 }
 

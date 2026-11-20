@@ -219,10 +219,11 @@ struct RootView: View {
             }
             return
         }
-        model.browsing = .stremio
         guard pose != "browse", pose != "stremiorow" else { return }
         Task {
-            // The page is loading the same list, so wait for it rather than asking again.
+            // Stremio's rows asked for here (no page of its own loads them now), then the first film or show opened as
+            // its page, through the card's own tap, as a finger would.
+            await BrowseStore.shared(.stremio).load()
             for _ in 0..<40 {
                 if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream", "blurbopen"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
                     // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
