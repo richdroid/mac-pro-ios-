@@ -174,6 +174,9 @@ struct NowStrip: View {
     var tab: Int?
     var panel: Int?
     var push: Ask?
+    // A link to a tab's own root (a section of Start, a chart): any page pushed on that tab is closed first, or the link
+    // changed the section behind an artist's page and seemed to do nothing.
+    var root: Int?
     struct Ask: Equatable { let tab: Int; let go: Go }
 
     // rotation://you, /now, /lately, /story, /charts?period=week, /artist?name=, /album?artist=&album=,
@@ -182,12 +185,12 @@ struct NowStrip: View {
         guard url.scheme == LinkScheme.scheme else { return }
         let q = Dictionary((URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }) { a, _ in a }
         switch url.host() ?? "" {
-        case "you": tab = 0; panel = 0
-        case "now": tab = 0; panel = 1
-        case "lately": tab = 0; panel = 2
-        case "story": tab = 0; panel = 3
+        case "you": tab = 0; root = 0; panel = 0
+        case "now": tab = 0; root = 0; panel = 1
+        case "lately": tab = 0; root = 0; panel = 2
+        case "story": tab = 0; root = 0; panel = 3
         case "charts":
-            tab = 1
+            tab = 1; root = 1
             switch q["period"] ?? "" {
             case "month": ChartsModel.shared.period = .days(30)
             case "year": ChartsModel.shared.period = .days(365)

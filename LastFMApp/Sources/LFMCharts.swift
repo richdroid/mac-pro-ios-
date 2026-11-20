@@ -381,14 +381,15 @@ struct ChartsTab: View {
                 }
                 // The four small figures in one row in every posture: two rows of them folded filled the first screen
                 // before the list he comes for (run 32).
-                HStack(alignment: .top, spacing: S.gap) {
+                // Folded a year's "2,187 h" ran into "533" (run 37): a size smaller there, and more air between them.
+                HStack(alignment: .top, spacing: figuresWidth < 440 ? 16 : S.figures) {
                     ForEach(Array([
                         s.secs.map { (duration($0), "listening") },
                         (number(s.artists), "artists"),
                         (number(s.albums), "albums"),
                         (number(s.tracks), "tracks"),
                     ].compactMap { $0 }.enumerated()), id: \.offset) { _, f in
-                        Figure(value: f.0, label: f.1, size: 24).frame(maxWidth: .infinity, alignment: .leading)
+                        Figure(value: f.0, label: f.1, size: figuresWidth < 440 ? 21 : 24).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }

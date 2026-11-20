@@ -261,11 +261,13 @@ actor HistoryDB {
         let db = HistoryDB.shared
         if pin == 0 || done.isEmpty {
             pin = Int(Clock.now.timeIntervalSince1970)
-            // The first page, asked until it comes (it used to give up on one miss, and the read sat at 0 % until the
-            // app was next opened).
+            // The first page, asked until it comes, however long Last.fm is away: it gave up after eight tries (about
+            // two and a half minutes) while the card went on saying "It carries on by itself".
             var first: J?
-            for tries in 1...8 {
+            var tries = 0
+            while first == nil {
                 if let j = try? await LastFM.shared.call("user.getrecenttracks", ["limit": "200", "page": "1", "to": "\(pin)"], keep: false) { first = j; break }
+                tries += 1
                 stuck()
                 try? await Task.sleep(nanoseconds: UInt64(min(30, pow(2, Double(tries)))) * 1_000_000_000)
             }
@@ -276,6 +278,15 @@ actor HistoryDB {
             done = [Bool](repeating: false, count: max(pages, 0))
             await db.setMeta("pin", "\(pin)"); await db.setMeta("total", "\(total)")
             if pages > 0 { await take(1, parse(j)) }
+            // An account with no plays yet has nothing to read: read in full now, not "reading your history" for ever
+            // (with no pages the read could never be called done).
+            if pages == 0 {
+                complete = true; coveredFrom = 0
+                await db.setMeta("complete", "1")
+                save()
+                onProgress?()
+                return
+            }
         }
         // The pages still to read, in order; four readers take the next one each as they finish.
         nextPage = 0

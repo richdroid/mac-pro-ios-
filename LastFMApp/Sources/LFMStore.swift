@@ -72,6 +72,9 @@ struct Profile: Sendable {
     let sync = HistorySync.shared
     @ObservationIgnored private var polling: Task<Void, Never>?
     @ObservationIgnored private var polled = false
+    // When Last.fm last answered the poll, and how long a song it called "now playing" is believed without a new answer.
+    @ObservationIgnored private var answered = Date.distantPast
+    static let nowLasts: TimeInterval = 600
     @ObservationIgnored private var insightTask: Task<Void, Never>?
     @ObservationIgnored private var lastInsight = Date.distantPast
 
@@ -80,7 +83,13 @@ struct Profile: Sendable {
         defer { LaunchLog.mark("store ready") }
         // The last thing each screen showed, before anything is asked.
         if let (j, _) = LastFM.shared.kept("user.getinfo") { profile = Profile.parse(j) }
-        if let (j, _) = LastFM.shared.kept("user.getrecenttracks", ["limit": "200", "extended": "1"]) { apply(j) }
+        // A kept "now playing" is only believed if the reply is a few minutes old: from yesterday it opened on live bars
+        // over a song long over until the first answer came (and kept them while Last.fm was away).
+        if let (j, when) = LastFM.shared.kept("user.getrecenttracks", ["limit": "200", "extended": "1"]) {
+            apply(j)
+            if Date().timeIntervalSince(when) > Self.nowLasts { nowPlaying = nil }
+            answered = when
+        }
         if let k = Insights.kept() { insights = k }
         if let k = Deep.kept() { deep = k }
         // The hero's cover and backdrop from the disk before the first frame, so it opens on the picture, not its stand-in.
@@ -97,12 +106,17 @@ struct Profile: Sendable {
         // Back from the background (hours, maybe), the first look is a full page again: thirty would leave today's
         // figures and the day counting only the last thirty plays until he scrolled.
         polled = false
+        // Back after a while: what was on then isn't shown as on now while the first answer is awaited.
+        if Date().timeIntervalSince(answered) > Self.nowLasts, nowPlaying != nil { withAnimation(.smooth) { nowPlaying = nil } }
         polling?.cancel()
         polling = Task {
+            // What's on first: the profile waited in front of it, so a slow profile held the song back.
+            await refresh()
             await loadProfile()
             while !Task.isCancelled {
-                await refresh()
                 try? await Task.sleep(nanoseconds: 12_000_000_000)
+                if Task.isCancelled { break }
+                await refresh()
             }
         }
     }
@@ -117,6 +131,7 @@ struct Profile: Sendable {
             // The first look takes a full page (and is kept, for the next launch's first frame); after that, only the top.
             let j = try await LastFM.shared.call("user.getrecenttracks", ["limit": polled ? "30" : "200", "extended": "1"], keep: !polled)
             polled = true
+            answered = Date()
             let before = recent.first?.id, playingBefore = nowPlaying?.id
             apply(j)
             failingSince = nil

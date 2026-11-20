@@ -447,9 +447,12 @@ struct TrackPage: View {
                 }
                 .accessibilityHint("Opens the album")
             }
-            if s.nowPlaying || s.date != nil {
+            // Live only while it's still the song on now and Last.fm is answering: the page was opened on a snapshot, and
+            // it said "Now playing" with live bars long after the song had ended.
+            let live = s.nowPlaying && !Store.shared.trouble && Store.shared.nowPlaying.map { $0.artist == s.artist && $0.title == s.title } == true
+            if live || s.date != nil {
                 HStack(spacing: 7) {
-                    if s.nowPlaying {
+                    if live {
                         Image(systemName: "waveform").symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
                         Text("Now playing")
                     } else if let d = s.date {
