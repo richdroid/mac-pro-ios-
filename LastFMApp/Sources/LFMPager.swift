@@ -63,12 +63,16 @@ struct Pager: View {
     private let start: Int
 
     var body: some View {
+        // The bars are read out here, where the safe area still stands: the reader inside is laid out past it and was
+        // told there were none (run 40: upright, the names sat under the clock and its fade).
+        GeometryReader { out in
+        let insets = out.safeAreaInsets
         GeometryReader { g in
             let pw = max(g.size.width, 1)
             // The bars above and below (the clock; the tab bar across the foot open upright): the pages run on under
             // them. Above, they pass under the names, into a fade drawn over them in the ground's own colour: no mask,
             // which cost an off-screen pass of the whole pager every frame (run 39 review, fault 8).
-            let bars = (top: g.safeAreaInsets.top, bottom: g.safeAreaInsets.bottom)
+            let bars = (top: max(insets.top, g.safeAreaInsets.top), bottom: max(insets.bottom, g.safeAreaInsets.bottom))
             let nameSize = PivotHeaders.size(panels.count, k)
             let head = bars.top + S.head + ceil(nameSize * 1.25) + (accessory == nil ? 0 : S.head + accessoryHeight)
             ZStack(alignment: .topLeading) {
@@ -120,9 +124,12 @@ struct Pager: View {
                 }
                 // The ground's colour over the top of the pages, solid behind the clock and the names and gone a little
                 // under them: what scrolls up fades out beneath the names.
-                LinearGradient(stops: [.init(color: S.ground, location: 0), .init(color: S.ground, location: (head - 26) / (head + 2)), .init(color: S.ground.opacity(0), location: 1)],
+                // A shade, not a box: it runs out under the side bars too and thins over a long tail, so no edge of it shows
+                // against the cover's colour (run 40: a black rectangle with a hard right edge).
+                LinearGradient(stops: [.init(color: S.ground.opacity(0.92), location: 0), .init(color: S.ground.opacity(0.86), location: (head - 30) / (head + 28)), .init(color: S.ground.opacity(0), location: 1)],
                                startPoint: .top, endPoint: .bottom)
-                    .frame(width: pw, height: head + 2)
+                    .frame(width: pw + insets.leading + insets.trailing, height: head + 28)
+                    .offset(x: -insets.leading)
                     .allowsHitTesting(false)
                 VStack(alignment: .leading, spacing: S.head) {
                     PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw, size: nameSize,
@@ -136,6 +143,7 @@ struct Pager: View {
             }
         }
         .ignoresSafeArea(.container, edges: .vertical)
+        }
         .sensoryFeedback(.tick, trigger: landed)
         // The tab tapped again: back to the first section first, then to the top.
         .onChange(of: top) { _, _ in
@@ -232,10 +240,12 @@ private struct PivotHeaders: View {
         }
         .scrollPosition($pos)
         .scrollIndicators(.hidden)
-        .frame(height: ceil(size * 1.25))
-        // The names run on to the right and fade out before the page's edge: never a word cut at the side bar.
-        .overlay(alignment: .trailing) {
-            LinearGradient(colors: [S.ground.opacity(0), S.ground], startPoint: .leading, endPoint: .trailing).frame(width: 40).allowsHitTesting(false)
+        .frame(width: pw, height: ceil(size * 1.25))
+        // The names run on to the right and fade out before the page's edge: never a word cut at the side bar, or
+        // showing again beyond it under the camera (run 40). A mask of this one row, not a patch of colour over it.
+        .mask {
+            LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 1 - 44 / max(pw, 88)), .init(color: .clear, location: 1)],
+                           startPoint: .leading, endPoint: .trailing)
         }
         .onAppear { pos.scrollTo(x: Self.at(f, rests)) }
         .onChange(of: f) { _, f in pos.scrollTo(x: Self.at(f, rests)) }

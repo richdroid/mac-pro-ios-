@@ -209,9 +209,9 @@ jobs:
           STEPS="shot:8 shot:4 shot:4 shot:4 shot:4" film live-gap 1 30 -tab 0 -panel 1 -mockGap YES -pollEvery 3
           # A page opened by a tap on a row (an artist, an album, a song), and Back by its button; then by a slow drag
           # from the edge, held most of the way across.
-          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.08,0.075:1 shot:1 shot:2" film tap-artist 1 18 -tab 1 -kind 0
-          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.08,0.075:1 shot:1 shot:2" film tap-album 1 18 -tab 1 -kind 1
-          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.08,0.075:1 shot:1 shot:2" film tap-track 1 18 -tab 1 -kind 2
+          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-artist 1 18 -tab 1 -kind 0
+          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-album 1 18 -tab 1 -kind 1
+          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-track 1 18 -tab 1 -kind 2
           STEPS="tap=0.4,0.62:7 shot:3 edgeslow:1 shot:1 shot:3" film back-swipe-slow 1 20 -tab 1 -kind 0
           early films-folded
           # Turned on what's playing and on an artist's page, as on You.
