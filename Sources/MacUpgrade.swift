@@ -39,6 +39,45 @@ struct UpgradeFeed: Decodable, Equatable {
     // Something waiting or under way: the Dashboard shows its card.
     var pending: Bool { target != nil || ["downloading", "installing", "patching"].contains(phase) }
     var underWay: Bool { ["downloading", "installing", "patching"].contains(phase) }
+    // The download in his terms: how much of how much, and how long is left (Richard, 2026-11-20: a useful update
+    // screen). The size is the Mac's own ("12.4 GB", from softwareupdate), so the figures agree with it; the time left
+    // is measured on the phone from how fast the percentage has moved.
+    var downloadLine: String? {
+        guard let d = download else { return nil }
+        let p = min(100, max(0, d.percent))
+        var parts: [String] = []
+        if let s = target?.size, let r = s.range(of: #"^[\d.]+"#, options: .regularExpression), let total = Double(s[r]) {
+            let unit = s[r.upperBound...].trimmingCharacters(in: .whitespaces)
+            parts.append(String(format: "%.1f of %@ %@", total * p / 100, String(s[r]), unit))
+        } else {
+            parts.append("\(Int(p.rounded()))% downloaded")
+        }
+        if let m = DownloadClock.shared.minutesLeft(p) { parts.append(m < 1 ? "under a minute left" : m < 60 ? "about \(m) min left" : "about \(m / 60) h \(m % 60) min left") }
+        else if p < 100 { parts.append("time left after the next reading") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+// How fast the download moves, from the readings the phone has seen: the percentage now against the earliest reading
+// of the last ten minutes. Nothing is guessed before two readings a minute or more apart.
+final class DownloadClock: @unchecked Sendable {
+    static let shared = DownloadClock()
+    private var seen: [(Date, Double)] = []
+    func note(_ p: Double?) {
+        guard let p else { seen = []; return }
+        if let last = seen.last, last.1 == p { return }
+        if let last = seen.last, p < last.1 { seen = [] }
+        seen.append((Date(), p))
+        seen.removeAll { Date().timeIntervalSince($0.0) > 600 }
+    }
+    func minutesLeft(_ p: Double) -> Int? {
+        if MacConsole.pose == "upgrade-downloading" { return 18 }
+        guard p < 100, let first = seen.first, let last = seen.last, last.1 > first.1 else { return nil }
+        let secs = last.0.timeIntervalSince(first.0)
+        guard secs >= 60 else { return nil }
+        let rate = (last.1 - first.1) / secs
+        return Int(((100 - p) / rate / 60).rounded(.up))
+    }
 }
 
 // What the page says first, for the feed and for the Mac gone quiet in the middle of it.
@@ -69,7 +108,7 @@ struct UpgradeStanding: Equatable {
             let stopped = f.agent?.blocked == true ? " The nightly install has stopped trying; it starts again when you start it here." : ""
             return UpgradeStanding(symbol: "arrow.down.circle.fill", color: macBlue, title: "\(n) is ready to install", line: "There is room (\(UpgradeFeed.gb(f.free)) free) and the patcher supports it. It starts only when you hold the key below." + stopped)
         case "downloading":
-            return UpgradeStanding(symbol: "arrow.down.circle", color: macBlue, title: "Downloading \(n)", line: f.download.map { "\(Int($0.percent.rounded())) % downloaded. The Mac restarts by itself when it is ready." } ?? "The Mac restarts by itself when it is ready.")
+            return UpgradeStanding(symbol: "arrow.down.circle", color: macBlue, title: "Downloading \(n)", line: (f.downloadLine.map { $0 + ". " } ?? "") + "The Mac installs and restarts by itself when it is done; nothing to do meanwhile.")
         case "installing":
             return UpgradeStanding(symbol: "gearshape.2.fill", color: macBlue, title: "Installing \(n)", line: "The Mac restarts by itself and is out of reach for a while.")
         case "patching":
@@ -105,7 +144,7 @@ extension UpgradeFeed {
         case "upgrade-patcher": roomy(); f.phase = "ready"; f.patcher = Patcher(installed: "3.0.0", latest: "3.0.1", newer: true, ready: true); return Posed(feed: f)
         case "upgrade-held": roomy(); f.phase = "held"; f.patcher = Patcher(installed: "3.0.0", latest: "3.0.0", newer: false, ready: false); return Posed(feed: f)
         case "upgrade-checksred": roomy(); f.phase = "ready"; return Posed(feed: f, checksRed: true)
-        case "upgrade-downloading": roomy(); f.phase = "downloading"; f.download = Download(percent: 35.4); return Posed(feed: f)
+        case "upgrade-downloading": roomy(); f.phase = "downloading"; f.target?.size = "12.4 GB"; f.download = Download(percent: 35.4); return Posed(feed: f)
         case "upgrade-installing": roomy(); f.phase = "installing"; f.download = Download(percent: 100); return Posed(feed: f)
         case "upgrade-away": roomy(); f.phase = "installing"; return Posed(feed: f, away: true, awayMinutes: 12)
         case "upgrade-noreturn": roomy(); f.phase = "installing"; return Posed(feed: f, away: true, awayMinutes: 58)
@@ -153,6 +192,7 @@ struct UpgradeCard: View {
                 }
                 .buttonStyle(PressStyle())
                 .accessibilityIdentifier("upgrade.card")
+                .onChange(of: f.download?.percent, initial: true) { _, p in DownloadClock.shared.note(p) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
             } header: { Text("Upgrade") }
         }
@@ -414,7 +454,16 @@ struct UpgradeView: View {
     @ViewBuilder func rest(_ f: UpgradeFeed, _ s: [StepState]) -> some View {
         Section {
             step(2, s[1], patcherLine(f))
-            step(3, s[2], f.phase == "downloading" ? (f.download.map { "\(Int($0.percent.rounded()))% downloaded." } ?? "Downloading.") : s[2] == .done ? "Downloaded." : "Starts with the install; the Mac fetches it itself.")
+            if f.patcher?.newer == true, f.phase == "ready" || f.phase == "room" || f.phase == "held" {
+                // The patcher updates in its own app on the Mac: the Mac's screen, from here, is where to do it.
+                Button { model.openScreen() } label: {
+                    HStack { Label("Update the patcher on the Mac’s screen", systemImage: "display").foregroundStyle(macBlue); Spacer(minLength: 8); RowChevron() }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 40)
+                .accessibilityIdentifier("upgrade.patcherScreen")
+            }
+            step(3, s[2], f.phase == "downloading" ? (f.downloadLine.map { $0 + "." } ?? "Downloading.") : s[2] == .done ? "Downloaded." : "Starts with the install; the Mac fetches it itself\(f.target?.size.map { " (\($0))" } ?? "").")
             if f.phase == "downloading", let d = f.download { ProgressView(value: min(100, max(0, d.percent)), total: 100).tint(macBlue) }
             step(4, s[3], checkLine(s[3]))
             if s[3] != .waiting, let c = checks {
@@ -449,7 +498,7 @@ struct UpgradeView: View {
         let p = f.patcher
         let has = p?.installed.map { "OpenCore Legacy Patcher \($0) is installed" } ?? "The patcher’s version isn’t known"
         if p?.ready == false { return "\(has) and doesn’t support \(f.name) yet. The upgrade is refused here until it does." }
-        if p?.newer == true, let l = p?.latest { return "\(has); \(l) is out. It supports \(f.name) as it is. A newer patcher is installed at the Mac, in OpenCore-Patcher." }
+        if p?.newer == true, let l = p?.latest { return "\(has); \(l) is out. It supports \(f.name) as it is. Updating it is optional: open OpenCore-Patcher on the Mac’s screen." }
         return "\(has) and supports \(f.name)."
     }
     // Why the key is off, in the order to fix them; nil when it can be held.
@@ -512,7 +561,9 @@ struct UpgradeView: View {
                 rest(f, f.steps(checksRed: !red.isEmpty || publicLink, checked: checks != nil && !checking))
                     .disabled(away)
             }
+            UpgradeLog(model: model)
         }
+        .onChange(of: feed.value?.download?.percent, initial: true) { _, p in DownloadClock.shared.note(p) }
         .task {
             if let p = posed { feed.set(p.feed); await check(); return }
             while !Task.isCancelled {
@@ -520,6 +571,39 @@ struct UpgradeView: View {
                 if checks == nil, feed.value?.phase == "ready" { await check() }
                 try? await Task.sleep(nanoseconds: UInt64((feed.value?.underWay == true ? 5 : 15) * 1e9))
             }
+        }
+    }
+}
+
+// The update service's own log on the page (Richard, 2026-11-20: "have a good and useful update screen" with the log in
+// the app): its newest lines, whole, and a tap for all of it full screen. The same log as the Updates page's, read from
+// the Mac's status as it lands; while the Mac is restarting it is the last one it gave.
+struct UpgradeLog: View {
+    let model: AppModel
+    @State private var log = ""
+    @State private var full = false
+    var body: some View {
+        Section {
+            if log.isEmpty {
+                Text("The Mac hasn’t sent its update log yet.").foregroundStyle(.secondary)
+            } else {
+                Button { full = true } label: { LogPreview(log: log, room: LogPreview.twelveLines) }
+                    .buttonStyle(PressStyle())
+                    .accessibilityLabel("Update log, newest lines").accessibilityHint("Opens the whole log")
+                    .accessibilityIdentifier("upgrade.log")
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+            }
+        } header: {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Log")
+                Spacer()
+                if !log.isEmpty { Button("Show all") { full = true }.textCase(nil).foregroundStyle(macBlue) }
+            }
+        } footer: { if !log.isEmpty { Text("The update service’s own lines, newest at the foot. Red is a failure, green a step done.") } }
+        .screenCover(isPresented: $full) { FullLog(log: log).environmentObject(model) }
+        .onReceive(model.statusStore.$status) { st in
+            let l = st?.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if l != log { log = l }
         }
     }
 }
