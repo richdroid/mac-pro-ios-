@@ -231,7 +231,9 @@ struct TitlePage: View {
     // What the card wears: the stream it carries, and where it starts.
     @ViewBuilder var chip: some View {
         let onTV = model.isOnTV(st.cardItem, st.target.source)
-        let starting = model.starting.map { !$0.played && !$0.failed && $0.token != nil && $0.token == st.sentToken } ?? false
+        // Held from the throw until the TV shows it or it fails: not dropped back to the stream's chip in the moment between
+        // the player answering and the TV's own word (gate on b97a5e7).
+        let starting = model.starting.map { !$0.failed && $0.token != nil && $0.token == st.sentToken } ?? false
         // Side by side where the card is wide enough for both in full; otherwise one over the other. Never cut short
         // ("1080p ·…" and "Resu…" on a 224 pt card, CI 53b4243).
         ViewThatFits(in: .horizontal) {
@@ -387,7 +389,7 @@ struct TitlePage: View {
             VStack(spacing: 8) {
                 ForEach(shown) { s in
                     StreamRow(stream: s, chosen: s.token == st.chosen, failed: st.failed.contains(s.token),
-                              usedLast: PlayedStream.file(st.playedKey) == s.description, twin: all.filter { StreamWords.chip($0) == StreamWords.chip(s) }.count > 1 ? (all.firstIndex(of: s) ?? 0) + 1 : nil) {
+                              usedLast: all.first { PlayedStream.file(st.playedKey) == $0.description } == s, twin: all.filter { StreamWords.chip($0) == StreamWords.chip(s) }.count > 1 ? (all.firstIndex(of: s) ?? 0) + 1 : nil) {
                         Haptic.fire(.tick)
                         var t = Transaction(); t.disablesAnimations = true
                         withTransaction(t) { st.chosen = s.token }
@@ -437,7 +439,7 @@ struct TitlePage: View {
                     .liftable(item, .stremio, wide: true) { v in Thrower.sendBest(model, item: item, velocity: v) }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(e.title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                        Text(e.title).font(.system(size: 17, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         if playing { Image(systemName: "play.tv.fill").font(.system(size: 13)).foregroundStyle(TVLook.accent) }
                     }
                     Text(e.overview ?? (e.runtime.map { "\($0) min" } ?? "")).font(.system(size: 15)).foregroundStyle(.white.opacity(0.65)).lineLimit(2)

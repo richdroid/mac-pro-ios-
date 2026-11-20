@@ -86,9 +86,9 @@ jobs:
           # Every tab, and the pages behind the lip's gear, in one posture (display, suffix).
           tabs() {
             local d=$1 x=$2 T S
-            for T in 3 0 2 6; do shot tab$T$x $d 8 $M -tab $T; done
+            for T in 3 0 2 6; do shot tab$T$x $d 12 $M -tab $T; done
             # Second arrival equals the first: the same tabs again on a live scene.
-            for T in 3 0 2 6; do shot tab$T-again$x $d 8 $M -tab $T; done
+            for T in 3 0 2 6; do shot tab$T-again$x $d 12 $M -tab $T; done
             shot settings$x $d 9 $M -tab 9
             shot box$x $d 9 $M -tab 5
             for S in ridle repisode rfilm ryoutube roffline rasleep; do shot remote-$S$x $d 8 $M/$S -tab 0; done
@@ -182,18 +182,22 @@ jobs:
           # A posture is set, then proved by a shot's shape, and tried again if the simulator didn't take it (cbfc0b5: one
           # job never unfolded and one never turned, and both said success). Unproved, the job fails.
           wide() { xcrun simctl io "$DEVICE" screenshot --display=$1 /tmp/turn.png > /dev/null 2>&1; [ "$(sips -g pixelWidth /tmp/turn.png | awk '/pixel/ {print $2}')" -gt "$(sips -g pixelHeight /tmp/turn.png | awk '/pixel/ {print $2}')" ]; }
-          # set_posture <open|closed> <turn> <display> <wide|tall>
+          # set_posture <open|closed> <quarter turns> <display> <wide|tall>
+          # The touch tool's "rotate N" turns the phone N quarter turns from where it is (read from five runs: a fresh
+          # simulator is at 0, where the folded screen is tall and the open one wide). So each posture is reached from a
+          # fresh boot by the fewest turns; if the shape is wrong, the fold is pressed again and one more quarter tried.
           set_posture() {
             local n
+            $D "$DEVICE" pose $1; echo "pose $1 exit $?"; sleep 6
+            [ $2 != 0 ] && { $D "$DEVICE" rotate $2; sleep 5; }
             for n in 1 2 3 4; do
-              $D "$DEVICE" pose $1; sleep 6
-              $D "$DEVICE" rotate $2; sleep 5
               xcrun simctl launch "$DEVICE" $APP -address $M -tab 3 > /dev/null; sleep 6
               if wide $3; then [ $4 = wide ] && break; else [ $4 = tall ] && break; fi
-              echo "posture not taken (try $n): $1 turn $2"
+              echo "posture not taken (try $n): $1 turn $2, wanted $4"
               xcrun simctl terminate "$DEVICE" $APP || true
-              $D "$DEVICE" rotate $(( $2 == 1 ? 3 : 1 )); sleep 4
-              [ $n = 4 ] && { echo "POSTURE FAILED: $1 turn $2 $4"; touch dist/posture-failed; }
+              [ $n = 4 ] && { echo "POSTURE FAILED: $1 turn $2 $4"; touch dist/posture-failed; break; }
+              $D "$DEVICE" pose $1; sleep 6
+              [ $n -ge 2 ] && { $D "$DEVICE" rotate 1; sleep 5; }
             done
             xcrun simctl terminate "$DEVICE" $APP || true
             echo "posture $1 turn $2: $(sips -g pixelWidth -g pixelHeight /tmp/turn.png | awk '/pixel/ {printf "%s ", $2}')"
@@ -210,7 +214,7 @@ jobs:
             tour tour-portrait 3
             episodes episodes-portrait 3
           elif [ $P = flat ]; then
-            set_posture open 3 3 wide
+            set_posture open 0 3 wide
             [ -f dist/posture-failed ] && exit 1
             tabs 3 -flat
             flicks 3 -flat
@@ -219,9 +223,7 @@ jobs:
             tour tour-flat 3
             episodes episodes-flat 3
           else
-            # Folded, the touch tool's turn 3 is upright and turn 1 is on its side (b88affc, where touches landed true).
-            UP=3; SIDE=1
-            set_posture closed $UP 1 tall
+            set_posture closed 0 1 tall
             [ -f dist/posture-failed ] && exit 1
             tabs 1 ""
             flicks 1 ""
@@ -229,20 +231,20 @@ jobs:
             backs 1 ""
             tour tour 1
             episodes episodes 1
-            $D "$DEVICE" rotate $SIDE || true; sleep 4
+            $D "$DEVICE" rotate 1 || true; sleep 4
             for T in 3 0 2 6; do shot tab$T-fland 1 8 $M -tab $T; done
             curl -s $M/fnormal/reset > /dev/null; shot title-film-fland 1 12 $M/fnormal -tab 3 -pose streams
             for S in ridle repisode; do shot remote-$S-fland 1 8 $M/$S -tab 0; done
             curl -s $M/real/reset > /dev/null; shot title-show-fland 1 14 $M/real -tab 3 -pose realseries
             flick flick-throw-fland 1 throw
-            $D "$DEVICE" rotate $UP || true; sleep 4
+            $D "$DEVICE" rotate 3 || true; sleep 4
             # The turn between postures, on Watch.
             for pass in outer inner; do
               display=1; [ $pass = inner ] && display=3
               rec posture-watch-$pass $display
               xcrun simctl launch "$DEVICE" $APP -address $M -tab 3
               sleep 8
-              $D "$DEVICE" pose open; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" pose closed; sleep 6
+              $D "$DEVICE" pose open; sleep 6; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" pose closed; sleep 6
               endfilm posture-watch-$pass $display
             done
           fi

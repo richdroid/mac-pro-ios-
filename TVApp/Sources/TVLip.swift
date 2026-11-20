@@ -20,6 +20,11 @@ struct TVNow: Equatable {
             if st.failed { return TVNow(kind: .starting, title: st.title, line: "Didn’t start", art: st.art, playing: nil) }
             return TVNow(kind: .starting, title: st.title, line: startLine(st, model), art: st.art, playing: nil)
         }
+        // The player has answered and the TV hasn't said so yet: still starting, never "Home" for a moment in between
+        // (gate on b97a5e7).
+        if let st = model.starting, st.played, !st.failed, !(model.videoIsCurrent && !(model.status?.session?.showName.isEmpty ?? true)), !model.musicIsCurrent {
+            return TVNow(kind: .starting, title: st.title, line: "Starting…", art: st.art, playing: nil)
+        }
         guard let s = model.status else { return TVNow(kind: .unknown, title: "TV", line: nil, art: nil, playing: nil) }
         // What the phone last knew stands until a reading says otherwise: never "Connecting…" over a known state (9.7).
         // The Mac answers and the TV doesn't: said here as the Remote's picture says it, not the app last in front.

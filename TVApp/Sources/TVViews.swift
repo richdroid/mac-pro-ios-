@@ -1581,7 +1581,10 @@ struct RemoteTab: View {
     // row, volume, and the apps at the foot. Every place is kept whatever is on, so nothing moves as a show starts.
     func uprightColumn(width: CGFloat, height: CGFloat, margin: CGFloat = 20) -> some View {
         var grid = RemoteGrid.keys(width - 2 * margin, maxKey: 72)
-        grid.play = min(grid.play, 80)
+        // The page's own width and edges: the title, the picture, the keys and the apps start on one line (the column
+        // was 520 pt in the middle of a 669 pt screen: three left edges, gate on b97a5e7).
+        grid.width = max(grid.width, width - 2 * margin)
+        grid.play = min(grid.key + 8, 80)
         // Folded there is less height: the same rows, 10 pt apart rather than 14.
         let gap: CGFloat = height < 600 ? 10 : 14
         let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
@@ -1623,7 +1626,7 @@ struct RemoteTab: View {
             .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
             .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
             Spacer(minLength: 8)
-            appStrip.padding(.bottom, 8)
+            AppStrip(inset: margin).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -2159,6 +2162,7 @@ struct AppStrip: View {
     @Environment(TVModel.self) var model
     @Environment(\.pagePush) private var pagePush
     static let tile: CGFloat = 96
+    var inset: CGFloat = 14
     var body: some View {
         let apps = AppsTab.watching(model.status?.apps ?? [])
         let all = apps.isEmpty ? (model.status?.apps ?? []) : apps
@@ -2178,7 +2182,7 @@ struct AppStrip: View {
             }
             .buttonStyle(.plain).accessibilityLabel("All apps")
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, inset)
         .frame(height: max(h, 44))
     }
 }
