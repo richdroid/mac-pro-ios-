@@ -215,6 +215,14 @@ struct Profile: Sendable, Equatable {
         guard let h, let s = shown, h.art.key != s.art.key else { shown = h; preparing = nil; return }
         preparing = h.id
         let ref = h.art
+        // Never held back for long: a cover that won't come (no network, a slow store) lets the song through after 4 s,
+        // over the old ground, rather than leaving the last song on the screen.
+        Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard preparing == h.id, let cur = hero, cur.art.key == ref.key else { return }
+            preparing = nil
+            withAnimation(.easeInOut(duration: 0.5)) { shown = cur }
+        }
         Task {
             async let big = ArtStore.shared.image(ref, px: 1000)
             async let small = ArtStore.shared.image(ref, px: 156)
