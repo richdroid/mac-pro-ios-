@@ -137,7 +137,7 @@ struct DashboardTab: View {
                 }
                 // A key waiting on the Console's answer shows its own wait; the others stay as they are (one command at
                 // a time is the remote's own rule), so nothing greys or flickers under a tap.
-                .disabled(!remote.read || remote.unsupported)
+                .disabled(!remote.read || remote.unsupported || model.stale)
             }
             .padding(16)
             .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))

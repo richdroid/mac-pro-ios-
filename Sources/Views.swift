@@ -595,9 +595,13 @@ struct RootView: View {
                 // keeps the system's own bar, which fits all six only where it's wide (open); upright and narrow the app draws a bar too.
                 if sideways || wide {
                     SideRailTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
-                } else if narrow {
+                } else if narrow || !Self.systemTabs {
                     // Upright and narrow (folded), the system's bar holds five and put Dashboard under "More": the app
                     // draws the bar itself there too, all six in it (Richard, 2026-11-20: "i said more never").
+                    // Open upright as well: the system's bar held six in the build's simulator at every size tried
+                    // (951 x 669, 859 x 604, 669 x 951) yet showed "•••" on his phone, so what it does there can't be
+                    // seen from here. The app's own bar is the only one that can never fold a tab away, so the system's
+                    // is used nowhere (only the build's "before" shots, -systemTabs YES).
                     BottomBarTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
                 } else if drawnHere {
                     // Wherever the system's own was seen to overflow (open flat on his phone: four and "•••"), the app's own,

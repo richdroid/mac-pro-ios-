@@ -650,7 +650,8 @@ struct BottomBarTabs<Content: View>: View {
         .safeAreaPadding(.bottom, Self.height + Self.inset * 2 + 6)
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
         .overlay(alignment: .bottom) {
-            bar.padding(.horizontal, 12).padding(.bottom, 2)
+            // No wider than the system's own bar is where there's room (open upright): centred, not stretched.
+            bar.frame(maxWidth: 470).padding(.horizontal, 12).padding(.bottom, 2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea(.keyboard)
         }
