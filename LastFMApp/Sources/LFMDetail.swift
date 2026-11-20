@@ -35,9 +35,11 @@ struct PageLayout<Head: View, Rest: View>: View {
     @ViewBuilder let head: (_ wide: Bool) -> Head
     @ViewBuilder let rest: () -> Rest
     @Environment(\.paneLayout) private var pane
-    @State private var wide = false
     var body: some View {
-        Group {
+        // The width read in the pass that lays the page out: it was measured after, so the first frame of a page (and
+        // of a turn) was the narrow layout (run 39 review, fault 1).
+        GeometryReader { g in
+            let wide = g.size.width > 640
             if pane {
                 FoldSplit {
                     Page { head(false).padding(.top, S.head) }
@@ -51,7 +53,6 @@ struct PageLayout<Head: View, Rest: View>: View {
             }
         }
         .modifier(BarFade())
-        .onGeometryChange(for: Bool.self) { $0.size.width > 640 } action: { wide = $0 }
         // Behind the fade, not under it: the page's colour runs to every edge.
         .background { Backdrop(ref: ref, moving: false, dim: 0.12) }
     }

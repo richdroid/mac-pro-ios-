@@ -32,7 +32,7 @@ struct Scrobble: Identifiable, Hashable, Sendable {
     }
 }
 
-struct Profile: Sendable {
+struct Profile: Sendable, Equatable {
     let name: String
     let realname: String
     let image: String?
@@ -68,6 +68,27 @@ struct Profile: Sendable {
     private(set) var trouble = false
     // The song the hero shows: the one on now, else the last one played.
     var hero: Scrobble? { nowPlaying ?? recent.first }
+    // The song the screens show (the hero, the strip, the ground behind every tab). It follows `hero`, but moves to a
+    // song with a new cover only once that cover and its backdrop are ready, so cover, ground and words change together
+    // in one crossfade (run 39: the ground cut to black for half a second and the cover showed its stand-in).
+    private(set) var shown: Scrobble?
+    @ObservationIgnored private var preparing: String?
+    // Polls in a row that said nothing is on while a song was: one is let pass before the song is called over (Last.fm
+    // often says nothing between two songs), so "now playing" and the hero don't flip and back.
+    @ObservationIgnored private var missedNow = 0
+    // A list under his finger is never changed by a poll: while a page is being scrolled the new list waits here and
+    // goes in when the scroll comes to rest (run 39 review, fault 7: a new scrobble pushed the list down mid-drag).
+    @ObservationIgnored private var queued: [Scrobble]?
+    @ObservationIgnored private var scrollingSince: Date?
+    @ObservationIgnored var scrolling: Bool {
+        get { scrollingSince.map { Date().timeIntervalSince($0) < 8 } ?? false }
+        set {
+            scrollingSince = newValue ? Date() : nil
+            if !newValue, let q = queued { queued = nil; if q != recent { recent = q; showHero() } }
+        }
+    }
+    // The newest list known, shown yet or not.
+    private var latest: [Scrobble] { queued ?? recent }
     var opened: Scrobble?              // the track whose page is up
     let sync = HistorySync.shared
     @ObservationIgnored private var polling: Task<Void, Never>?
@@ -81,12 +102,13 @@ struct Profile: Sendable {
     init() {
         LaunchLog.mark("store init")
         defer { LaunchLog.mark("store ready") }
+        _ = ArtStore.born
         // The last thing each screen showed, before anything is asked.
         if let (j, _) = LastFM.shared.kept("user.getinfo") { profile = Profile.parse(j) }
         // A kept "now playing" is only believed if the reply is a few minutes old: from yesterday it opened on live bars
         // over a song long over until the first answer came (and kept them while Last.fm was away).
         if let (j, when) = LastFM.shared.kept("user.getrecenttracks", ["limit": "200", "extended": "1"]) {
-            apply(j)
+            apply(j, hold: false)
             if Date().timeIntervalSince(when) > Self.nowLasts { nowPlaying = nil }
             answered = when
         }
@@ -94,6 +116,9 @@ struct Profile: Sendable {
         if let k = Deep.kept() { deep = k }
         // The hero's cover and backdrop from the disk before the first frame, so it opens on the picture, not its stand-in.
         if let h = hero { ArtStore.shared.warm(h.art) }
+        // His picture at the size his page draws it.
+        if let p = profile { ArtStore.shared.warm(ArtRef(artist: p.name, album: "avatar", url: p.image), px: [240], backdrop: false) }
+        shown = hero
         // The build's mock makes its listening history off the main thread, while the first frame draws.
         if LastFM.shared.mock { Task.detached(priority: .userInitiated) { _ = MockLastFM.shared.profileName } }
         sync.onProgress = { [weak self] in self?.workInsights() }
@@ -107,14 +132,16 @@ struct Profile: Sendable {
         // figures and the day counting only the last thirty plays until he scrolled.
         polled = false
         // Back after a while: what was on then isn't shown as on now while the first answer is awaited.
-        if Date().timeIntervalSince(answered) > Self.nowLasts, nowPlaying != nil { withAnimation(.smooth) { nowPlaying = nil } }
+        if Date().timeIntervalSince(answered) > Self.nowLasts, nowPlaying != nil { nowPlaying = nil; missedNow = 0; showHero() }
         polling?.cancel()
         polling = Task {
             // What's on first: the profile waited in front of it, so a slow profile held the song back.
             await refresh()
             await loadProfile()
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 12_000_000_000)
+                // (-pollEvery N on the build's mock: polls N seconds apart, for the film of a poll under a moving finger.)
+                let every = LastFM.shared.mock ? max(UserDefaults.standard.double(forKey: "pollEvery"), 0) : 0
+                try? await Task.sleep(nanoseconds: UInt64((every > 0 ? every : 12) * 1_000_000_000))
                 if Task.isCancelled { break }
                 await refresh()
             }
@@ -123,7 +150,7 @@ struct Profile: Sendable {
     func stop() { polling?.cancel(); polling = nil }
 
     private func loadProfile(fresh: TimeInterval = 600) async {
-        if let j = try? await LastFM.shared.call("user.getinfo", fresh: fresh), let p = Profile.parse(j) { profile = p }
+        if let j = try? await LastFM.shared.call("user.getinfo", fresh: fresh), let p = Profile.parse(j), p != profile { profile = p }
     }
 
     func refresh() async {
@@ -132,15 +159,15 @@ struct Profile: Sendable {
             let j = try await LastFM.shared.call("user.getrecenttracks", ["limit": polled ? "30" : "200", "extended": "1"], keep: !polled)
             polled = true
             answered = Date()
-            let before = recent.first?.id, playingBefore = nowPlaying?.id
+            let before = latest.first?.id, playingBefore = nowPlaying?.id
             apply(j)
             failingSince = nil
             if trouble { withAnimation(.smooth) { trouble = false } }
-            if recent.first?.id != before || nowPlaying?.id != playingBefore {
+            if latest.first?.id != before || nowPlaying?.id != playingBefore {
                 WidgetCenter.shared.reloadTimelines(ofKind: "now")
             }
-            if recent.first?.id != before {
-                await sync.keep(Array(recent.prefix(200)))
+            if latest.first?.id != before {
+                await sync.keep(Array(latest.prefix(200)))
                 workInsights()
                 // A new scrobble moves his total too (it was asked once per opening, so it sat still while he listened).
                 if before != nil { await loadProfile(fresh: 60) }
@@ -152,18 +179,47 @@ struct Profile: Sendable {
         }
     }
 
-    private func apply(_ j: J) {
+    // Only what changed is assigned, and with no animation of the store's own: every 12 s the whole app was told
+    // everything had changed, inside a 0.45 s animation, and lists hitched under his finger (run 39 review, fault 7).
+    private func apply(_ j: J, hold: Bool = true) {
         let all = j["recenttracks"]["track"].array.map(Scrobble.parse)
-        let now = all.first { $0.nowPlaying }
+        var now = all.first { $0.nowPlaying }
         let played = all.filter { !$0.nowPlaying }
-        withAnimation(.smooth(duration: 0.45)) {
-            nowPlaying = now
-            // New plays go on top; older pages already loaded stay below.
-            if let first = played.last, let i = recent.firstIndex(where: { $0.id == first.id }) {
-                recent = played + recent.dropFirst(i + 1)
-            } else {
-                recent = played
-            }
+        if now == nil, let was = nowPlaying, hold, missedNow < 1, played.first.map({ $0.artist == was.artist && $0.title == was.title }) != true {
+            missedNow += 1
+            now = was
+        } else if now != nil || nowPlaying == nil {
+            missedNow = 0
+        }
+        if now != nowPlaying { nowPlaying = now }
+        // New plays go on top; older pages already loaded stay below.
+        let next: [Scrobble]
+        let had = latest
+        if let first = played.last, let i = had.firstIndex(where: { $0.id == first.id }) {
+            next = played + had.dropFirst(i + 1)
+        } else {
+            next = played
+        }
+        if scrolling { queued = next == recent ? nil : next }
+        else { queued = nil; if next != recent { recent = next } }
+        showHero()
+    }
+
+    private func showHero() {
+        let h = hero
+        guard h != shown else { return }
+        // Same cover (the song scrobbled, a flag changed), or nothing to wait for: at once.
+        guard let h, let s = shown, h.art.key != s.art.key else { shown = h; preparing = nil; return }
+        preparing = h.id
+        let ref = h.art
+        Task {
+            async let big = ArtStore.shared.image(ref, px: 1000)
+            async let small = ArtStore.shared.image(ref, px: 156)
+            async let ground = ArtStore.shared.backdrop(ref)
+            _ = await (big, small, ground)
+            guard preparing == h.id, let cur = hero, cur.art.key == ref.key else { return }
+            preparing = nil
+            withAnimation(.easeInOut(duration: 0.5)) { shown = cur }
         }
     }
 
@@ -173,7 +229,7 @@ struct Profile: Sendable {
         defer { loadingMore = false }
         if let j = try? await LastFM.shared.call("user.getrecenttracks", ["limit": "100", "extended": "1", "to": "\(Int(oldest.timeIntervalSince1970) - 1)"], fresh: 3600) {
             let more = j["recenttracks"]["track"].array.map(Scrobble.parse).filter { !$0.nowPlaying }
-            if more.isEmpty { reachedEnd = true } else { recent += more }
+            if more.isEmpty { reachedEnd = true } else { recent += more; if queued != nil { queued! += more } }
         }
     }
 

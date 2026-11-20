@@ -218,7 +218,7 @@ struct ChartsTab: View {
     @State private var all = false
     // The width the figures have: folded, the plays are set smaller so the largest count he has ("33,022") fits beside
     // the change unshrunk.
-    @State private var figuresWidth: CGFloat = 400
+    @Environment(\.pageWidth) private var figuresWidth
     // The stretch it opens on, from the start: set in onAppear it came after the pager had fixed where it begins, and a
     // chart opened on a year showed the week's figures under names with none lit (run 32).
     @State private var page: Int
@@ -393,7 +393,6 @@ struct ChartsTab: View {
                     }
                 }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { figuresWidth = $0 }
             .padding(.horizontal, S.margin)
         }
     }
@@ -611,7 +610,7 @@ struct WeekPicker: View {
                 }
             }
             .modifier(BarFade())
-            .background { Backdrop(ref: Store.shared.hero?.art, moving: false, dim: 0.2) }
+            .background { Backdrop(ref: Store.shared.shown?.art, dim: 0.2) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Close", systemImage: "xmark") } }
             }

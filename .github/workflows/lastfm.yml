@@ -154,7 +154,7 @@ jobs:
     needs: shots
     if: ${{ !cancelled() }}
     runs-on: xcode-27
-    timeout-minutes: 160
+    timeout-minutes: 185
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,7 +165,7 @@ jobs:
       - name: Films
         continue-on-error: true
         # Run 37 reached 75 minutes in the upright films (the posture changes take a minute each on the runner).
-        timeout-minutes: 100
+        timeout-minutes: 125
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -199,7 +199,24 @@ jobs:
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-charts 1 28 -tab 1
           STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll 1 26 -tab 0 -pose artist
           STEPS="shot:12 shot:12" film live 1 30 -tab 0 -panel 1 -mockAdvance 11
+          # The films the run 39 review found missing. Opened a second time: whole in its first frame, nothing arriving.
+          STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm 1 20 -tab 0
+          # Two swipes a fifth of a second apart, there and back: the second is never thrown back.
+          Y=0.6 STEPS="side2:6 shot:2 side2:2 shot:2 sideback2:2 shot:2 sideback2:2 shot:2" film pivot-quick 1 24 -tab 1
+          # A poll every 2 s and a new song every 5, under a finger that never stops: no row moves but by the finger.
+          STEPS="slow:6 slow:1 slow:1 fling:1 slow:1 flingback:1 slow:1 shot:2" film scroll-poll 1 20 -tab 0 -panel 1 -pollEvery 2 -mockAdvance 5
+          # Last.fm saying nothing is on for one poll in three: the song and its section's name stay as they are.
+          STEPS="shot:8 shot:4 shot:4 shot:4 shot:4" film live-gap 1 30 -tab 0 -panel 1 -mockGap YES -pollEvery 3
+          # A page opened by a tap on a row (an artist, an album, a song), and Back by its button; then by a slow drag
+          # from the edge, held most of the way across.
+          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.08,0.075:1 shot:1 shot:2" film tap-artist 1 18 -tab 1 -kind 0
+          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.08,0.075:1 shot:1 shot:2" film tap-album 1 18 -tab 1 -kind 1
+          STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.08,0.075:1 shot:1 shot:2" film tap-track 1 18 -tab 1 -kind 2
+          STEPS="tap=0.4,0.62:7 shot:3 edgeslow:1 shot:1 shot:3" film back-swipe-slow 1 20 -tab 1 -kind 0
           early films-folded
+          # Turned on what's playing and on an artist's page, as on You.
+          STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-now 1 22 -tab 0 -panel 1
+          STEPS="landscape:8 shot:2 portrait:6 shot:2" film posture-artist 1 24 -tab 0 -pose artist
           # Postures changed live. Folded on You, turned sideways and back: the outer display filmed.
           STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-outer 1 22 -tab 0
           # Opened upright on Charts and scrolled, turned flat, half folded, flat again, upright: the inner display filmed
@@ -213,6 +230,9 @@ jobs:
           Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 sideback:2 shot:2" film pivot-charts-portrait 3 18 -tab 1
           STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pan-name-portrait 3 20 -tab 0 -mockName midnightsignal
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-charts-portrait 3 26 -tab 1
+          Y=0.6 STEPS="side2:6 shot:2 sideback2:2 shot:2" film pivot-quick-portrait 3 16 -tab 1
+          STEPS="tap=0.4,0.62:7 shot:1 shot:2 edgeslow:1 shot:1 shot:3" film tap-artist-portrait 3 20 -tab 1 -kind 0
+          STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm-portrait 3 20 -tab 0
           early films-upright
           # Open flat, two panes.
           flat
@@ -220,6 +240,7 @@ jobs:
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-now-open 3 18 -tab 0
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
           X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
+          STEPS="tap=0.72,0.62:7 shot:1 shot:2 edgeslow:1 shot:1 shot:3" film tap-artist-open 3 20 -tab 1 -kind 0
           date
           # The simulator stopped before any film is shrunk: shrinking beside it failed with "Cannot Decode" (runs 34, 35).
           xcrun simctl shutdown "$DEVICE"
@@ -246,5 +267,8 @@ jobs:
           upload films.zip films-upright.zip films-flat.zip
           # Last, so a gate knows these films are this run's: what went up, and the films' logs.
           (echo "$GITHUB_SHA films run $GITHUB_RUN_NUMBER"; cd small && ls -la *.mp4 2>/dev/null) > films.txt
-          (cd dist && zip -q ../films-logs.zip films.log publish.log 2>/dev/null || zip -q ../films-logs.zip /dev/null)
-          upload films.txt films-logs.zip
+          # The app's own frame times, film by film: every film's line of totals in one file, the second-by-second logs
+          # in the zip. A film missing from hitches.txt has no evidence of its smoothness.
+          for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > hitches.txt
+          (cd dist && zip -q ../films-logs.zip films.log publish.log hitches-*.txt 2>/dev/null || zip -q ../films-logs.zip /dev/null)
+          upload films.txt hitches.txt films-logs.zip

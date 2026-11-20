@@ -21,6 +21,7 @@ struct MixName: View {
     var size: CGFloat = 120
     var moving: Bool
     @Environment(\.accessibilityReduceMotion) private var still
+    @State private var swayed = false
     var body: some View {
         let name = text.lowercased()
         GeometryReader { g in
@@ -33,17 +34,15 @@ struct MixName: View {
             let fit = min(size, size * room * 0.8 / natural)
             let slack = max(0, room - natural * fit / size)
             if fit >= size * 0.5 {
-                TimelineView(.animation(minimumInterval: 1 / 30, paused: !moving || still || slack < 2)) { tl in
-                    // A slow sway across the room it has, about 10 pt a second: a layer behind, not a ticker.
-                    let t = moving && !still ? tl.date.timeIntervalSinceReferenceDate : 0
-                    let period = max(Double(slack) / 10, 1) * 2
-                    let phase = (t.truncatingRemainder(dividingBy: period)) / period
-                    let x = slack * CGFloat(0.5 - 0.5 * cos(phase * 2 * .pi))
-                    Text(name).font(.system(size: fit, weight: .thin)).tracking(-2 * fit / size).lineLimit(1).fixedSize()
-                        .foregroundStyle(.white.opacity(0.13))
-                        .offset(x: S.margin - 4 + x)
-                        .frame(width: g.size.width, height: g.size.height, alignment: .leading)
-                }
+                // A slow sway across the room it has, about 10 pt a second: a layer behind, not a ticker. One repeating
+                // animation of an offset, not a 30-a-second timeline that worked the view out again every tick.
+                let on = moving && !still && slack >= 2
+                Text(name).font(.system(size: fit, weight: .thin)).tracking(-2 * fit / size).lineLimit(1).fixedSize()
+                    .foregroundStyle(.white.opacity(0.13))
+                    .offset(x: S.margin - 4 + (on && swayed ? slack : 0))
+                    .animation(on ? .easeInOut(duration: max(Double(slack) / 10, 1)).repeatForever(autoreverses: true) : .smooth, value: swayed)
+                    .frame(width: g.size.width, height: g.size.height, alignment: .leading)
+                    .onAppear { swayed = true }
             }
         }
         .frame(height: ceil(size * 1.2))
@@ -58,53 +57,59 @@ struct MixName: View {
 // it, each opening its album. Worked out from his history once it reaches back a week; until then, nothing (never a
 // guess from part of the week).
 struct RotationMosaic: View {
-    @State private var albums: [Entry] = []
-    @State private var width: CGFloat = 360
+    // Seeded from the list kept last time, so the mosaic is in its place in the first frame and never slides in above
+    // cards already on screen (run 39: "heavy rotation" faded in and pushed the page down 0.6 s after opening).
+    @State private var albums: [Entry] = RotationMosaic.kept()
     private var store: Store { Store.shared }
     private var sync: HistorySync { HistorySync.shared }
     var body: some View {
-        // Four columns folded (the big tile and a 2×2 beside it), six with room (the big tile and two rows of four).
-        let cols = width >= 560 ? 6 : 4
-        let g = S.gap / 2
-        let u = max(1, ((width - g * CGFloat(cols - 1)) / CGFloat(cols)).rounded(.down))
-        let smalls = (cols - 2) * 2
-        let big = u * 2 + g
         Group {
             if let top = albums.first, albums.count >= 3 {
                 VStack(alignment: .leading, spacing: S.head) {
                     SectionHead(text: "heavy rotation", trailing: "7 days")
-                    HStack(alignment: .top, spacing: g) {
-                        bigTile(top, side: big)
-                        VStack(alignment: .leading, spacing: g) {
-                            ForEach(0..<2, id: \.self) { row in
-                                HStack(spacing: g) {
-                                    ForEach(0..<(cols - 2), id: \.self) { c in
-                                        let k = 1 + row * (cols - 2) + c
-                                        if k < albums.count, k <= smalls { smallTile(albums[k], rank: k + 1, side: u) }
-                                        else { Color.clear.frame(width: u, height: u) }
-                                    }
-                                }
-                            }
+                    // Laid out from the width it's given, in the same pass: it used to measure its own width, which
+                    // could only grow, and after a turn of the phone the whole page stayed cut off at the left (run 39).
+                    MosaicLayout(gap: S.gap / 2) {
+                        bigTile(top)
+                        ForEach(1..<9, id: \.self) { k in
+                            if k < albums.count { smallTile(albums[k], rank: k + 1) } else { Color.clear }
                         }
                     }
+                    .clipped()
                 }
-                .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .task(id: "\(store.recent.first?.id ?? "")|\(sync.complete)|\(sync.coveredFrom / 3600)") { await load() }
     }
     private func load() async {
         let to = Int(Clock.now.timeIntervalSince1970) + 1, from = to - 7 * 86400
-        guard sync.complete || sync.coveredFrom <= from else { albums = []; return }
+        guard sync.complete || sync.coveredFrom <= from else { return }
         let list = await HistoryDB.reader.top(.albums, from: from, to: to, limit: 9, median: LengthFill.shared.median)
-        withAnimation(.smooth(duration: 0.35)) { albums = list }
+        // In place, no animation of its own: the tiles keep their places and only what changed changes.
+        guard list.map(\.id) != albums.map(\.id) || list.map(\.plays) != albums.map(\.plays) else { return }
+        albums = list
+        Self.keep(list)
     }
-    private func bigTile(_ e: Entry, side: CGFloat) -> some View {
+    // The last list on the disk: artist, album, cover and plays are all a tile needs.
+    private static var file: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(LastFM.shared.mock ? "rotation-mock.json" : "rotation.json") }
+    private struct Kept: Codable { let artist: String; let album: String; let image: String?; let plays: Int }
+    static func kept() -> [Entry] {
+        if UserDefaults.standard.bool(forKey: "fresh") { return [] }
+        guard let d = try? Data(contentsOf: file), let list = try? JSONDecoder().decode([Kept].self, from: d) else { return [] }
+        let out = list.map { Entry(kind: .albums, artist: $0.artist, album: $0.album, track: "", plays: $0.plays, image: $0.image) }
+        // Its covers at the sizes the tiles draw, before the first frame.
+        for (i, e) in out.prefix(9).enumerated() { ArtStore.shared.warm(e.art, px: [i == 0 ? 600 : 300], backdrop: false) }
+        return out
+    }
+    private static func keep(_ list: [Entry]) {
+        let k = list.map { Kept(artist: $0.artist, album: $0.album, image: $0.image, plays: $0.plays) }
+        if let d = try? JSONEncoder().encode(k) { try? d.write(to: file, options: .atomic) }
+    }
+    private func bigTile(_ e: Entry) -> some View {
         Opens(route: e.route, zoom: "rotation|\(e.id)") {
             ZStack(alignment: .bottomLeading) {
-                ArtView(e.art, px: 600, corner: 12).frame(width: side, height: side).zoomSource("rotation|\(e.id)")
+                ArtView(e.art, px: 600, corner: 12).zoomSource("rotation|\(e.id)")
                 LinearGradient(stops: [.init(color: .clear, location: 0.35), .init(color: .black.opacity(0.72), location: 1)], startPoint: .top, endPoint: .bottom)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
@@ -114,25 +119,59 @@ struct RotationMosaic: View {
                 }
                 .padding(10)
             }
-            .frame(width: side, height: side)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Most played this week: \(e.album) by \(e.artist), \(plays(e.plays))")
         .accessibilityAddTraits(.isButton)
     }
-    private func smallTile(_ e: Entry, rank: Int, side: CGFloat) -> some View {
+    private func smallTile(_ e: Entry, rank: Int) -> some View {
         Opens(route: e.route, zoom: "rotation|\(e.id)") {
             ZStack(alignment: .bottomLeading) {
-                ArtView(e.art, px: 300, corner: 8).frame(width: side, height: side).zoomSource("rotation|\(e.id)")
-                RankShade(corner: 8).frame(width: side, height: side)
+                ArtView(e.art, px: 300, corner: 8).zoomSource("rotation|\(e.id)")
+                RankShade(corner: 8)
                 Text(number(e.plays)).font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.6), radius: 3).padding(6)
             }
-            .frame(width: side, height: side)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(rank). \(e.album) by \(e.artist), \(plays(e.plays))")
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+// The mosaic's shape from the width offered, worked out in one layout pass: the first view a double tile, then small
+// square tiles two rows deep beside it; four columns folded (a 2×2 beside it), six with room (two rows of four). Small
+// tiles past what the columns hold are put outside its bounds.
+struct MosaicLayout: Layout {
+    let gap: CGFloat
+    private func metrics(_ w: CGFloat) -> (cols: Int, u: CGFloat) {
+        let cols = w >= 560 ? 6 : 4
+        return (cols, max(1, ((w - gap * CGFloat(cols - 1)) / CGFloat(cols)).rounded(.down)))
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = proposal.width ?? 360
+        let m = metrics(w)
+        return CGSize(width: w, height: m.u * 2 + gap)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let m = metrics(bounds.width)
+        let big = m.u * 2 + gap
+        let per = m.cols - 2
+        for (i, v) in subviews.enumerated() {
+            if i == 0 {
+                v.place(at: bounds.origin, proposal: ProposedViewSize(width: big, height: big))
+                continue
+            }
+            let k = i - 1
+            if k < per * 2 {
+                let x = bounds.minX + big + gap + CGFloat(k % per) * (m.u + gap)
+                let y = bounds.minY + CGFloat(k / per) * (m.u + gap)
+                v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: m.u, height: m.u))
+            } else {
+                // Out of the frame (the mosaic is clipped to its bounds), at its own size, never squashed to nothing.
+                v.place(at: CGPoint(x: bounds.maxX + 4000, y: bounds.minY), proposal: ProposedViewSize(width: m.u, height: m.u))
+            }
+        }
     }
 }
 
@@ -149,7 +188,10 @@ struct MixView: View {
     let center: ArtRef
     @State private var ring: [Node] = []
     @State private var shown = false
-    @State private var width: CGFloat = 360
+    // The room it has, from the page's width (it sits inside the page's margins): known as it's laid out, where it
+    // used to measure itself and lay out a frame late.
+    @Environment(\.pageWidth) private var pageWidth
+    private var width: CGFloat { max(200, pageWidth - S.margin * 2) }
     @Environment(\.accessibilityReduceMotion) private var still
     // Room under or over a satellite's cover for its name on two lines and his plays.
     @ScaledMetric(relativeTo: .caption) private var label: CGFloat = 48
@@ -174,7 +216,6 @@ struct MixView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .task(id: artist) { await load() }
     }
 

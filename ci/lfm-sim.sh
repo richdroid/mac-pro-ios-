@@ -64,18 +64,38 @@ stop_rec() {
   wait $REC 2>/dev/null
 }
 
+# The app's own frame times for a film (-hitchLog: a line of totals, then a line a second), copied beside it as
+# dist/hitches-NAME.txt. The gate reads smoothness from these numbers, not from the runner's recording; a film with no
+# hitch log is no evidence of it.
+hitches() {
+  local c
+  c=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) || return
+  if [ "$1" = clear ]; then rm -f "$c/Library/Caches/hitches.txt"; return; fi
+  cp "$c/Library/Caches/hitches.txt" dist/hitches-$1.txt 2>/dev/null || echo "no hitch log: $1"
+}
+
 # One film: name, display, seconds, then the app's own arguments; steps run while it records (STEPS="cmd:wait ...").
-# Its stills (lfm-NAME-T.png, lfm-NAME-end.png) are taken as it runs.
+# A step may carry a place: tap=0.4,0.6:2 taps there after 2 s. Its stills (lfm-NAME-T.png, lfm-NAME-end.png) are taken
+# as it runs.
 film() {
   local name=$1 display=$2 secs=$3; shift 3
+  hitches clear
   xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/lfm-$name.mp4 > /dev/null 2>&1 & REC=$!
   sleep 3
-  xcrun simctl launch "$DEVICE" $APP -launchLog YES "$@"
-  local step cmd wait t=0
+  xcrun simctl launch "$DEVICE" $APP -launchLog YES -hitchLog YES "$@"
+  local step cmd wait arg t=0
   for step in $STEPS; do
     cmd=${step%%:*}; wait=${step##*:}
+    arg=""; case $cmd in *=*) arg=${cmd#*=}; cmd=${cmd%%=*};; esac
     sleep $wait; t=$((t + wait))
     case $cmd in
+      # Two swipes, the second begun a fifth of a second after the first has been let go: it must never be thrown back.
+      side2) $D "$DEVICE" drag 0.8 ${Y:-0.75} 0.2 ${Y:-0.75} 0.2 || echo "drag failed"; sleep 0.2; $D "$DEVICE" drag 0.8 ${Y:-0.75} 0.2 ${Y:-0.75} 0.2 || echo "drag failed";;
+      sideback2) $D "$DEVICE" drag 0.2 ${Y:-0.75} 0.8 ${Y:-0.75} 0.2 || echo "drag failed"; sleep 0.2; $D "$DEVICE" drag 0.2 ${Y:-0.75} 0.8 ${Y:-0.75} 0.2 || echo "drag failed";;
+      # Back by a slow drag from the edge, held most of the way across before it's let go.
+      edgeslow) $D "$DEVICE" drag ${EX:-0.01} 0.5 0.85 0.5 2.5 || echo "drag failed";;
+      # Closed and opened again, as he does: the second opening is the one that must be whole in its first frame.
+      relaunch) xcrun simctl terminate "$DEVICE" $APP || true; sleep 1; xcrun simctl launch "$DEVICE" $APP -launchLog YES -hitchLog YES "$@";;
       fling) $D "$DEVICE" drag ${X:-0.5} 0.8 ${X:-0.5} 0.25 0.12 || echo "drag failed";;
       flingback) $D "$DEVICE" drag ${X:-0.5} 0.25 ${X:-0.5} 0.8 0.12 || echo "drag failed";;
       pull) $D "$DEVICE" drag ${X:-0.5} 0.3 ${X:-0.5} 0.85 0.9 || echo "drag failed";;
@@ -85,7 +105,7 @@ film() {
       sideslow) $D "$DEVICE" drag 0.75 ${Y:-0.75} 0.35 ${Y:-0.75} 1.2 || echo "drag failed";;
       link) xcrun simctl openurl "$DEVICE" "$LINK" || echo "link failed";;
       edge) $D "$DEVICE" drag ${EX:-0.01} 0.5 0.9 0.5 0.8 || echo "drag failed";;
-      tap) $D "$DEVICE" touch ${TX:-0.3} ${TY:-0.3} 0.05 || echo "tap failed";;
+      tap) if [ -n "$arg" ]; then $D "$DEVICE" touch ${arg%,*} ${arg#*,} 0.05 || echo "tap failed"; else $D "$DEVICE" touch ${TX:-0.3} ${TY:-0.3} 0.05 || echo "tap failed"; fi;;
       open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose failed";;
       portrait) orient portrait $display;;
       landscape) orient landscape $display;;
@@ -95,6 +115,7 @@ film() {
   sleep $((secs > t ? secs - t : 1))
   xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-end.png
   stop_rec $name
+  hitches $name
   xcrun simctl terminate "$DEVICE" $APP || true
   if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
 }

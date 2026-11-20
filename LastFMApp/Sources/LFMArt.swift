@@ -38,6 +38,7 @@ extension Palette.RGB {
 
 final class ArtStore: @unchecked Sendable {
     static let shared = ArtStore()
+    static let born = Date()
     private let images = NSCache<NSString, CGImageBox>()
     private let lock = NSLock()
     private var palettes: [String: Palette] = [:]
@@ -74,14 +75,18 @@ final class ArtStore: @unchecked Sendable {
     }
 
     // The hero's cover and backdrop, decoded now from what's on disk (a few milliseconds), for the first frame.
-    func warm(_ ref: ArtRef) {
-        guard cached(ref, px: 1000) == nil else { return }
-        var data = try? Data(contentsOf: file("album:" + ref.key))
-        if data == nil, let u = ref.url, u.hasPrefix("mock://") {
-            data = Bundle.main.url(forResource: String(u.dropFirst(7)), withExtension: "jpg", subdirectory: "Mock/art").flatMap { try? Data(contentsOf: $0) }
+    // Every size the first frame draws of it (the hero's 1000 px and the strip's 156 px; a mosaic tile's own): run 39
+    // warmed only the hero's, and the strip, his picture and the mosaic faded in a second after opening.
+    func warm(_ ref: ArtRef, px sizes: [Int] = [1000, 156], backdrop: Bool = true) {
+        let missing = sizes.filter { cached(ref, px: $0) == nil }
+        if !missing.isEmpty {
+            var data = try? Data(contentsOf: file("album:" + ref.key))
+            if data == nil, let u = ref.url, u.hasPrefix("mock://") {
+                data = Bundle.main.url(forResource: String(u.dropFirst(7)), withExtension: "jpg", subdirectory: "Mock/art").flatMap { try? Data(contentsOf: $0) }
+            }
+            if let data { for px in missing { _ = decode(ref, data, px: px) } }
         }
-        guard let data else { return }
-        _ = decode(ref, data, px: 1000)
+        guard backdrop, cachedBackdrop(ref) == nil else { return }
         // The backdrop as it was blurred last time, from the disk: no Core Image before the first frame.
         if let d = try? Data(contentsOf: file("backdrop2:" + ref.key)), let src = CGImageSourceCreateWithData(d as CFData, nil),
            let b = CGImageSourceCreateImageAtIndex(src, 0, nil) {
@@ -241,26 +246,46 @@ struct ArtView: View {
     var px: Int = 300
     var corner: CGFloat = 8
     @State private var image: CGImage?
+    // The picture before, held under a new one while it fades in: a new cover never shows the stand-in between the two
+    // (run 39: the grey disc showed through as the hero's cover changed).
+    @State private var under: CGImage?
+    @State private var turn = 0
     init(_ ref: ArtRef, px: Int = 300, corner: CGFloat = 8) {
         self.ref = ref; self.px = px; self.corner = corner
         _image = State(initialValue: ArtStore.shared.cached(ref, px: px))
     }
     var body: some View {
         ZStack {
-            Stand(ref: ref)
+            if under == nil { Stand(ref: ref) }
+            if let under { Image(decorative: under, scale: 1).resizable().interpolation(.high).aspectRatio(contentMode: .fill) }
             if let image {
                 Image(decorative: image, scale: 1).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
-                    .transition(.opacity.animation(.easeOut(duration: 0.25)))
+                    .id(turn)
+                    .transition(.opacity)
             }
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 0.5) }
         .task(id: ref) {
-            if let c = ArtStore.shared.cached(ref, px: px) { image = c; return }
-            image = nil
-            if let i = await ArtStore.shared.image(ref, px: px) { withAnimation(.easeOut(duration: 0.25)) { image = i } }
+            let had = image
+            if let c = ArtStore.shared.cached(ref, px: px) {
+                guard c !== had else { return }
+                swap(to: c, from: had)
+                return
+            }
+            // The old picture stays until the new one is here (never blanked to the stand-in on a new ref).
+            if let i = await ArtStore.shared.image(ref, px: px) { swap(to: i, from: had) }
+            else if had != nil { withAnimation(.easeOut(duration: 0.25)) { image = nil } }
         }
+    }
+    // A first picture fades in over the stand-in; a later one fades in over the one before, which is let go after.
+    private func swap(to new: CGImage, from old: CGImage?) {
+        // In the first moments after opening a picture is simply there: nothing fades in while the app appears.
+        if old == nil, Date().timeIntervalSince(ArtStore.born) < 0.6 { image = new; return }
+        under = old
+        turn += 1
+        withAnimation(.easeOut(duration: old == nil ? 0.25 : 0.5)) { image = new } completion: { under = nil }
     }
     struct Stand: View {
         let ref: ArtRef

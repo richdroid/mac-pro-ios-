@@ -69,7 +69,7 @@ struct StartTab: View {
 
     // What's on, or nothing pretending to be: today's figures and the last song. Then the day and every scrobble.
     private func nowPanel(_ layout: NowHero.Layout) -> Panel {
-        let playing = store.nowPlaying != nil || store.hero == nil
+        let playing = store.shown.map(\.nowPlaying) ?? true
         return Panel(1, playing ? "now playing" : "today") {
             VStack(alignment: .leading, spacing: S.section) {
                 // First, as on his own page: under the hero it sat below the first screen folded (run 34).
@@ -78,7 +78,7 @@ struct StartTab: View {
                 if playing {
                     NowHero(layout: layout == .stage ? .column : layout, titled: false)
                     // Zune's Mixview: the artist on now ringed by the artists like them, his plays as the lines.
-                    if let s = store.nowPlaying { MixView(artist: s.artist, center: s.art).padding(.horizontal, S.margin) }
+                    if let s = store.shown, s.nowPlaying { MixView(artist: s.artist, center: s.art).padding(.horizontal, S.margin) }
                 } else {
                     VStack(alignment: .leading, spacing: S.section) {
                         TodayFigures()
@@ -131,7 +131,7 @@ struct NowStrip: View {
     let go: () -> Void
     private var store: Store { Store.shared }
     var body: some View {
-        if let s = store.hero {
+        if let s = store.shown {
             Button(action: go) {
                 HStack(spacing: S.gap) {
                     ArtView(s.art, px: 156, corner: 6).frame(width: S.art, height: S.art)

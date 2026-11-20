@@ -35,10 +35,24 @@ struct HubTitle: View {
     // How far it may shrink to fit. His own name is always whole (0.3); other titles keep their size past 70 %.
     var least: CGFloat = 0.7
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
-    @State private var room: CGFloat = 0
     var body: some View {
         let base = size * min(max(k, 0.9), 1.25)
-        let scale = HubTitle.scale(text, base: base, room: room, least: least)
+        // The size chosen in the same layout pass that draws it, from the width offered: it was measured after the first
+        // frame, so a long title drew at full size for a frame, then shrank (run 39 review, fault 9). Steps of 5 %
+        // down to the least; past that a title keeps its size (runs off), his own name stays at its least.
+        let steps = stride(from: 1.0, through: Double(least) - 0.001, by: -0.05).map { CGFloat($0) }
+        ViewThatFits(in: .horizontal) {
+            ForEach(steps, id: \.self) { s in line(base, s).padding(.trailing, S.margin) }
+            line(base, least < 0.7 ? least : 1)
+        }
+        // Both bounds, so the frame is the page's width however long the name: with only a maximum it took the text's
+        // own width, and a long album's title pushed the whole page off the left edge (run 11).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+        .accessibilityAddTraits(.isHeader)
+    }
+    private func line(_ base: CGFloat, _ scale: CGFloat) -> some View {
         Text(text.lowercased())
             .font(.system(size: base * scale, weight: .thin))
             .tracking(-1.5 * scale)
@@ -46,11 +60,6 @@ struct HubTitle: View {
             .fixedSize()
             .foregroundStyle(.white.opacity(0.94))
             .padding(.leading, S.margin - 6)
-            // Both bounds, so the frame is the page's width however long the name: with only a maximum it took the
-            // text's own width, and a long album's title pushed the whole page off the left edge (run 11).
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { room = $0 }
-            .accessibilityAddTraits(.isHeader)
     }
     // How much a title shrinks to fit the room it's given (its own inset and the page's margin at the far side): to
     // 70 % at the least; past that it keeps its size and runs off the edge.
@@ -162,59 +171,66 @@ func dayName(_ d: Date) -> String {
     return d.formatted(.dateTime.month(.wide).day()).lowercased()
 }
 
-// The page behind everything: the cover of what's on (or last played), blurred to colour, drifting slowly while a song
-// plays, over the near-black ground; darker toward the foot so lists stay easy to read. Every tab paints the same one
-// from the same kept picture, so going between tabs shows the same backdrop with nothing redrawn or faded in.
+// The page behind everything: the cover of what's on (or last played), blurred to colour, over the near-black ground;
+// darker toward the foot so lists stay easy to read. Every tab paints the same one from the same kept picture, so going
+// between tabs shows the same backdrop with nothing redrawn or faded in.
+// It holds still. It drifted at 30 frames a second under every glass card, which redrew the whole screen while a song
+// played and moved the ground on every fourth frame of a scroll (run 39 review, fault 8). A new cover crossfades over
+// the old one, which stays under it until the new one is in: never black between (fault 2).
 struct Backdrop: View {
     let ref: ArtRef?
-    var moving: Bool
+    var moving: Bool = false
     var dim: Double = 0
+    @State private var image: CGImage?
+    @State private var under: CGImage?
+    @State private var turn = 0
+    init(ref: ArtRef?, moving: Bool = false, dim: Double = 0) {
+        self.ref = ref; self.moving = moving; self.dim = dim
+        _image = State(initialValue: ref.flatMap { ArtStore.shared.cachedBackdrop($0) })
+    }
     var body: some View {
         ZStack {
             S.ground
-            if let ref {
-                Layer(ref: ref, moving: moving).id(ref.key)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.6)))
+            GeometryReader { g in
+                let side = max(g.size.width, g.size.height) * 1.5
+                ZStack {
+                    if under == nil, image == nil, let ref { stand(ref) }
+                    if let under { Image(decorative: under, scale: 1).resizable().interpolation(.high) }
+                    if let image { Image(decorative: image, scale: 1).resizable().interpolation(.high).id(turn).transition(.opacity) }
+                }
+                .frame(width: side, height: side)
+                .rotationEffect(.degrees(-3))
+                .scaleEffect(1.06)
+                .position(x: g.size.width / 2, y: g.size.height * 0.36)
+                .opacity(0.78)
             }
             LinearGradient(stops: [.init(color: .black.opacity(0.05 + dim), location: 0), .init(color: .black.opacity(0.45 + dim), location: 0.55), .init(color: .black.opacity(0.82), location: 1)],
                            startPoint: .top, endPoint: .bottom)
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
-    }
-    struct Layer: View {
-        let ref: ArtRef
-        let moving: Bool
-        @State private var image: CGImage?
-        init(ref: ArtRef, moving: Bool) { self.ref = ref; self.moving = moving; _image = State(initialValue: ArtStore.shared.cachedBackdrop(ref)) }
-        var body: some View {
-            GeometryReader { g in
-                TimelineView(.animation(minimumInterval: 1 / 30, paused: !moving)) { tl in
-                    let t = moving ? tl.date.timeIntervalSinceReferenceDate : 0
-                    let side = max(g.size.width, g.size.height) * 1.5
-                    Group {
-                        if let image {
-                            Image(decorative: image, scale: 1).resizable().interpolation(.high)
-                        } else {
-                            let p = Palette.from(name: ref.artist + ref.album)
-                            // The same brightness cap as the blurred cover, so white reads on the stand-in too.
-                            let l = 0.2126 * p.vivid.r + 0.7152 * p.vivid.g + 0.0722 * p.vivid.b
-                            let k = l > ArtStore.backdropLuma ? ArtStore.backdropLuma / l : 1
-                            LinearGradient(colors: [p.vivid.scaled(k).color, p.deep.scaled(min(1, k * 1.5)).color], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        }
-                    }
-                    .frame(width: side, height: side)
-                    .rotationEffect(.degrees(sin(t / 11) * 7))
-                    .scaleEffect(1.06 + 0.04 * sin(t / 7))
-                    .offset(x: CGFloat(sin(t / 13)) * 24, y: CGFloat(cos(t / 17)) * 18)
-                    .position(x: g.size.width / 2, y: g.size.height * 0.36)
-                    .opacity(0.78)
-                }
+        .allowsHitTesting(false)
+        .task(id: ref?.key) {
+            guard let ref else { return }
+            let had = image
+            if let c = ArtStore.shared.cachedBackdrop(ref) {
+                if c !== had { swap(to: c, from: had) }
+                return
             }
-            .task(id: ref) {
-                if image == nil, let b = await ArtStore.shared.backdrop(ref) { withAnimation(.easeOut(duration: 0.5)) { image = b } }
-            }
+            if let b = await ArtStore.shared.backdrop(ref) { swap(to: b, from: had) }
         }
+    }
+    private func swap(to new: CGImage, from old: CGImage?) {
+        under = old
+        turn += 1
+        withAnimation(.easeInOut(duration: 0.5)) { image = new } completion: { under = nil }
+    }
+    // Before any cover has been blurred: its colours, capped as dark as the blurred cover is, so white reads on it too.
+    private func stand(_ ref: ArtRef) -> some View {
+        let p = Palette.from(name: ref.artist + ref.album)
+        let l = 0.2126 * p.vivid.r + 0.7152 * p.vivid.g + 0.0722 * p.vivid.b
+        let k = l > ArtStore.backdropLuma ? ArtStore.backdropLuma / l : 1
+        return LinearGradient(colors: [p.vivid.scaled(k).color, p.deep.scaled(min(1, k * 1.5)).color], startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }
 
@@ -325,3 +341,41 @@ enum LaunchLog {
         else { try? Data(line.utf8).write(to: url) }
     }
 }
+
+// For the build's films (-hitchLog YES, never on the phone): the frame times, so a film's smoothness is read in numbers
+// rather than from the runner's own recording (run 39 review, F-B). A display link counts every frame later than one
+// and a half refresh intervals. Caches/hitches.txt gets one line a second (that second's frames, late frames, frames
+// missed and longest gap, so a hitch can be matched to the moment of the film it fell in) under a first line of totals.
+#if canImport(UIKit)
+@MainActor final class HitchLog: NSObject {
+    static let shared = HitchLog()
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0, began: CFTimeInterval = 0, mark: CFTimeInterval = 0
+    private var total = (frames: 0, late: 0, missed: 0, longest: 0.0)
+    private var second = (frames: 0, late: 0, missed: 0, longest: 0.0)
+    private var lines: [String] = []
+    func start() {
+        guard UserDefaults.standard.bool(forKey: "hitchLog"), link == nil else { return }
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+    @objc private func tick(_ l: CADisplayLink) {
+        let now = l.timestamp
+        let interval = max(l.targetTimestamp - l.timestamp, 1.0 / 120)
+        guard last > 0 else { last = now; began = now; mark = now; return }
+        let gap = now - last
+        last = now
+        let late = gap > interval * 1.5, missed = late ? Int((gap / interval).rounded()) - 1 : 0
+        total.frames += 1; second.frames += 1
+        if late { total.late += 1; second.late += 1; total.missed += missed; second.missed += missed }
+        total.longest = max(total.longest, gap); second.longest = max(second.longest, gap)
+        guard now - mark >= 1 else { return }
+        lines.append(String(format: "t %5.1f frames %3d late %2d missed %3d longest_ms %4.0f", now - began, second.frames, second.late, second.missed, second.longest * 1000))
+        second = (0, 0, 0, 0); mark = now
+        let head = String(format: "total seconds %.1f frames %d late %d missed %d longest_ms %.0f interval_ms %.1f", now - began, total.frames, total.late, total.missed, total.longest * 1000, interval * 1000)
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("hitches.txt")
+        try? Data(([head] + lines).joined(separator: "\n").utf8).write(to: url, options: .atomic)
+    }
+}
+#endif

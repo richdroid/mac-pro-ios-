@@ -128,7 +128,7 @@ struct PaceCard: View {
     @State private var held: Int?
     var body: some View {
         if let p = store.insights.pace {
-            let hero = ArtStore.shared.palette(Store.shared.hero?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
+            let hero = ArtStore.shared.palette(Store.shared.shown?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "this week")
                 VStack(alignment: .leading, spacing: S.head) {
@@ -481,7 +481,7 @@ struct ClockCard: View {
             let shareA = all.map { $0 / sa }, shareW = week.map { $0 / sw }
             let peak = max(shareA.max() ?? 0.01, shareW.max() ?? 0.01)
             let late = (0..<5).reduce(0.0) { $0 + shareA[$1] }
-            let tint = ArtStore.shared.palette(store.hero?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
+            let tint = ArtStore.shared.palette(store.shown?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "your clock")
                 VStack(spacing: S.inner) {

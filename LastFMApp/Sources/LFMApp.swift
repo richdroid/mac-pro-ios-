@@ -13,7 +13,12 @@ struct LastFMApp: App {
             RootView()
                 .preferredColorScheme(.dark)
                 .onChange(of: phase) { _, p in if p == .active { Store.shared.start() } else { Store.shared.stop() } }
-                .onAppear { LaunchLog.mark("root appeared"); Store.shared.start() }
+                .onAppear {
+                    LaunchLog.mark("root appeared"); Store.shared.start()
+                    #if canImport(UIKit)
+                    HitchLog.shared.start()
+                    #endif
+                }
         }
     }
 }
@@ -65,7 +70,7 @@ struct TabPage<C: View>: View {
         NavigationStack(path: $path) {
             content(scrollTop)
                 .modifier(BarFade())
-                .background { Backdrop(ref: store.hero?.art, moving: active && store.nowPlaying != nil) }
+                .background { Backdrop(ref: store.shown?.art) }
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: Go.self) { g in RoutePage(go: g, space: space) }
         }

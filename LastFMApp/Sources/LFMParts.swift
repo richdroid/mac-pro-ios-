@@ -288,7 +288,6 @@ struct WaysOut: View {
 struct FigureGrid: View {
     let items: [(String, String)]
     var size: CGFloat = 30
-    @State private var width: CGFloat = 360
     var body: some View {
         // A column is as wide as the longest figure needs, allowing it to shrink to 72 % (Figure's own limit is 70 %),
         // so no figure is ever cut short ("Mar 14, 20…" open flat, run 12).
@@ -296,15 +295,11 @@ struct FigureGrid: View {
         let label: Int = items.map { $0.1.count }.max() ?? 5
         // Room for the longest label too ("of your 1,077 artists" was cut open flat, run 16).
         let need: CGFloat = max(84, (CGFloat(longest) * size * 0.46 + 4) * 0.72, CGFloat(label) * 7.4 + 4)
-        let fit: Int = max(1, Int((width + S.figures) / (need + S.figures)))
-        let n: Int = items.count
-        // Three that almost fit go three across (their digits shrink a little) rather than two and a stray one.
-        let across: CGFloat = (width - S.figures * CGFloat(max(n - 1, 0))) / CGFloat(max(n, 1))
-        let cols: Int = n <= fit ? max(n, 1) : (n <= 3 && across >= need * 0.95 ? n : Self.even(n, fit))
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: S.figures, alignment: .topLeading), count: cols), alignment: .leading, spacing: S.inner) {
+        // The columns chosen from the width offered, in the same layout pass: the grid measured its own width and laid
+        // out one frame late, at 360 pt first whatever the room (run 39 review, fault 1).
+        FigureLayout(need: need) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, f in Figure(value: f.0, label: f.1, size: size) }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
     // The most columns that fit and leave no row short, else as many as fit.
     static func even(_ n: Int, _ fit: Int) -> Int {
@@ -314,18 +309,65 @@ struct FigureGrid: View {
     }
 }
 
+struct FigureLayout: Layout {
+    let need: CGFloat
+    private func cols(_ n: Int, _ width: CGFloat) -> Int {
+        let fit: Int = max(1, Int((width + S.figures) / (need + S.figures)))
+        // Three that almost fit go three across (their digits shrink a little) rather than two and a stray one.
+        let across: CGFloat = (width - S.figures * CGFloat(max(n - 1, 0))) / CGFloat(max(n, 1))
+        return n <= fit ? max(n, 1) : (n <= 3 && across >= need * 0.95 ? n : FigureGrid.even(n, fit))
+    }
+    private func rows(_ subviews: Subviews, _ width: CGFloat) -> (cols: Int, cell: CGFloat, heights: [CGFloat]) {
+        let c = cols(subviews.count, width)
+        let cell = max(1, (width - S.figures * CGFloat(c - 1)) / CGFloat(c))
+        var heights: [CGFloat] = []
+        for (i, v) in subviews.enumerated() {
+            let h = v.sizeThatFits(ProposedViewSize(width: cell, height: nil)).height
+            if i % c == 0 { heights.append(h) } else { heights[heights.count - 1] = max(heights[heights.count - 1], h) }
+        }
+        return (c, cell, heights)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let n = CGFloat(max(subviews.count, 1))
+        var w = proposal.width ?? (need * n + S.figures * (n - 1))
+        if !w.isFinite { w = need * n + S.figures * (n - 1) }
+        let r = rows(subviews, w)
+        return CGSize(width: w, height: r.heights.reduce(0, +) + S.inner * CGFloat(max(r.heights.count - 1, 0)))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let r = rows(subviews, bounds.width)
+        var y = bounds.minY
+        for (i, v) in subviews.enumerated() {
+            let c = i % r.cols
+            if c == 0, i > 0 { y += r.heights[i / r.cols - 1] + S.inner }
+            v.place(at: CGPoint(x: bounds.minX + CGFloat(c) * (r.cell + S.figures), y: y), anchor: .topLeading, proposal: ProposedViewSize(width: r.cell, height: nil))
+        }
+    }
+}
+
+// The width of the page a view is on (a tab's page, one section of a pager, one pane open flat), known in the layout
+// pass that draws it. Views that choose a shape by width read it here instead of measuring themselves a frame late.
+private struct PageWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 390 }
+extension EnvironmentValues {
+    var pageWidth: CGFloat { get { self[PageWidthKey.self] } set { self[PageWidthKey.self] = newValue } }
+}
+
 // A page's scroll: content, the bottom air, and back to the top when its tab is tapped again.
 struct Page<C: View>: View {
     var top = 0
     @ViewBuilder let content: () -> C
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                Color.clear.frame(height: 0).id("top")
-                content().padding(.bottom, S.section)
+        GeometryReader { g in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Color.clear.frame(height: 0).id("top")
+                    content().padding(.bottom, S.section)
+                }
+                .scrollIndicators(.hidden)
+                .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
+                .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
             }
-            .scrollIndicators(.hidden)
-            .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
+            .environment(\.pageWidth, g.size.width)
         }
     }
 }

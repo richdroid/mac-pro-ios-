@@ -34,6 +34,7 @@ final class MockLastFM: @unchecked Sendable {
     private let playing = UserDefaults.standard.object(forKey: "playing") == nil || UserDefaults.standard.bool(forKey: "playing")
     // -mockAdvance N: every N seconds the song on now is scrobbled and the next begins.
     private let advance = UserDefaults.standard.double(forKey: "mockAdvance")
+    private var looks = 0
 
     private init() {
         guard let u = Bundle.main.url(forResource: "catalog", withExtension: "json", subdirectory: "Mock"),
@@ -277,7 +278,11 @@ final class MockLastFM: @unchecked Sendable {
             let lo = min(range.upperBound, range.lowerBound + (pg - 1) * limit), hi = min(range.upperBound, lo + limit)
             let ext = params["extended"] == "1"
             var list = (lo..<hi).map { trackJSON(plays[$0], extended: ext) }
-            if pg == 1, playing, params["to"] == nil, let c = current { list.insert(trackJSON(c, now: true, extended: ext), at: 0) }
+            // -mockGap YES: every third look at what's on says nothing is (as Last.fm does between songs), for the build's
+            // film of a gap that must not flip the hero.
+            var gap = false
+            if pg == 1, params["to"] == nil, UserDefaults.standard.bool(forKey: "mockGap") { looks += 1; gap = looks % 3 == 2 }
+            if pg == 1, playing, !gap, params["to"] == nil, let c = current { list.insert(trackJSON(c, now: true, extended: ext), at: 0) }
             let total = range.count
             return ["recenttracks": ["track": list, "@attr": ["user": profileName, "page": "\(pg)", "perPage": "\(limit)", "total": "\(total)", "totalPages": "\(max(1, (total + limit - 1) / limit))"]]]
         case "user.gettopartists", "user.gettopalbums":

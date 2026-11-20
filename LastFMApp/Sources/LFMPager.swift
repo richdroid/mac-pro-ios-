@@ -44,6 +44,10 @@ struct Pager: View {
     // Opened on a section other than the first (a widget's link, a build's pose): not settled, and nothing read from
     // where the scroll is, until it has really been put there.
     @State private var placed = false
+    // The scroll's phase, so nothing moves the pager while his finger or a fling is on it.
+    @State private var phase: ScrollPhase = .idle
+    // The page was set by the pager itself (a landing), not asked for from outside: no correction follows it.
+    @State private var selfSet = false
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
 
     init(_ look: Look, title: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, panels: [Panel]) {
@@ -90,11 +94,13 @@ struct Pager: View {
                     ScrollView(.horizontal) {
                         Group {
                             if look == .pivot {
-                                LazyHStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars).frame(width: pw).id(p.id) } }
+                                // Every section built at once, at rest: lazily, a section was built whole on its first reveal,
+                                // mid-drag (run 39: 180 and 720 ms with no frame on the first swipe to a stretch).
+                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars, pw).frame(width: pw).id(p.id) } }
                             } else {
                                 // Each section held to its own width: a row of covers running off one section's edge stopped showing at
                                 // the leading edge of the next (run 25: "Cassio V" from lately at the side of your story).
-                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars).frame(width: pw).clipped().id(p.id) } }
+                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars, pw).frame(width: pw).clipped().id(p.id) } }
                             }
                         }
                         .scrollTargetLayout()
@@ -112,19 +118,34 @@ struct Pager: View {
                     .scrollIndicators(.hidden)
                     .scrollDisabled(locked)
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, v in motion.x = v; motion.f = v / pw }
-                    .onScrollPhaseChange { _, phase in if phase == .idle { settle(pw) } }
+                    // The landing is decided as his finger lifts (from where the page is and which way it was flung), so
+                    // the page, the lit name, the names' own scroll and the tick all move together with the page, not
+                    // after it has come to rest (run 39: the names swapped only as the page landed). At rest, checked.
+                    .onScrollPhaseChange { _, new, context in
+                        phase = new
+                        if new == .decelerating {
+                            let f = motion.f, v = context.velocity?.dx ?? 0
+                            let i = v > 0.2 ? f.rounded(.up) : v < -0.2 ? f.rounded(.down) : f.rounded()
+                            land(Int(i))
+                        } else if new == .idle {
+                            land(Int((motion.x / pw).rounded()))
+                        }
+                    }
                     // Opened on a section other than the first (a link, a pose): put there before anything shows it
                     // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20: every
                     // posed section showed the first).
                     .task { await place(reader) }
                     // Asked to move from outside (a stretch chosen, a link): by position, and if the scroll hasn't got
                     // there once the move has had time, put there directly, so the names and the page never disagree.
+                    // Only for a change from outside: one the pager made itself as it landed is never corrected, and
+                    // nothing is moved while a scroll is under way (run 39 review: a second quick swipe was thrown back).
                     .onChange(of: page) { _, p in
+                        if selfSet { selfSet = false; return }
                         guard let i = panels.firstIndex(where: { $0.id == p }) else { return }
                         if position != p { withAnimation(.snappy(duration: 0.4)) { position = p } }
                         Task { @MainActor in
                             try? await Task.sleep(nanoseconds: 600_000_000)
-                            if page == p, abs(motion.f - CGFloat(i)) > 0.02 { reader.scrollTo(p, anchor: .leading) }
+                            if page == p, phase == .idle, abs(motion.f - CGFloat(i)) > 0.02 { reader.scrollTo(p, anchor: .leading) }
                         }
                     }
                     // A pivot's pages slide up under its names: faded there, not cut. A panorama's next section is a
@@ -161,7 +182,7 @@ struct Pager: View {
     }
 
     // Each section scrolls on its own. A panorama's leaves room at its top for the title behind it, then its header.
-    private func panel(_ p: Panel, _ titleSize: CGFloat, _ headSize: CGFloat, _ bars: (top: CGFloat, bottom: CGFloat)) -> some View {
+    private func panel(_ p: Panel, _ titleSize: CGFloat, _ headSize: CGFloat, _ bars: (top: CGFloat, bottom: CGFloat), _ pw: CGFloat) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 Color.clear.frame(height: 0).id("top")
@@ -185,6 +206,8 @@ struct Pager: View {
             .contentMargins(.top, look == .pivot ? 0 : bars.top, for: .scrollContent)
             .contentMargins(.bottom, bars.bottom, for: .scrollContent)
             .scrollIndicators(.hidden)
+            .environment(\.pageWidth, pw)
+            .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, v in
                 if look == .panorama, title != nil { motion.lifts[p.id] = v }
             }
@@ -204,6 +227,8 @@ struct Pager: View {
         guard start > 0, start < panels.count else { placed = true; return }
         // Up to 10 s: on a busy first launch 2.4 s wasn't enough and Now opened on his page (run 34, lfm-now folded).
         for _ in 0..<80 {
+            // Never against his finger: the first touch ends the placing.
+            if phase != .idle { break }
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { reader.scrollTo(panels[start].id, anchor: .leading) }
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -212,11 +237,11 @@ struct Pager: View {
         placed = true
     }
 
-    private func settle(_ pw: CGFloat) {
-        guard placed else { return }
-        let i = max(0, min(panels.count - 1, Int((motion.x / pw).rounded())))
-        let id = panels[i].id
-        if id != page { page = id; landed += 1 }
+    private func land(_ index: Int) {
+        guard placed || phase != .idle else { return }
+        placed = true
+        let id = panels[max(0, min(panels.count - 1, index))].id
+        if id != page { selfSet = true; page = id; landed += 1 }
     }
 
     // How deep a pivot's pages fade under its names; their content starts under it at rest.

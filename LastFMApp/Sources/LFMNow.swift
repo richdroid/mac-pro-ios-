@@ -120,9 +120,11 @@ struct NowHero: View {
     // In a panorama the section's header names it and the hub's title is his; the artist is said in the words.
     var titled = true
     @Environment(\.openRoute) private var open
-    @State private var breathe = false
     // His history with the song on now: his plays of it and of the artist, and when he first heard it.
     @State private var depth: Depth?
+    // The song the figures were worked out for: the last ones stay until the next song's are known, then swap in place
+    // (run 39: "Your 605th play" left and came back as the song changed).
+    @State private var depthSong: Scrobble?
     // Where the song's block sits on the first screen (measured once, at rest), its height, and the screen's height:
     // the name's band goes whole above the foot or wholly under it, never cut by it (run 33, folded at rest).
     @State private var heroTop: CGFloat?
@@ -132,7 +134,7 @@ struct NowHero: View {
     init(layout: Layout, titled: Bool = true) { self.layout = layout; self.titled = titled; LaunchLog.mark("hero built") }
     private var store: Store { Store.shared }
     var body: some View {
-        if let s = store.hero {
+        if let s = store.shown {
             let playing = s.nowPlaying
             VStack(alignment: .leading, spacing: S.head) {
                 if titled {
@@ -146,7 +148,7 @@ struct NowHero: View {
                         HStack(alignment: .top, spacing: S.figures) {
                             art(s, playing).frame(width: 300)
                             VStack(alignment: .leading, spacing: S.inner) {
-                                if let d = depth, d.id == s.id { FigureGrid(items: figures(s, d, playing)).transition(.opacity) }
+                                if let d = depth, let ds = depthSong { FigureGrid(items: figures(ds, d, ds.nowPlaying)).contentTransition(.opacity) }
                                 Spacer(minLength: 0)
                                 words(s, playing, line: false).padding(.bottom, 6)
                             }
@@ -186,11 +188,12 @@ struct NowHero: View {
             .animation(.easeOut(duration: 0.3), value: depth)
             .task(id: "\(s.id)|\(HistorySync.shared.complete)") {
                 // Only from the whole of his history: a count from part of it would be a guess.
-                guard HistorySync.shared.complete else { depth = nil; return }
+                guard HistorySync.shared.complete else { depth = nil; depthSong = nil; return }
                 let median = LengthFill.shared.median
                 let t = await HistoryDB.reader.story(artist: s.artist, track: s.title, median: median)
                 let a = await HistoryDB.reader.story(artist: s.artist, median: median)
                 depth = Depth(id: s.id, track: t.plays, artist: a.plays, first: t.first)
+                depthSong = s
             }
         } else {
             VStack(alignment: .leading, spacing: S.head) {
@@ -218,16 +221,14 @@ struct NowHero: View {
     private func art(_ s: Scrobble, _ playing: Bool) -> some View {
         let tint = ArtStore.shared.palette(s.art)?.vivid.color ?? Palette.from(name: s.artist + s.album).vivid.color
         return Button { open(Go(route: .track(s), zoom: "hero|\(s.id)")) } label: {
+            // One view across songs: it crossfades its own picture over the last one (no new view per cover, which
+            // showed the stand-in between). Still, no breathing: a forever animation with a 38 pt shadow redrew the
+            // hero every frame (run 39 review, fault 8).
             ArtView(s.art, px: 1000, corner: 14)
-                .id(s.art.key)
-                .transition(.opacity.animation(.easeInOut(duration: 0.45)))
                 .shadow(color: tint.opacity(0.5), radius: 38, y: 16)
-                .scaleEffect(playing && breathe ? 1.012 : 1)
-                .animation(playing ? .easeInOut(duration: 3.6).repeatForever(autoreverses: true) : .smooth, value: breathe)
                 .zoomSource("hero|\(s.id)")
         }
         .buttonStyle(Press())
-        .onAppear { breathe = true }
         .accessibilityLabel("\(s.title) by \(s.artist)")
         .accessibilityHint("Shows the song")
     }
@@ -249,8 +250,9 @@ struct NowHero: View {
             d.first.map { (dateShort($0), "first heard") },
         ].compactMap { $0 }
     }
-    private func depthLine(_ s: Scrobble, _ playing: Bool) -> String? {
-        guard let d = depth, d.id == s.id else { return nil }
+    private func depthLine(_: Scrobble, _: Bool) -> String? {
+        guard let d = depth, let s = depthSong else { return nil }
+        let playing = s.nowPlaying
         let n = nth(d, playing), t = today(s, playing)
         if n <= 1 { return "First listen" }
         return "Your \(Self.ordinal(n)) play" + (t > 1 ? " · \(Self.ordinal(t)) today" : "")
