@@ -633,6 +633,11 @@ struct RootView: View {
         }
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
         // For the build's film of a second tap on the tab (never on the phone): the tab scrolled down, then tapped again.
+        // For the build's film of the octopus coming back (never on the phone): Home, Alarms, Home, Sounds, Home.
+        .task {
+            guard ChumbyModel.pose == "tabhop" else { return }
+            for t in [2, 0, 3, 0] { try? await Task.sleep(nanoseconds: 3_000_000_000); model.tab = t }
+        }
         .task {
             guard ChumbyModel.pose == "retap" else { return }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -1123,7 +1128,8 @@ struct HomeTab: View {
         GeometryReader { geo in
             ZStack {
                 Color(red: 0.04, green: 0.04, blue: 0.05)
-                if let i = model.shot { Image(platform: i).resizable().interpolation(.medium) }
+                // (The still of the waking screen, for the build, holds it there.)
+                if let i = model.shot, ChumbyModel.pose != "waking" { Image(platform: i).resizable().interpolation(.medium) }
                 // Before its first picture, the screen wakes as the Chumby's own does: the octopus, breathing on the dark
                 // glass, where a spinner was.
                 else if !model.unreachable { WakingScreen() }
@@ -3086,7 +3092,8 @@ struct ScreenRow: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                if let i = model.shot { Image(platform: i).resizable().interpolation(.medium) }
+                // (The still of the waking screen, for the build, holds it there.)
+                if let i = model.shot, ChumbyModel.pose != "waking" { Image(platform: i).resizable().interpolation(.medium) }
                 else {
                     ChumbyPalette.hex(0x2c5bae)
                     OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).frame(width: geo.size.width * 0.28)

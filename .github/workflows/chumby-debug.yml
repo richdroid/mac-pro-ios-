@@ -217,6 +217,10 @@ jobs:
           $D "$DEVICE" pose closed || true; sleep 5
           set_ 1 "" full 0.5
           slide ringslide 1 0.12 0.93 0.864
+          # The octopus left on Home and come back to, twice (Home, Alarms, Home, Sounds, Home every 3 s).
+          remock; film tabhop 1 18 $M/live -tab 0 -pose tabhop
+          # Home before the Chumby's first picture: its screen waking with the octopus.
+          shot home-waking 1 9 $M -tab 0 -pose waking
           # A channel of six, in Edit: the last widget dragged to the top by its grip, slowly, then the second down two.
           remock; rec chdrag 1 $M/livemany -tab 1 -pose chedit
           sleep 18
