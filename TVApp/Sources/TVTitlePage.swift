@@ -114,7 +114,8 @@ struct TitlePage: View {
     init(target: FlickTarget) { _st = State(initialValue: TitleState(target)) }
     var body: some View {
         GeometryReader { g in
-            let wide = g.size.width > g.size.height * 1.15 && g.size.width > 600
+            // Folded on its side too (about 590 x 400 pt beside the rail): stacked there, the card was 95 pt wide.
+            let wide = g.size.width > g.size.height * 1.15 && (g.size.width > 600 || g.size.height < 480)
             Group {
                 if wide {
                     HStack(spacing: 0) {

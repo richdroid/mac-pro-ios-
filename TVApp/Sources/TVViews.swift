@@ -1368,7 +1368,7 @@ struct RemoteTab: View {
         // The television off with the box still up is the same key, in the same place: it turns the television on.
         if asleep || away == .off {
             Button { model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") } } label: {
-                Label("Wake the TV", systemImage: "power").font(.title3.weight(.semibold)).padding(.horizontal, 26).frame(height: 60)
+                Label("Wake the TV", systemImage: "power").font(.title3.weight(.semibold)).lineLimit(1).fixedSize().padding(.horizontal, 22).frame(height: 60)
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else if let away, !unreachable {
@@ -1568,9 +1568,57 @@ struct RemoteTab: View {
         .padding(.horizontal, stackedUpright ? 12 : 6).padding(.bottom, panes ? 16 : 8)
         // The apps, at the foot in every posture (2026-11-20): the same row folded and open; open flat they are the tiles
         // under the picture.
-        .safeAreaInset(edge: .bottom, spacing: 0) { if !panes && !lay { appStrip.padding(.bottom, 8) } }
+        .stripUnder(!panes && !lay ? appStrip : nil)
         .opacity(stackedUpright && epPanel.open ? 0 : 1).allowsHitTesting(!(stackedUpright && epPanel.open))
         .modifier(KeysArrive(gate: keysGate))
+    }
+    // Open upright, not typing: the picture beside the pad, then the bar, the transport, the episode line, the keys'
+    // row, volume, and the apps at the foot. Every place is kept whatever is on, so nothing moves as a show starts.
+    func uprightColumn(width: CGFloat, height: CGFloat) -> some View {
+        var grid = RemoteGrid.keys(width - 40, maxKey: 72)
+        grid.play = min(grid.play, 80)
+        let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
+        // What is under the top row: the bar, the transport, the episode line, two rows of keys, the gaps and the apps.
+        let rest = Self.barSlot + 80 + 46 + 2 * grid.key + 6 * 14 + strip
+        let d = max(110, min(((grid.width - 16) * 9 / 25).rounded(.down), height - rest))
+        let pw = min(grid.width - 16 - d, d * 16 / 9)
+        return VStack(spacing: 0) {
+            VStack(spacing: 14) {
+                HStack(spacing: 0) {
+                    picture(closable: true).frame(width: pw, height: pw * 9 / 16)
+                    Spacer(minLength: 16)
+                    pad.frame(width: d, height: d)
+                }
+                .frame(width: grid.width, height: d)
+                ZStack { Color.clear; if !musicShown { progress } }.frame(width: grid.width, height: Self.barSlot)
+                ZStack {
+                    Color.clear
+                    if musicShown { music }
+                    else if session { Transport(size: grid.key, playSize: grid.play).frame(width: grid.width + grid.gap).transition(.opacity) }
+                }
+                .frame(width: grid.width, height: 80)
+                .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                ZStack { Color.clear; episodes }.frame(width: grid.width, height: 46)
+                VStack(spacing: 14) {
+                    keysBlock(grid, transport: false)
+                    HStack(spacing: RemoteGrid.sideGap) {
+                        VolumeKey(down: true, size: grid.key)
+                        VolumeBar().padding(.horizontal, 16)
+                        VolumeKey(down: false, size: grid.key)
+                    }
+                    .frame(width: grid.width)
+                    .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
+                }
+                .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
+                .modifier(KeysArrive(gate: keysGate))
+            }
+            .settledAnimation(.easeOut(duration: 0.25), value: session)
+            .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
+            .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
+            Spacer(minLength: 8)
+            appStrip.padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     @ViewBuilder var appStrip: some View {
         AppStrip().opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
@@ -1626,17 +1674,11 @@ struct RemoteTab: View {
                             Spacer(minLength: 0)
                         }
                     } else {
-                        // With the lip and the title above it, the pane over the fold left the picture a sliver (CI 53b4243:
-                        // about 15 pt tall). The picture's pane now runs past the fold, down to the room the pad, one row
-                        // of keys and the apps need (318 pt), so the picture is a picture; where the screen is too short
-                        // for that it ends at the fold as before.
-                        let top = max(crease.minY, g.size.height - 318)
-                        let past = top > crease.minY + 1
-                        VStack(spacing: 0) {
-                            side(apps: false).frame(height: max(0, top))
-                            Color.clear.frame(height: past ? 0 : crease.height)
-                            keysColumn.frame(maxHeight: .infinity)
-                        }
+                        // One column down the open screen (2026-11-20). Split at the fold, with the lip and the title
+                        // above, the picture was a sliver (CI 53b4243) and then the pad a 100 pt miniature whose wake key
+                        // read "Wake the…" (CI b88affc). Now the picture and the pad share the top row at one height, the
+                        // bar and the transport hang from the picture, and every key is one size: 72 pt, ⏯ 80.
+                        uprightColumn(width: g.size.width, height: g.size.height)
                     }
                 }
                 .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
@@ -1714,7 +1756,9 @@ struct RemoteTab: View {
                 .settledAnimation(.easeOut(duration: 0.25), value: session)
                 .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
                 .padding(.horizontal, 14).padding(.bottom, 8)
-                .safeAreaInset(edge: .bottom, spacing: 0) { if !lay { appStrip.padding(.bottom, 8) } }
+                // The apps under the column, inside the page's own width: as a bottom inset the row ran on under the
+                // tab rail, which cut a tile in half (CI b88affc, folded).
+                .stripUnder(lay ? nil : appStrip)
                 .overlay { episodesPanel() }
             }
         }
@@ -1795,6 +1839,13 @@ struct RemoteTab: View {
 }
 
 private extension View {
+    // A row at the foot of this view, within its width (never under the tab rail beside it).
+    func stripUnder<S: View>(_ strip: S?) -> some View {
+        VStack(spacing: 0) {
+            self
+            if let strip { strip.clipped().padding(.bottom, 8) }
+        }
+    }
     // One of a key row's five equal places, the key centred in it.
     func slot() -> some View { frame(maxWidth: .infinity) }
     func columnRole(_ role: PictureColumn.Role) -> some View { layoutValue(key: PictureColumn.RoleKey.self, value: role) }

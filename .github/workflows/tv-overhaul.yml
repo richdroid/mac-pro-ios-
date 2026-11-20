@@ -197,19 +197,29 @@ jobs:
             tour tour-flat 3
             episodes episodes-flat 3
           else
+            # Folded from open and upright, as a hand does it. Then checked: a fresh simulator folded straight away came up
+            # on its side (b88affc: the "folded" shots were 2034x1398), so which turn is upright is read from a shot.
+            $D "$DEVICE" pose open || true; sleep 5
+            $D "$DEVICE" rotate 1 || true; sleep 4
             $D "$DEVICE" pose closed || true; sleep 5
-            $D "$DEVICE" rotate 1 || true; sleep 3
+            UP=1; SIDE=3
+            $D "$DEVICE" rotate $UP || true; sleep 4
+            xcrun simctl io "$DEVICE" screenshot --display=1 /tmp/turn.png
+            if [ "$(sips -g pixelWidth /tmp/turn.png | awk '/pixel/ {print $2}')" -gt "$(sips -g pixelHeight /tmp/turn.png | awk '/pixel/ {print $2}')" ]; then UP=3; SIDE=1; $D "$DEVICE" rotate $UP || true; sleep 4; fi
+            echo "folded upright is rotate $UP"
             tabs 1 ""
             flicks 1 ""
             flings 1 ""
             backs 1 ""
             tour tour 1
             episodes episodes 1
-            $D "$DEVICE" rotate 3 || true; sleep 4
+            $D "$DEVICE" rotate $SIDE || true; sleep 4
             for T in 3 0 2 6; do shot tab$T-fland 1 8 $M -tab $T; done
             curl -s $M/fnormal/reset > /dev/null; shot title-film-fland 1 12 $M/fnormal -tab 3 -pose streams
+            for S in ridle repisode; do shot remote-$S-fland 1 8 $M/$S -tab 0; done
+            curl -s $M/real/reset > /dev/null; shot title-show-fland 1 14 $M/real -tab 3 -pose realseries
             flick flick-throw-fland 1 throw
-            $D "$DEVICE" rotate 1 || true; sleep 4
+            $D "$DEVICE" rotate $UP || true; sleep 4
             # The turn between postures, on Watch.
             for pass in outer inner; do
               display=1; [ $pass = inner ] && display=3
