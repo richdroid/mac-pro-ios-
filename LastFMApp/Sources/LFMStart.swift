@@ -147,7 +147,7 @@ struct NowStrip: View {
                     VStack(alignment: .leading, spacing: S.pair / 2) {
                         HStack(spacing: 6) {
                             if s.nowPlaying, !store.trouble {
-                                Image(systemName: "waveform").symbolEffect(.variableColor.iterative, options: .repeating, isActive: !Diag.off("wave"))
+                                Image(systemName: "waveform")
                                 Text("Now playing")
                             } else if s.nowPlaying {
                                 // Last.fm gone: what it last said was playing, not live.

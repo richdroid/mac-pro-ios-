@@ -183,17 +183,10 @@ jobs:
           STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 0 -fresh YES -mockSyncSlow YES -pose sync
           shot films-ready 1 40 -tab 0
           shot films-ready-discover 1 20 -tab 3
-          # Which moving thing costs the frames (run 41): his page at rest with a song on, whole, then with one thing off
-          # at a time, then with nothing on. Their frame times go up at once, before the long films.
+          # Which moving thing costs the frames (run 41): his page at rest with a song on, then with nothing on, then today. Their frame times go up at once, before the long films.
           STEPS="shot:14" film rest-all 1 16 -tab 0
-          STEPS="shot:14" film rest-nowave 1 16 -tab 0 -off wave
-          STEPS="shot:14" film rest-nowall 1 16 -tab 0 -off wall
-          STEPS="shot:14" film rest-nodrift 1 16 -tab 0 -off drift
-          STEPS="shot:14" film rest-noshadow 1 16 -tab 0 -off shadow
-          STEPS="shot:14" film rest-none 1 16 -tab 0 -off wave,wall,drift,shadow
           STEPS="shot:14" film rest-idle 1 16 -tab 0 -playing NO
           STEPS="shot:14" film rest-today 1 16 -tab 0 -panel 1
-          STEPS="shot:14" film rest-today-none 1 16 -tab 0 -panel 1 -off wave,wall,drift,shadow
           for f in dist/hitches-rest-*.txt; do echo "== $f"; cat "$f"; done > hitches-rest.txt
           release; gh release upload lastfm-latest hitches-rest.txt --clobber || echo "rest upload failed"
           # The pivots: Charts' stretches and the Library's shelves, swiped through and back; You across its sections.

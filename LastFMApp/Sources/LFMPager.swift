@@ -38,7 +38,11 @@ struct Pager: View {
     var accessoryHeight: CGFloat = 44
     var locked = false
     @State private var motion: PagerMotion
-    @State private var position: Int?
+    // Where the pager is, set by its exact offset (a page's index times its width): asked for by a page's id, the
+    // scroll landed a side bar's width out when the page's width changed under it (run 42, today folded).
+    @State private var pos = ScrollPosition(edge: .leading)
+    // The page's width now (it changes as the side bar arrives, on a turn, at the fold).
+    @State private var width: CGFloat = 0
     @State private var landed = 0
     // Opened on a section other than the first (a widget's link, a build's pose): not settled, and nothing read from
     // where the scroll is, until it has really been put there.
@@ -52,7 +56,6 @@ struct Pager: View {
     init(_ look: Look, title: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, accessoryHeight: CGFloat = 44, panels: [Panel]) {
         self.look = look; self.title = title; self.panels = panels; _page = page; self.top = top
         self.accessory = accessory; self.accessoryHeight = accessoryHeight; self.locked = locked
-        _position = State(initialValue: page.wrappedValue)
         let start = panels.firstIndex { $0.id == page.wrappedValue } ?? 0
         self.start = start
         // Where it opens, known before the first frame, so the name lit and the page shown agree from the start (run 36:
@@ -76,7 +79,7 @@ struct Pager: View {
             let nameSize = PivotHeaders.size(panels.count, k)
             let head = bars.top + S.head + ceil(nameSize * 1.25) + (accessory == nil ? 0 : S.head + accessoryHeight)
             ZStack(alignment: .topLeading) {
-                ScrollViewReader { reader in
+                ScrollViewReader { _ in
                     ScrollView(.horizontal) {
                         // Every section built at once, at rest: lazily, a section was built whole on its first reveal,
                         // mid-drag (run 39: 180 and 720 ms with no frame on the first swipe to a stretch).
@@ -86,7 +89,7 @@ struct Pager: View {
                     // The system's own paging: a light flick turns the page (Richard, 2026-11-15: "too much like weight
                     // with swipes").
                     .scrollTargetBehavior(.paging)
-                    .scrollPosition(id: $position, anchor: .leading)
+                    .scrollPosition($pos)
                     // Laid out on the section it opens to in its first frame.
                     .defaultScrollAnchor(UnitPoint(x: panels.count > 1 ? CGFloat(start) / CGFloat(panels.count - 1) : 0, y: 0))
                     .scrollIndicators(.hidden)
@@ -107,17 +110,20 @@ struct Pager: View {
                     }
                     // Opened on a section other than the first (a link, a pose): put there before anything shows it
                     // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20).
-                    .task { await place(reader) }
+                    .task { await place() }
                     // The page's width changed under it (the side bar arriving, a turn, the fold): the scroll keeps its
                     // old offset, which is no longer a page's edge, so the page before showed at the side (run 41:
                     // today sat 12 pt off with his page's chevron beside it). Put back on its page, at rest only.
-                    .onChange(of: pw) { _, _ in
+                    .onChange(of: pw, initial: true) { _, w in
+                        width = w
+                        guard placed else { return }
                         let p = page
+                        guard let i = panels.firstIndex(where: { $0.id == p }) else { return }
                         Task { @MainActor in
                             for _ in 0..<4 {
                                 guard phase == .idle, page == p else { return }
                                 var t = Transaction(); t.disablesAnimations = true
-                                withTransaction(t) { reader.scrollTo(p, anchor: .leading) }
+                                withTransaction(t) { pos.scrollTo(x: CGFloat(i) * w) }
                                 try? await Task.sleep(nanoseconds: 80_000_000)
                             }
                         }
@@ -129,10 +135,10 @@ struct Pager: View {
                     .onChange(of: page) { _, p in
                         if p == selfPage { selfPage = nil; return }
                         guard let i = panels.firstIndex(where: { $0.id == p }) else { return }
-                        if position != p { withAnimation(.snappy(duration: 0.4)) { position = p } }
+                        if abs(motion.f - CGFloat(i)) > 0.004 { withAnimation(.snappy(duration: 0.4)) { pos.scrollTo(x: CGFloat(i) * pw) } }
                         Task { @MainActor in
                             try? await Task.sleep(nanoseconds: 600_000_000)
-                            if page == p, phase == .idle, abs(motion.f - CGFloat(i)) > 0.02 { reader.scrollTo(p, anchor: .leading) }
+                            if page == p, phase == .idle, abs(motion.f - CGFloat(i)) > 0.004 { pos.scrollTo(x: CGFloat(i) * pw) }
                         }
                     }
                 }
@@ -148,7 +154,7 @@ struct Pager: View {
                 VStack(alignment: .leading, spacing: S.head) {
                     PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw, size: nameSize,
                                  current: panels.firstIndex { $0.id == page } ?? 0) { i in
-                        withAnimation(.snappy(duration: 0.4)) { position = panels[i].id }
+                        withAnimation(.snappy(duration: 0.4)) { pos.scrollTo(x: CGFloat(i) * pw) }
                     }
                     if let accessory { accessory.frame(height: accessoryHeight) }
                 }
@@ -161,7 +167,7 @@ struct Pager: View {
         .sensoryFeedback(.tick, trigger: landed)
         // The tab tapped again: back to the first section first, then to the top.
         .onChange(of: top) { _, _ in
-            if let first = panels.first?.id, page != first { withAnimation(.snappy(duration: 0.45)) { position = first } }
+            if let first = panels.first?.id, page != first { withAnimation(.snappy(duration: 0.45)) { pos.scrollTo(x: 0) } }
         }
     }
 
@@ -192,7 +198,7 @@ struct Pager: View {
         }
     }
 
-    private func place(_ reader: ScrollViewProxy) async {
+    private func place() async {
         guard start > 0, start < panels.count else { placed = true; return }
         // Up to 10 s: on a busy first launch 2.4 s wasn't enough and Now opened on his page (run 34, lfm-now folded).
         for _ in 0..<80 {
@@ -200,7 +206,7 @@ struct Pager: View {
             if phase != .idle { break }
             if abs(motion.f - CGFloat(start)) < 0.004, motion.x > 0 { break }
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { reader.scrollTo(panels[start].id, anchor: .leading) }
+            if width > 1 { withTransaction(t) { pos.scrollTo(x: CGFloat(start) * width) } }
             try? await Task.sleep(nanoseconds: 120_000_000)
         }
         placed = true

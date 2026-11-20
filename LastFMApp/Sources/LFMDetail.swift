@@ -454,7 +454,7 @@ struct TrackPage: View {
             if live || s.date != nil {
                 HStack(spacing: 7) {
                     if live {
-                        Image(systemName: "waveform").symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, isActive: !Diag.off("wave"))
+                        Image(systemName: "waveform")
                         Text("Now playing")
                     } else if let d = s.date {
                         Image(systemName: "clock.arrow.circlepath")
