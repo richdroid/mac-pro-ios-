@@ -369,13 +369,15 @@ struct Liftable: ViewModifier {
     var onTap: (() -> Void)? = nil
     // Where the picture is, when it isn't the whole of the view this is on.
     var rect: (() -> CGRect)? = nil
+    // Whether the whole view leaves its place while lifted; a row whose still lifts hides only that still (HiddenInHand).
+    var hides = true
     @State private var place = FrameBox()
     @State private var far = false
     func body(content: Content) -> some View {
         #if canImport(UIKit)
         content
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
-            .modifier(HiddenWhileLifted(id: liftID))
+            .modifier(HiddenWhileLifted(id: hides ? liftID : ""))
             .gesture(LiftRecognizer(began: { began() }, moved: { moved($0, $1) }, ended: { ended($0) }))
             .accessibilityAction(named: "Play on the TV") { send(CGSize(width: 0, height: -2000)) }
         #else
@@ -434,7 +436,7 @@ struct Liftable: ViewModifier {
 // every card on the page.
 private struct HiddenWhileLifted: ViewModifier {
     let id: String
-    func body(content: Content) -> some View { content.opacity(Hand.shared.lifted?.id == id ? 0 : 1) }
+    func body(content: Content) -> some View { content.opacity(!id.isEmpty && Hand.shared.lifted?.id == id ? 0 : 1) }
 }
 extension View {
     func liftable(_ item: MediaItem, _ source: MediaSource, wide: Bool = false, onThrow: ((CGSize) -> Void)? = nil) -> some View {

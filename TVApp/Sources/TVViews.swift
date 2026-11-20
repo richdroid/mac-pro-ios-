@@ -383,27 +383,6 @@ extension View {
     func topFade() -> some View { modifier(TopFade()) }
 }
 
-// The flick's screen over the tabs, stopping short of whichever bar holds Back while choosing: the side bar folded and
-// open, and open in portrait the tab bar along the foot, so its Back is the way back from the show's page and the
-// streams (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08: a "‹ Back" foot bar there
-// instead). The stage covers everything, in every posture.
-private struct FlickHost: View {
-    @Environment(TVModel.self) var model
-    @Environment(\.horizontalSizeClass) private var size
-    @Environment(\.paneLayout) private var panes
-    let target: FlickTarget
-    var body: some View {
-        let foot = size == .regular && !panes
-        FlickScreen(target: target).environment(model).id(target.id)
-            // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far wider
-            // than the bar (r19: an 88 pt strip of the page underneath showed between the two).
-            .padding(.trailing, model.flickChoosing && !foot ? TVLook.railRoom : 0)
-            .padding(.bottom, model.flickChoosing && foot ? max(model.footBarRoom, TVLook.footRoom) : 0)
-            .ignoresSafeArea(.container, edges: foot ? [.trailing, .bottom] : .trailing)
-            .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
-    }
-}
-
 // Each tab's frame: the art behind it, its title, and the gear.
 struct Page<C: View>: View {
     @Environment(TVModel.self) var model

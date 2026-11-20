@@ -2721,7 +2721,7 @@ struct ShelfLiftOverlay: View {
 struct HiddenInHand<Content: View>: View {
     let id: String
     @ViewBuilder var content: Content
-    var body: some View { content.opacity(ShelfHand.shared.item?.id == id ? 0 : 1) }
+    var body: some View { let l = Hand.shared.lifted?.id; content.opacity(!id.isEmpty && (l == id || l == id + "#w") ? 0 : 1) }
 }
 // The scroll views a held card sits in hold still while it's in the hand, as the streams page's list does.
 #if canImport(UIKit)
@@ -2760,7 +2760,7 @@ struct ShelfFlick: ViewModifier {
     // The pebble (TVHand): held still 0.15 s it lifts and is his finger's, point for point; moved first, the touch is the
     // scroll's and it never lifts (brief 8.2 and 8.3: one touch, one owner).
     func body(content: Content) -> some View {
-        content.modifier(Liftable(item: item, source: source, wide: still != nil, art: still, onThrow: onThrow.map { f in { _ in f() } }, onTap: onTap, rect: rect))
+        content.modifier(Liftable(item: item, source: source, wide: still != nil, art: still, onThrow: onThrow.map { f in { _ in f() } }, onTap: onTap, rect: rect, hides: still == nil))
     }
 }
 
