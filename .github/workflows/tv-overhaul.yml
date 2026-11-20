@@ -91,8 +91,8 @@ jobs:
             for T in 3 0 2 6; do shot tab$T-again$x $d 12 $M -tab $T; done
             shot settings$x $d 9 $M -tab 9
             shot box$x $d 9 $M -tab 5
-            for S in ridle repisode rfilm ryoutube roffline rasleep; do shot remote-$S$x $d 8 $M/$S -tab 0; done
-            for S in rmint rfilm repisode; do shot music-$S$x $d 8 $M/$S -tab 2; done
+            for S in ridle repisode rfilm ryoutube roffline rasleep; do shot remote-$S$x $d 12 $M/$S -tab 0; done
+            for S in rmint rfilm repisode; do shot music-$S$x $d 12 $M/$S -tab 2; done
             # One truth: with a film on, the lip on Watch and Search says what the Remote and Music say.
             shot lip-rfilm-watch$x $d 8 $M/rfilm -tab 3
             shot lip-rfilm-search$x $d 8 $M/rfilm -tab 6

@@ -107,6 +107,10 @@ final class TVModel {
     var friends: [Film] = []
     var recommended: [Film] = []
     var flicking: FlickTarget?
+    // The title pages showing, newest last, by tab: the tab draws the newest one's ground behind its lip and its page as
+    // one, so there's no band where the lip sits above the stack (gates 3 and 4).
+    struct TitleGroundEntry: Equatable { let id: UUID; let tab: Int; let art: String }
+    var titleGrounds: [TitleGroundEntry] = []
     @ObservationIgnored private var lastFlick: (id: String, at: Date)?
     // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it. Set to what
     // it already is, nothing redraws: every page's ground reads it, and the pick set it again to the same colour in the
@@ -684,7 +688,12 @@ final class TVModel {
             if s.online { let file = Self.cacheFile; Task.detached(priority: .utility) { try? d.write(to: file, options: .atomic) } }
         }
         settlePlayHold(s)
-        if staleStatus { staleStatus = false }
+        if staleStatus {
+            staleStatus = false
+            #if os(iOS)
+            HitchLog.shared.note(String(format: "first status %.2f s after the foreground", Date().timeIntervalSince(foregroundAt)))
+            #endif
+        }
         PhonePlayer.shared.follow(s)
         NextUp.shared.follow(s)
     }
@@ -714,6 +723,7 @@ final class TVModel {
         // catch and much of "the app is SLOW".
         guard let i = await Task.detached(priority: .userInitiated, operation: { Self.decoded(d) }).value else { return }
         mirrorStore.set(i)
+        mirrorStore.keep(d)
     }
     // A picture decoded now, on whatever thread calls this, so drawing it later costs nothing.
     nonisolated static func decoded(_ d: Data) -> TVImage? {
@@ -860,6 +870,27 @@ final class MirrorStore: ObservableObject {
     @Published private(set) var image: TVImage?
     @Published private(set) var at = Date.distantPast
     func set(_ i: TVImage?) { image = i; if i != nil { at = Date() } }
+    // The last still, kept between launches: the Remote's first arrival shows the TV's screen as it last was (dimmed as
+    // old, the light running round it) rather than an empty box (gates 3 and 4). Written at most every 20 s.
+    private static var file: URL? { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-shot.img") }
+    private var keptAt = Date.distantPast
+    func keep(_ d: Data) {
+        guard Date().timeIntervalSince(keptAt) > 20, let f = Self.file else { return }
+        keptAt = Date()
+        Task.detached(priority: .utility) { try? d.write(to: f, options: .atomic) }
+    }
+    init() {
+        guard let f = Self.file else { return }
+        Task { [weak self] in
+            let got: (TVImage, Date)? = await Task.detached(priority: .userInitiated) {
+                guard let d = try? Data(contentsOf: f), let i = TVModel.decoded(d) else { return nil }
+                let at = (try? FileManager.default.attributesOfItem(atPath: f.path))?[.modificationDate] as? Date ?? .distantPast
+                return (i, at)
+            }.value
+            guard let self, let got, self.image == nil else { return }
+            self.image = got.0; self.at = got.1
+        }
+    }
 }
 
 // A half-typed link outlives unfolding, which rebuilds the layout.

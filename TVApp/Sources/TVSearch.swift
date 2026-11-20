@@ -529,7 +529,7 @@ struct SearchPage: View {
                         field.padding(.top, 12)
                         ScrollView {
                             VStack(alignment: .leading, spacing: 22) {
-                                if draft.text.isEmpty { RecentSearches(store: store) } else { ResultList(results: store.results, part: .left) }
+                                if draft.text.isEmpty { SearchIdle(store: store, part: .left) } else { ResultList(results: store.results, part: .left) }
                             }
                             .padding(.bottom, 12)
                         }
@@ -539,7 +539,7 @@ struct SearchPage: View {
                 } right: {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
-                            if !draft.text.isEmpty { ResultList(results: store.results, part: .right) }
+                            if !draft.text.isEmpty { ResultList(results: store.results, part: .right) } else { SearchIdle(store: store, part: .right) }
                         }
                         .padding(.vertical, 12)
                     }
@@ -551,9 +551,10 @@ struct SearchPage: View {
                     field.padding(.top, 12)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
-                            // Idle, the recent searches and nothing else: Continue watching has one home, Watch.
+                            // Idle: the recent searches, then things to search for and what was flicked lately. Never an
+                            // empty page (gate 3); Continue watching keeps its one home, Watch.
                             if draft.text.isEmpty {
-                                RecentSearches(store: store)
+                                SearchIdle(store: store, part: .all)
                             } else {
                                 ResultList(results: store.results, part: .all)
                             }
@@ -870,6 +871,73 @@ private struct LinkRow: View {
         }
         .buttonStyle(PressCard())
         .padding(.horizontal, 12)
+    }
+}
+
+// Before anything is typed. One column: recent searches, titles to search for, recently flicked. Open flat, the left
+// pane has the recent searches (or, with none, what was flicked) and the right the titles to try, so neither is bare.
+private struct SearchIdle: View {
+    enum Part { case all, left, right }
+    @ObservedObject var store: SearchStore
+    let part: Part
+    @ObservedObject private var home = BrowseStore.shared(.stremio)
+    @ObservedObject private var flicks = RecentFlicks.shared
+    // Titles to try: the films and shows of Stremio's home that aren't his own (Continue watching has its home on Watch).
+    var tries: [String] {
+        var seen = Set<String>(), out: [String] = []
+        for r in home.rows where r.title != "Continue watching" {
+            for i in r.items where !i.title.isEmpty && !i.isYouTube && seen.insert(i.title.lowercased()).inserted { out.append(i.title); if out.count == 6 { return out } }
+        }
+        return out
+    }
+    var flicked: [SearchHit] {
+        flicks.list.prefix(4).map { f in SearchHit(kind: f.type == "series" ? .show : .film, item: f.item, match: 0, mine: 30, order: 0) }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            switch part {
+            case .all:
+                RecentSearches(store: store)
+                tryList
+                flickedList
+            case .left:
+                if store.recent.isEmpty { flickedList } else { RecentSearches(store: store) }
+                if store.recent.isEmpty && flicked.isEmpty { tryList }
+            case .right:
+                if !(store.recent.isEmpty && flicked.isEmpty) { tryList }
+                if !store.recent.isEmpty { flickedList }
+            }
+        }
+        .animation(.snappy, value: tries)
+    }
+    @ViewBuilder var tryList: some View {
+        if !tries.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                RowTitle("Try searching").padding(.horizontal, 20)
+                ForEach(tries, id: \.self) { t in
+                    Button { SendDraft.shared.text = t } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).frame(width: 24)
+                            Text(t).font(.body).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+    @ViewBuilder var flickedList: some View {
+        if !flicked.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                RowTitle("Recently flicked").padding(.horizontal, 20)
+                VStack(spacing: 4) { ForEach(flicked) { HitRow(hit: $0) } }.padding(.horizontal, 12)
+            }
+            .transition(.opacity)
+        }
     }
 }
 

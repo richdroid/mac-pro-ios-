@@ -27,6 +27,7 @@ struct TVNow: Equatable {
         }
         guard let s = model.status else { return TVNow(kind: .unknown, title: "TV", line: nil, art: nil, playing: nil) }
         // What the phone last knew stands until a reading says otherwise: never "Connecting…" over a known state (9.7).
+        // Its play key waits for a fresh reading, as the Remote's does, so the two never disagree (gate 3, folded rfilm).
         // The Mac answers and the TV doesn't: said here as the Remote's picture says it, not the app last in front.
         if !model.staleStatus, !s.online { return TVNow(kind: .away, title: "Can’t reach the TV", line: nil, art: nil, playing: nil) }
         if s.screen == "asleep" { return TVNow(kind: .asleep, title: "Off", line: nil, art: nil, playing: nil) }
@@ -34,7 +35,7 @@ struct TVNow: Equatable {
         if s.comingOn { return TVNow(kind: .home, title: "Waking the TV…", line: nil, art: nil, playing: nil) }
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
             return TVNow(kind: .video, title: p.showName, line: p.seasonEpisode.map { "S\($0.season) E\($0.episode)" } ?? p.channel,
-                         art: model.picture(for: p), playing: p.playing)
+                         art: model.picture(for: p), playing: model.staleStatus ? nil : p.playing)
         }
         if let m = model.nowMusic, !m.title.isEmpty, model.songPlaying(m) == true || s.app == "com.codex.musicwebtv" {
             return TVNow(kind: .music, title: m.title, line: m.artist, art: m.art, playing: model.songPlaying(m))

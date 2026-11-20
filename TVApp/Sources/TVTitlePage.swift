@@ -112,6 +112,7 @@ struct TitlePage: View {
     @Environment(TVModel.self) private var model
     @State private var st: TitleState
     @State private var carry = Carry()
+    @State private var groundID = UUID()
     init(target: FlickTarget) { _st = State(initialValue: TitleState(target)) }
     var body: some View {
         GeometryReader { g in
@@ -153,9 +154,16 @@ struct TitlePage: View {
                 }
             }
         }
-        // Up behind the lip as well, which sits above the stack: the page's ground ended in a hard line under it, a band
-        // across the top (gate on 654ff00).
-        .background { TitleGround(art: st.item.art).padding(.top, -140) }
+        // The page's ground is drawn by its tab, behind the lip and the page as one piece (the lip sits above the stack,
+        // so a ground of the page's own ended in a hard line under it: gates on 654ff00 and 6bf2944).
+        .onAppear {
+            model.titleGrounds.removeAll { $0.id == groundID }
+            model.titleGrounds.append(.init(id: groundID, tab: model.tab, art: st.item.art))
+        }
+        .onDisappear { model.titleGrounds.removeAll { $0.id == groundID } }
+        .onChange(of: st.item.art) { _, a in
+            if let i = model.titleGrounds.firstIndex(where: { $0.id == groundID }) { model.titleGrounds[i] = .init(id: groundID, tab: model.titleGrounds[i].tab, art: a) }
+        }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)

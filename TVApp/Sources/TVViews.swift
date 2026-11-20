@@ -462,7 +462,13 @@ struct Page<C: View>: View {
             path.append(TitleRoutes.add(t))
         }
         .topShade()
-        .background { Ambience() }
+        .background {
+            ZStack {
+                Ambience()
+                if let g = model.titleGrounds.last(where: { $0.tab == tab }) { TitleGround(art: g.art).transition(.opacity) }
+            }
+            .animation(.easeInOut(duration: 0.3), value: model.titleGrounds.last(where: { $0.tab == tab })?.art)
+        }
         // Over the art too, so the strip round the bars beside or under a flick's page is black like the page's own foot,
         // never a lighter band of the tab's art (open upright, under the tab bar).
         .modifier(UnderFlickGround(warms: alwaysInline))
@@ -511,13 +517,16 @@ private struct MovingTitle: View {
     // where the clock is on the side and the name sat 13 pt from the glass (Richard, 2026-11-09, Playing folded: "too
     // close to top edge"). It takes the same air from the top as from the side then, 22 pt to its cap, every tab alike.
     @State private var above: CGFloat = 0
+    // Open flat the left pane's content has the display's bare edge 14 pt more air (FoldSplit's outer): the name lines up
+    // with it, not 14 pt left of every card under it.
+    @Environment(\.paneLayout) private var panes
     var body: some View {
         let y = max(0, scrolled.y)
         HStack(alignment: .center, spacing: 12) {
             PageHeading(title).allowsHitTesting(false)
             if let accessory { accessory.allowsHitTesting(y < 20) }
         }
-            .padding(.horizontal, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
+            .padding(.leading, panes ? 34 : 20).padding(.trailing, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
             .background { Color.clear.ignoresSafeArea(edges: .top).onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { above = $0 } }
             .offset(y: -y)
             .opacity(Double(max(0, 1 - y / 44)))
@@ -1013,6 +1022,8 @@ private struct ScreenPicture: View {
                     // washed-out banner with the glyph stuck on its wordmark, and only when the art beat the stall (r33).
                     ZStack {
                         if live.stalled { NoPicture() }
+                        // With no art either, the TV's glyph under the light, never an empty box (gate 3, first arrival).
+                        else if art == nil { NoPicture().overlay { LoadingRing(radius: TVLook.card) } }
                         else {
                             Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
                                 .clipped().blur(radius: 26).opacity(0.5)
@@ -1492,7 +1503,7 @@ struct RemoteTab: View {
         // Open upright the lines under the picture are the keys' column (the pane's width, 520 pt at most), whatever
         // width the pane's height leaves the picture; elsewhere they're the picture's own width.
         let upper = stackedUpright && !lay
-        return PictureColumn(spacing: 14, under: Self.underRoom + (upper ? Self.upperPlay + 14 : 0), lines: stackedUpright ? RemoteGrid.most : nil) {
+        return PictureColumn(spacing: 14, under: Self.underRoom + (upper ? Self.upperPlay + 14 : 0), lines: stackedUpright ? RemoteGrid.most : nil, leading: panes && !stackedUpright) {
             picture(closable: true).columnRole(.picture)
             // Mint's player is what's on when it shows: no bar's place above it, online or out of reach (upright offline the
             // kept place shrank the picture and left 83 pt empty, Remote gate 3).
@@ -1955,6 +1966,8 @@ struct PictureColumn: Layout {
     // Where given, the lines under the picture are this wide (the column's width at most) rather than the picture's
     // width: open upright the picture is as wide as its pane's height lets it be, and the keys under it need the column.
     var lines: CGFloat? = nil
+    // Open flat the column starts at the pane's edge, under the page's name, rather than centred 20 pt in from it.
+    var leading = false
     private func plan(_ width: CGFloat, _ height: CGFloat?, _ subviews: Subviews) -> (frames: [CGRect], height: CGFloat) {
         let roles = subviews.map { $0[RoleKey.self] }
         let lined: (Int) -> Bool = { roles[$0] == .under || roles[$0] == .aligned }
@@ -1983,7 +1996,7 @@ struct PictureColumn: Layout {
         for i in shown {
             let h = roles[i] == .picture ? pictureH : sizes[i].lo + (growing.contains(i) ? min(share, sizes[i].hi - sizes[i].lo) : 0)
             let w = roles[i] == .picture ? pictureH * 16 / 9 : lined(i) ? lineW : width
-            frames[i] = CGRect(x: (width - w) / 2, y: y, width: w, height: h)
+            frames[i] = CGRect(x: leading ? 0 : (width - w) / 2, y: y, width: w, height: h)
             y += h + spacing
         }
         for i in subviews.indices where !shown.contains(i) { frames[i] = CGRect(x: width / 2, y: y, width: 0, height: 0) }
@@ -3576,7 +3589,7 @@ struct DiscoverColumn: View {
                         // store holds (r28: the store had the rows, the screen didn't, and the check passed).
                         .task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home&pane=\(part)"), timeout: 3) }
                 } else {
-                    PlaceholderShelf(headed: true)
+                    PlaceholderShelf(cardWidth: leadWidth, cardHeight: MediaCard.height(leadWidth, .stremio), headed: true, title: Self.continueTitle)
                 }
             }
             .id(Self.continueTitle)
@@ -3586,7 +3599,7 @@ struct DiscoverColumn: View {
         if store.query.isEmpty { RecentRow(kind: kind) }
         if store.rows.isEmpty {
             Group {
-                if store.loading { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } }
+                if store.loading { VStack(alignment: .leading, spacing: 22) { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf(headed: true) } } }
                 else if store.failed { ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again.")) }
                 else { ContentUnavailableView.search }
             }
@@ -3688,10 +3701,22 @@ struct PlaceholderShelf: View {
     var cardHeight: CGFloat = MediaCard.height(124, .stremio)
     // Where the row's own heading will be: the height of its line, so the cards start where they will.
     var headed = false
+    // The row's own name when it's known (Continue watching), drawn as the real heading draws it, so it doesn't change
+    // as the row comes (gate 3: the skeleton, then a different page).
+    var title: String? = nil
     @State private var breathe = false
     var body: some View {
         VStack(alignment: .leading, spacing: headed ? 8 : 10) {
-            Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16)
+            Group {
+                if let title {
+                    HStack(spacing: 5) {
+                        Text(title).font(.title3.weight(.bold))
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16)
+                }
+            }
                 .frame(height: headed ? 25 : 16, alignment: .leading).padding(.leading, 20)
             // Each waiting card in the cover's own waiting look, the light running round it (ruling 9), never a flat grey slab (r20).
             HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in CoverWait().frame(width: cardWidth, height: cardHeight).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)).overlay { LoadingRing(radius: 6) } } }

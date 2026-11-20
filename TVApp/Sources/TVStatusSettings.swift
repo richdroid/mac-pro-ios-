@@ -107,20 +107,27 @@ struct BoxRow: View {
 // pushed from it draw theirs; the bar carries only the system's Back.
 struct TVSettingsPage: View {
     @Environment(\.paneLayout) private var panes
-    func page(_ content: some View) -> some View {
+    // How far the list has gone up: the heading fades as it nears the lip, so it is whole or gone, never cut through by
+    // the lip at the scroll's end (gate 3, folded).
+    @State private var scrollY: CGFloat = 0
+    var heading: some View { PageHeading("Settings").padding(.horizontal, 4).opacity(Double(max(0, 1 - max(0, scrollY) / 30))) }
+    func page(_ content: some View, follows: Bool = true) -> some View {
         ScrollView { VStack(alignment: .leading, spacing: 26) { content }.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24) }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
+                if follows, abs(scrollY - y) > 0.5 { scrollY = y }
+            }
     }
     var body: some View {
         Group {
             // Unfolded, one list each side of the fold rather than one list across it, the two cards level.
             if panes {
                 FoldSplit {
-                    page(Group { PageHeading("Settings").padding(.horizontal, 4); BoxRow(); TVManageSections(level: true).shotSpot("tvrow", pose: "settingsnav") })
+                    page(Group { heading; BoxRow(); TVManageSections(level: true).shotSpot("tvrow", pose: "settingsnav") })
                 } right: {
-                    page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections(); StremioSettingsSection() })
+                    page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections(); StremioSettingsSection() }, follows: false)
                 }
             } else {
-                page(Group { PageHeading("Settings").padding(.horizontal, 4); BoxRow(); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections(); StremioSettingsSection() })
+                page(Group { heading; BoxRow(); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections(); StremioSettingsSection() })
             }
         }
         .summonsBar()
