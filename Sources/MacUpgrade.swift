@@ -582,16 +582,31 @@ struct UpgradeLog: View {
     let model: AppModel
     @State private var log = ""
     @State private var full = false
+    // The newest lines, drawn plainly: the Updates page's LogPreview parks the lines that don't fit 5000 pt above
+    // itself, which inside a List row left the row, and at the page's foot the whole page, blank (CI 017ec21).
+    static let shown = 12
+    var lines: [String] { Array(log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(LogPreview.short).suffix(Self.shown)) }
     var body: some View {
         Section {
             if log.isEmpty {
                 Text("The Mac hasn’t sent its update log yet.").foregroundStyle(.secondary)
             } else {
-                Button { full = true } label: { LogPreview(log: log, room: LogPreview.twelveLines) }
-                    .buttonStyle(PressStyle())
-                    .accessibilityLabel("Update log, newest lines").accessibilityHint("Opens the whole log")
-                    .accessibilityIdentifier("upgrade.log")
-                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                let all = lines
+                VStack(alignment: .leading, spacing: LogPreview.gap) {
+                    ForEach(all.indices, id: \.self) { i in
+                        Text(all[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(all[i]))
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .onTapGesture { full = true }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Update log, newest lines").accessibilityHint("Opens the whole log").accessibilityAddTraits(.isButton)
+                .accessibilityAction { full = true }
+                .accessibilityIdentifier("upgrade.log")
+                .screenCover(isPresented: $full) { FullLog(log: log).environmentObject(model) }
             }
         } header: {
             HStack(alignment: .firstTextBaseline) {
@@ -599,11 +614,10 @@ struct UpgradeLog: View {
                 Spacer()
                 if !log.isEmpty { Button("Show all") { full = true }.textCase(nil).foregroundStyle(macBlue) }
             }
-        } footer: { if !log.isEmpty { Text("The update service’s own lines, newest at the foot. Red is a failure, green a step done.") } }
-        .screenCover(isPresented: $full) { FullLog(log: log).environmentObject(model) }
-        .onReceive(model.statusStore.$status) { st in
-            let l = st?.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if l != log { log = l }
-        }
+            .onReceive(model.statusStore.$status) { st in
+                let l = st?.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if l != log { log = l }
+            }
+        } footer: { if !log.isEmpty { Text("The update service’s own lines, newest at the foot; tap for all of them. Red is a failure, green a step done.") } }
     }
 }
