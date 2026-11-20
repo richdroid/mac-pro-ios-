@@ -282,10 +282,12 @@ struct RingScreen: View {
                         .id("failure")
                         .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
                 } else {
+                    // The word cross-fades in place: the new one is on its way up as the old one goes, so the line is
+                    // never blank (gate, 11-20: it stood empty for two frames as a Snooze was confirmed).
                     Text(status).id(status)
                         .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                         .foregroundStyle(quiet || stopping || shown == nil ? ChumbyPalette.sub(dark) : ChumbyPalette.warn(dark))
-                        .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+                        .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.14))))
                 }
             }
             .animation(.easeOut(duration: 0.2), value: status)
@@ -300,10 +302,17 @@ struct RingScreen: View {
                 .lineLimit(1).minimumScaleFactor(0.6)
                 .accessibilityElement(children: .combine)
             }
-            if shown != nil {
-                Text(title).font(.custom("Trebuchet MS", size: 26).weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
-                if !detail.isEmpty {
-                    Text(detail).font(.custom("Trebuchet MS", size: 17)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            // The alarm's two lines keep their room while the first reading is on its way (the page opened with no word
+            // of the ring yet): the card is its full size from the start, so nothing on it moves when they arrive. Before,
+            // the card grew under "Reaching the Chumby…" as it left, and those words crossed the clock for three frames
+            // (film, 11-20).
+            let reaching = shown == nil && !nothing && !away
+            if shown != nil || reaching {
+                Text(reaching ? " " : title).font(.custom("Trebuchet MS", size: 26).weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
+                    .contentTransition(.opacity)
+                if reaching || !detail.isEmpty {
+                    Text(reaching ? " " : detail).font(.custom("Trebuchet MS", size: 17)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                        .contentTransition(.opacity)
                 }
             }
         }
@@ -317,10 +326,18 @@ struct RingScreen: View {
         VStack(spacing: 14) {
             if !snoozed && !nothing && !away {
                 Button { snooze() } label: {
+                    // The symbol and the word are one piece: when the snooze's length arrives beside them they move over
+                    // together (as a Label, the word jumped and the symbol slid across it; film, 11-20).
                     HStack(spacing: 8) {
-                        Label("Snooze", systemImage: "water.waves").labelStyle(.titleAndIcon)
-                        if let m = snoozeLength { Text(m).fontWeight(.regular).foregroundStyle(ChumbyPalette.sub(dark)) }
+                        HStack(spacing: 8) { Image(systemName: "water.waves"); Text("Snooze") }.geometryGroup()
+                        // Its room is kept while the first reading is on its way, as the card's lines are.
+                        if let m = snoozeLength ?? (model.sys.ringing == nil ? "9 min" : nil) {
+                            Text(m).fontWeight(.regular).foregroundStyle(ChumbyPalette.sub(dark)).opacity(snoozeLength == nil ? 0 : 1).transition(.opacity)
+                        }
                     }
+                    .geometryGroup()
+                    .animation(ChumbyModel.ringSpring, value: snoozeLength)
+                    .accessibilityElement(children: .combine)
                     .font(.custom("Trebuchet MS", size: 22).weight(.bold))
                     .frame(maxWidth: .infinity, minHeight: 68)
                     .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
@@ -371,7 +388,9 @@ struct SlideToStop: View {
     var body: some View {
         GeometryReader { g in
             let run = max(g.size.width - Self.key - Self.inset * 2, 1)
-            let k = landed ? 1 : min(max(pull / run, 0), 1)
+            // A Stop on its way that wasn't slid here (pressed on the Lock Screen or Home's card, with this page up) takes
+            // the key across all the same: the bar never says "Slide to stop" under a card that says "Stopping…".
+            let k = landed || busy ? 1 : min(max(pull / run, 0), 1)
             ZStack(alignment: .leading) {
                 ChumbyGel(colors: [0xff8f5e, 0xfc5825, 0xdc4410], rim: 0x9c2c08)
                 Text("Slide to stop").font(.custom("Trebuchet MS", size: 20).weight(.bold)).foregroundStyle(.white)
@@ -385,13 +404,13 @@ struct SlideToStop: View {
                     .overlay {
                         // Landed, it holds the stop mark (the status line says "Stopping…"); a spinner here left the
                         // page with one turning on the key.
-                        if busy && !landed { ProgressView().tint(ChumbyPalette.orange) }
-                        else { Image(systemName: k > 0.02 ? "stop.fill" : "chevron.right.2").font(.system(size: 22, weight: .heavy)).foregroundStyle(ChumbyPalette.orange) }
+                        Image(systemName: k > 0.02 ? "stop.fill" : "chevron.right.2").font(.system(size: 22, weight: .heavy)).foregroundStyle(ChumbyPalette.orange)
                     }
                     .frame(width: Self.key, height: Self.key)
                     .padding(.leading, Self.inset)
                     .offset(x: k * run)
             }
+            .animation(.spring(response: 0.22, dampingFraction: 0.8), value: busy)
             .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .gesture(
                 DragGesture(minimumDistance: 4)

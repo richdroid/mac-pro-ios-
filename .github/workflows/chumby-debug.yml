@@ -17,7 +17,7 @@ concurrency:
 jobs:
   debug:
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 190
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,7 +40,7 @@ jobs:
           done
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 95
+        timeout-minutes: 140
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -90,7 +90,7 @@ jobs:
             xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/dbg-$name.mp4 > /dev/null 2>&1 &
             local rec=$!
             sleep 2
-            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/live -tab $tab -swipeLog YES
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/live -tab $tab -swipeLog YES $FLINGARGS
             sleep 8
             for X in "$@"; do
               for i in 1 2 3 4 5; do $D "$DEVICE" drag $X 0.8 $X 0.25 0.12 || echo "fling failed"; sleep 1.2; done
@@ -103,8 +103,31 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/dbg-$name-swipe.log || true
           }
-          set_() { # display, suffix, x of each column for the flings
-            local d=$1 x=$2; shift 2
+          # Films with real touches. rec starts one, cut ends it; the drags between are a finger's.
+          rec() { # name, display, address, args
+            local name=$1 display=$2 address=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/dbg-$name.mp4 > /dev/null 2>&1 &
+            REC=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+          }
+          cut() { # name, display (a still of how it ended, then the film closed)
+            xcrun simctl io "$DEVICE" screenshot --display=$2 dist/dbg-$1-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          # The ringing page's slide to stop under a finger: a short slide let go (the key springs back), a slow slide
+          # most of the way and back by the finger, then the whole run (the Chumby stops, the page leaves).
+          slide() { # name, display, x of the key at rest, x at the run's end, y of the bar
+            remock; rec $1 $2 $M/liveringing -tab 0 -pose ringscreen
+            sleep 9
+            local mid=$(echo "$3 + ($4 - $3) * 0.35" | bc -l)
+            $D "$DEVICE" drag $3 $5 $mid $5 0.8 || echo "slide failed"; sleep 2
+            $D "$DEVICE" drag $3 $5 $4 $5 0.6 || echo "slide failed"; sleep 5
+            cut $1 $2
+          }
+          set_() { # display, suffix, full or brief, x of each column for the flings
+            local d=$1 x=$2 size=$3; shift 3
             # Every tab at rest.
             shot home$x $d 9 $M -tab 0
             shot channels$x $d 10 $M -tab 1
@@ -151,6 +174,12 @@ jobs:
             # more, and it stops, with no failure shown.
             remock; film ringlate$x $d 16 $M/livelate -tab 0 -pose ringdemo
             remock; film ringstill$x $d 16 $M/livestill -tab 0 -pose ringpagedemo
+            # Snooze, then Stop, pressed as the Lock Screen's card, the notification and Siri press them (not the app's
+            # own keys), with the app open, through an old copy of sys: Home follows at once and holds.
+            remock; film ringdoor$x $d 14 $M/livestale -tab 0 -pose ringdoor
+            # Upright, the open-flat films stand for the rest: only the ring films and two tabs flung (the first run
+            # ran out of its time before this posture began).
+            if [ $size = brief ]; then remock; for T in 0 2; do fling fling-$T$x $d $T "$@"; done; return; fi
             # A skipped day: Skip, then Undo.
             remock; film skipdemo$x $d 14 $M/live -tab 0 -pose skipdemo
             # Calendar settings, a calendar day and an editor in and out, then a nap set, counting down, called off.
@@ -169,7 +198,23 @@ jobs:
           }
           xcrun simctl ui "$DEVICE" appearance light
           $D "$DEVICE" pose closed || true; sleep 5
-          set_ 1 "" 0.5
+          set_ 1 "" full 0.5
+          slide ringslide 1 0.12 0.93 0.864
+          # A channel of six, in Edit: the last widget dragged to the top by its grip, slowly, then the second down two.
+          remock; rec chdrag 1 $M/livemany -tab 1 -pose chedit
+          sleep 9
+          $D "$DEVICE" drag 0.75 0.728 0.75 0.20 2.5 || echo "drag failed"; sleep 2
+          $D "$DEVICE" drag 0.75 0.324 0.75 0.55 1.5 || echo "drag failed"; sleep 3
+          cut chdrag 1
+          # Sounds' radio stations in Edit (the delete control at the row's start), then Done: the page flung to them first.
+          remock; rec streamsedit 1 $M/live -tab 3 -pose streamsedit
+          sleep 7
+          for i in 1 2 3; do $D "$DEVICE" drag 0.5 0.8 0.5 0.25 0.12 || true; sleep 0.8; done
+          sleep 4; xcrun simctl io "$DEVICE" screenshot --display=1 dist/dbg-streamsedit-editing.png
+          sleep 4
+          cut streamsedit 1
+          # Alarms with the calendar's alarms on (the long page), flung to its end and back.
+          remock; FLINGARGS="-pose calendar" fling fling-2-calendar 1 2 0.5
           gallery 4 1 card
           gallery 5 1 island
           gallery 6 1 card-working
@@ -178,9 +223,11 @@ jobs:
           shot ringpage-dark 1 9 $M/ringing -tab 0 -pose ringscreen
           xcrun simctl ui "$DEVICE" appearance light
           $D "$DEVICE" pose open; sleep 5
-          set_ 3 "-open" 0.25 0.7
+          set_ 3 "-open" full 0.7
+          remock; fling fling-0-open-left 3 0 0.25
+          slide ringslide-open 3 0.58 0.96 0.58
           $D "$DEVICE" rotate 1; sleep 5
-          set_ 3 "-portrait" 0.5
+          set_ 3 "-portrait" brief 0.5
           xcrun simctl ui "$DEVICE" appearance dark
           for T in 0 1 2 3 4; do shot tab$T-dark-portrait 3 9 $M -tab $T; done
           shot ringpage-dark-portrait 3 9 $M/ringing -tab 0 -pose ringscreen
@@ -190,11 +237,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../debug.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../debug.zip /dev/null)
           (cd dist && zip -qr ../debug-shots.zip . -i '*.png' '*.log' || zip -q ../debug-shots.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view chumby-debug-1120 >/dev/null 2>&1 || gh release create chumby-debug-1120 --prerelease --title "Chumby debug pass" --notes "Work in progress: shots, films and logs from the chumby-debug-1120 branch."
-          for f in debug-shots.zip status.txt debug.zip dist/dbg-*.mp4; do
+          for f in debug-shots.zip status.txt dist/dbg-*.mp4; do
             [ -f "$f" ] || continue
             for i in 1 2 3; do gh release upload chumby-debug-1120 "$f" --clobber && break; sleep 15; done
           done

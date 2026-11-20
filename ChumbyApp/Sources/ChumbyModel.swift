@@ -631,6 +631,14 @@ final class ChumbyModel: ObservableObject {
     static let stopFade = 0.12
     static let stopSpring = ringSpring.delay(stopFade + 1.0 / 60)
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
+    // A Stop or Snooze the Chumby has just confirmed, pressed somewhere other than this app's own keys (the Lock
+    // Screen's card, the notification, Siri) while the app is open: shown at once, in the same springs as its own. Its
+    // own presses (ringWorking set) show themselves.
+    func ringConfirmedElsewhere(stop: Bool, until: Double?) {
+        guard ringWorking == nil, let r = sys.ringing else { return }
+        if stop { withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }; ringHint = nil }
+        else if !r.snoozed { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() } }
+    }
     func ringOff() { ringOffTask() }
     // The same, for a page that waits on the answer (the ringing screen): true once the Chumby says it has stopped. It goes
     // through the one desk the card, the notification and Siri use (RingDesk), so a press here and one on the Lock Screen

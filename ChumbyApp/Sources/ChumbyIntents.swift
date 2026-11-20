@@ -479,11 +479,18 @@ actor RingDesk {
     // just stopped on the Lock Screen, or "Ringing" back over a snooze. Kept in defaults, so the app's model has it
     // whichever door the press came through.
     static let stoppedKey = "ringStoppedAt", snoozedKey = "ringSnoozedAt"
+    // Said in the app as the Chumby confirms, so a press that came through another door (the Lock Screen's card, the
+    // notification, Siri) shows in the open app at once, not when the app next reads the Chumby.
+    static let confirmedNote = Notification.Name("ChumbyRingConfirmed")
     static func note(_ kind: Kind, _ out: RingOutcome) {
         let now = Date().timeIntervalSince1970
         switch (kind, out) {
-        case (.stop, .confirmed), (_, .nothingRinging): UserDefaults.standard.set(now, forKey: stoppedKey)
-        case (.snooze, .confirmed): UserDefaults.standard.set(now, forKey: snoozedKey)
+        case (.stop, .confirmed), (_, .nothingRinging):
+            UserDefaults.standard.set(now, forKey: stoppedKey)
+            NotificationCenter.default.post(name: confirmedNote, object: nil, userInfo: ["stop": true])
+        case (.snooze, .confirmed(let until)):
+            UserDefaults.standard.set(now, forKey: snoozedKey)
+            NotificationCenter.default.post(name: confirmedNote, object: nil, userInfo: ["stop": false, "until": until ?? 0])
         default: break
         }
     }

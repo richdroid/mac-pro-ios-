@@ -453,6 +453,10 @@ const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(J
   // before it (still "ringing", its age in X-Chumby-Age), while a=ring answers at once. The card must hold what the
   // Chumby confirmed and never go back to Ringing on the old copy.
   livestale: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) },
+  // A channel of six widgets, for a reorder dragged with a real finger.
+  livemany: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)),
+    chlist: { ...data.chlist, channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '1', '15'], ['W5', '1', '45'], ['W6', '1', '30'], ['W7', '1', '30'], ['W8', '1', '20']],
+      list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15'], ['W5', 'NYT Top Headlines', '45'], ['W6', 'Flickr Interesting', '30'], ['W7', 'Stock Ticker', '30'], ['W8', 'Word of the Day', '20']] }, data.chlist.channels[1]] } },
   livelate: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) },
   livestill: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
 // Sounds as Richard's looks (build 281, 11-13): long Pandora station names on every alarm and on calendar alarms, and
@@ -549,7 +553,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is

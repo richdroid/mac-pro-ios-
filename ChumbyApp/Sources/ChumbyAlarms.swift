@@ -399,7 +399,7 @@ struct RingingCard: View {
 extension AnyTransition {
     // Stopped: the card is gone by opacity alone within 0.12 s, before the controls under it start up (ChumbyModel.stopSpring).
     static var ringCard: AnyTransition {
-        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .top)), removal: .opacity.animation(.easeOut(duration: ChumbyModel.stopFade)))
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.22).delay(0.1)), removal: .opacity.animation(.easeOut(duration: ChumbyModel.stopFade)))
     }
 }
 
@@ -478,7 +478,7 @@ struct NapSection: View {
     }
 }
 // The nap's heading: "Nap" stands still, and ", wake me in" fades away with the chips as a nap is set and back in with
-// them when it's called off (it swapped whole in one frame). Timed to NapSection's three moves.
+// them when it's called off (it swapped whole in one frame). Timed to NapSection's two moves.
 struct NapHead: View {
     let set: Bool
     let color: Color
@@ -488,7 +488,7 @@ struct NapHead: View {
             HStack(spacing: 0) {
                 Text("Nap")
                 Text(", wake me in").opacity(set ? 0 : 1)
-                    .animation(set ? .easeOut(duration: AlarmsTab.napFade) : .easeIn(duration: 0.16).delay(AlarmsTab.napFade + AlarmsTab.napSettle), value: set)
+                    .animation(set ? .easeOut(duration: AlarmsTab.napFade) : .easeOut(duration: AlarmsTab.napSettle).delay(AlarmsTab.napFade), value: set)
             }
             .font(.custom("Trebuchet MS", size: 16).weight(.bold))
         }
@@ -1370,9 +1370,11 @@ struct AlarmsTab: View {
             try? await Task.sleep(nanoseconds: UInt64(Self.napFade * 1e9))
             guard !Task.isCancelled else { return }
             withAnimation(.snappy(duration: Self.napSettle)) { napRows = model.napDue != nil }
-            try? await Task.sleep(nanoseconds: UInt64(Self.napSettle * 1e9))
+            // The new rows come up as the card takes their size, a frame behind the old ones going: the card is never
+            // left standing empty (gate, 11-20: it sat empty for a third of a second while it settled first).
+            try? await Task.sleep(nanoseconds: 17_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: 0.16)) { napFaded = false }
+            withAnimation(.easeOut(duration: Self.napSettle)) { napFaded = false }
             napSwap = nil
         }
     }
@@ -2088,7 +2090,8 @@ struct GlassKeyLabel: View {
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: symbol).imageScale(.small).font(.footnote.weight(.bold))
-            Text(title)
+            // The app's own face, as Home's Skip is set (gate, 11-20: here it was the system's, beside a Trebuchet time).
+            Text(title).font(.custom("Trebuchet MS", size: 16).weight(.bold))
         }
         .padding(.horizontal, 2)
     }

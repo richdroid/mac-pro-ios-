@@ -627,6 +627,9 @@ struct RootView: View {
             if ["ringscreen", "ringfail", "ringpagedemo"].contains(ChumbyModel.pose) { model.ringScreen = true }
             if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: RingDesk.confirmedNote).receive(on: DispatchQueue.main)) { n in
+            model.ringConfirmedElsewhere(stop: n.userInfo?["stop"] as? Bool ?? true, until: (n.userInfo?["until"] as? Double).flatMap { $0 > 0 ? $0 : nil })
+        }
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
         // For the build's film of a second tap on the tab (never on the phone): the tab scrolled down, then tapped again.
         .task {
@@ -1022,6 +1025,15 @@ struct HomeTab: View {
                         try? await Task.sleep(nanoseconds: 3_500_000_000); model.tab = 1
                     }
                 }
+                // For the build's film: Snooze, then Stop, pressed the way the Lock Screen's card, the notification and
+                // Siri press them (ChumbyRingActions, outside this app's own keys), with the app open: Home must follow.
+                if ChumbyModel.pose == "ringdoor" && !demoed {
+                    demoed = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 3_500_000_000); await ChumbyRingActions.snooze(from: "film")
+                        try? await Task.sleep(nanoseconds: 4_000_000_000); await ChumbyRingActions.stop(from: "film")
+                    }
+                }
                 // For the build's film: the alarm rings, is snoozed, then stopped.
                 if ChumbyModel.pose == "ringdemo" && !demoed {
                     demoed = true
@@ -1285,9 +1297,18 @@ struct HomeTab: View {
     }
     // The controls under the device, in both layouts and in this order.
     @ViewBuilder var controls: some View {
-        if model.sys.ringing != nil { RingingCard().card().padding(.bottom, Self.underDevice).transition(.ringCard) }
         remote
-        SkipCard().padding(.top, Self.sectionGap)
+        // One slot under the remote, for the alarm: the ringing card while one rings or snoozes, the next alarm's gel
+        // otherwise. They change hands in place, by opacity, and the slot's height moves in the one spring with the
+        // rows below it; it is clipped to that height, so the taller card is uncovered as the rows make room and never
+        // lies over them. Before (gate, 11-20) the ringing card came in above the remote while the gel left below it:
+        // the remote slid down across the card's keys, and the rows under the gel jumped up over it and back.
+        ZStack(alignment: .top) {
+            if model.sys.ringing != nil { RingingCard().card().padding(.top, Self.sectionGap).transition(.ringCard) }
+            SkipCard().padding(.top, Self.sectionGap)
+        }
+        // room for the cards' shadows inside the clip
+        .padding(.horizontal, 16).padding(.bottom, 16).clipped().padding(.horizontal, -16).padding(.bottom, -16)
         plainNext
         playing
     }
@@ -1320,7 +1341,7 @@ struct HomeTab: View {
             } else {
                 ScrollViewReader { scroll in
                 ScrollView {
-                    // The wordmark is drawn by the stage itself. The remote sits right under the device, within reach of the thumb; a ringing alarm above even that.
+                    // The wordmark is drawn by the stage itself. The remote sits right under the device, within reach of the thumb; a ringing alarm takes the next alarm's place under it.
                     VStack(spacing: 0) {
                         stage; status
                         VStack(spacing: 0) { controls }
@@ -2640,7 +2661,13 @@ struct SoundsTab: View {
                 }) { stationLink = ""; addStation = true }
                     .disabled(model.addingStation || model.unreachable)
                 if let f = model.failed("pandora") { FailNote(text: f, dismiss: model.dismissal("pandora")) }
-            } header: { EditHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark), editing: $editingStreams, shown: !model.state.streams.isEmpty) } footer: { if let scanNote { SectionFoot(scanNote) } }
+            } header: { EditHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark), editing: $editingStreams, shown: !model.state.streams.isEmpty)
+                // For the build's film: the stations in Edit (CI scrolls the page to them), then Done.
+                .task {
+                    guard ChumbyModel.pose == "streamsedit" else { return }
+                    try? await Task.sleep(nanoseconds: 9_000_000_000); withAnimation(.snappy) { editingStreams = true }
+                    try? await Task.sleep(nanoseconds: 4_000_000_000); withAnimation(.snappy) { editingStreams = false }
+                } } footer: { if let scanNote { SectionFoot(scanNote) } }
         }
         .seaList()
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
@@ -3419,9 +3446,9 @@ struct SkipCard: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000); send(true)
                 try? await Task.sleep(nanoseconds: 4_000_000_000); send(false)
             }
-            // Back after a ring ends: its room opens as the controls above move up, and the card fades in once they have
-            // stopped, so nothing travels through it (gate, 11-18: the pills slid up through the incoming card).
-            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2).delay(ChumbyModel.stopFade + 0.35)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+            // It shares its slot with the ringing card (HomeView.controls): gone at once when a ring starts, back as the
+            // ringing card finishes fading when one ends, with nothing travelling through it either way.
+            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.22).delay(ChumbyModel.stopFade)), removal: .opacity.animation(.easeOut(duration: 0.1))))
         }
     }
     // A calendar day ringing at its own time goes back to the calendar's rule for it: that day's time is let go and the
