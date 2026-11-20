@@ -320,7 +320,7 @@ struct QueueList: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if queue.items.isEmpty {
-                    ContentUnavailableView("Nothing queued", systemImage: "music.note.list", description: Text("Hold a song or an album and choose Play next or Play later."))
+                    ContentUnavailableView("Nothing up next", systemImage: "music.note.list")
                         .padding(.top, 40)
                 } else {
                     QueueRows(items: queue.items, move: { queue.move($0, to: $1) }, remove: { queue.remove($0) },
@@ -411,8 +411,12 @@ struct PlayModes: View {
             mode(icon: "shuffle", on: queue.shuffle, label: "Shuffle", value: queue.shuffle ? "On" : "Off") { queue.setShuffle(!queue.shuffle) }
                 // Until Mint has said, the keys are there but quiet: they would be setting what isn't known.
                 .opacity(queue.loaded ? 1 : 0.45).disabled(!queue.loaded)
-            mode(icon: "list.bullet", on: showing.on, label: "Up next", value: queue.total > 0 ? "\(queue.total) songs" : "") {
-                Haptic.fire(.tick); withAnimation(.easeOut(duration: 0.25)) { showing.on.toggle() }
+            // Up next only when there is something next: never a key that opens an empty sheet (2026-11-20).
+            if queue.total > 0 || showing.on {
+                mode(icon: "list.bullet", on: showing.on, label: "Up next", value: "\(queue.total) songs") {
+                    Haptic.fire(.tick); withAnimation(.easeOut(duration: 0.25)) { showing.on.toggle() }
+                }
+                .transition(.opacity)
             }
             mode(icon: queue.repeatMode == 1 ? "repeat.1" : "repeat", on: queue.repeatMode != 0, label: "Repeat",
                  value: queue.repeatMode == 0 ? "Off" : queue.repeatMode == 1 ? "One song" : "All") { queue.cycleRepeat() }
@@ -422,11 +426,12 @@ struct PlayModes: View {
     }
     private func mode(icon: String, on: Bool, label: String, value: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 16, weight: .semibold)).frame(width: 46, height: 46).contentShape(Circle())
-                .foregroundStyle(on ? TVLook.accent : .primary)
+            // Full strength, showing their state: lit and filled when on, white when off; never grey on grey.
+            Image(systemName: icon).font(.system(size: 20, weight: .semibold)).frame(width: 56, height: 56).contentShape(Circle())
+                .foregroundStyle(on ? Color.black : Color.white)
+                .background { if on { Circle().fill(TVLook.accent) } }
         }
         .buttonStyle(.plain).keyGlass()
-        .overlay { if on { Circle().strokeBorder(TVLook.accent.opacity(0.55), lineWidth: 1.5) } }
         .accessibilityLabel(label).accessibilityValue(value)
     }
 }

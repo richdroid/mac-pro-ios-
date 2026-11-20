@@ -271,7 +271,7 @@ struct PhonePicker: View {
         return VStack(alignment: .leading, spacing: 8) {
             // The seasons as a pivot, the one on large and the ones either side peeking in at the edges; swipe the picker
             // or tap a title to move between them. One season has nothing to swipe to, but still names itself.
-            if seasons.count > 0 { SeasonPivot(seasons: seasons, selected: pivot) }
+            if seasons.count > 0 { SeasonPivot(seasons: seasons, selected: pivot).modifier(SeasonSwipeRows(seasons: seasons, season: pivot, header: true)) }
             Menu {
                 ForEach((meta?.episodes ?? []).filter { $0.season == shown }, id: \.id) { e in
                     Button { if video != e.id { Haptic.fire(.tick) }; video = e.id } label: {

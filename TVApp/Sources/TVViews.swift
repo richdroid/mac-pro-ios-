@@ -268,8 +268,6 @@ struct RootView: View {
                 UserDefaults.standard.set(t, forKey: "tab")
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
-                // Opening Search brings the keyboard, unless it's already being asked for.
-                if t == 6, was != 6, !SendDraft.shared.wantsFocus { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
             }
             // A poster lifted off a shelf, over everything, where his finger has it (Liftable).
             .overlay { HandOverlay() }
@@ -2884,6 +2882,37 @@ struct FlickCard: View {
         .accessibilityAddTraits(.isButton).accessibilityHint("Sends it to the TV")
     }
 }
+// A song's three keys: previous, play, next, at the Remote's own key size, close together under the thumb. No ten-second
+// jumps on a song (2026-11-20).
+struct MusicTransport: View {
+    let playing: Bool?
+    var body: some View {
+        HStack(spacing: 28) {
+            GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 72)
+            PlayKey(playing: playing, size: 80)
+            GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 72)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+// "South Park is on the TV": the one line Music says about a film or show, and the way to its Remote.
+struct OnTVLine: View {
+    @Environment(TVModel.self) var model
+    let name: String
+    var body: some View {
+        Button { model.tick(); model.tab = 0 } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "tv").font(.system(size: 17, weight: .semibold))
+                Text("\(name) is on the TV").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 18).frame(height: 56).contentShape(Rectangle())
+            .tvCard(18)
+        }
+        .buttonStyle(.plain)
+    }
+}
 struct NowControls: View {
     @Environment(TVModel.self) var model
     let music: TVStatus.Music
@@ -2894,7 +2923,7 @@ struct NowControls: View {
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             // The one transport, the same five as for a film: one way to play anything in this app (r17).
             // At the song's end with the TV still saying playing: an old word, shown stopped there, as a film's is (r18).
-            Transport(ended: model.songEnded(music), playing: .some(model.songPlaying(music)))
+            MusicTransport(playing: model.songEnded(music) ? false : model.songPlaying(music))
             // Shuffle and repeat, as Mint has them.
             PlayModes().padding(.top, 4)
         }
@@ -3018,17 +3047,19 @@ struct PlayingTab: View {
                 Image(systemName: a.handoff == "youtube" ? "play.rectangle.fill" : "iphone").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
                 Text(a.title?.isEmpty == false ? a.title! : "From this iPhone").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : a.title?.isEmpty == false ? "Playing from this iPhone" : "AirPlay").font(.subheadline).foregroundStyle(.secondary)
-            } else if phone.drives, let song = phone.song, !otherAppIsActive {
-                songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
-                          titles(song.title, [song.artist, song.album]), PhoneControls(song: song))
-            } else if let m = music, !otherAppIsActive {
-                songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
-                          titles(m.title, [m.artist, m.album]), NowControls(music: m))
-            } else if let s = model.status?.session {
-                // The one way a film or show is shown and driven, the same transport as the Remote's.
-                PlayingVideo(session: s, stale: stale, ended: Self.atEnd(s)).padding(.top, panes ? 0 : 8)
             } else {
-                ContentUnavailableView("Nothing playing", systemImage: "music.note", description: Text("Search below, or flick something from this iPhone."))
+                // A film or show on the TV is the Remote's: said here in one line, with his last music kept ready under
+                // it. Music never says a song is playing while it isn't, and never shows the film as its own.
+                if otherAppIsActive, let s = model.status?.session, !s.showName.isEmpty { OnTVLine(name: s.showName) }
+                if phone.drives, let song = phone.song, !otherAppIsActive {
+                    songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
+                              titles(song.title, [song.artist, song.album]), PhoneControls(song: song))
+                } else if let m = music {
+                    songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
+                              titles(m.title, [m.artist, m.album]), NowControls(music: m))
+                } else if !otherAppIsActive {
+                    ContentUnavailableView("Nothing playing", systemImage: "music.note")
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -3040,9 +3071,8 @@ struct PlayingTab: View {
     var nowKind: Int {
         if model.otherAirPlay, model.status?.airplay != nil { return 0 }
         if phone.drives, phone.song != nil, !otherAppIsActive { return 1 }
-        if music != nil, !otherAppIsActive { return 2 }
-        if model.status?.session != nil { return 3 }
-        return 4
+        if music != nil { return otherAppIsActive ? 3 : 2 }
+        return otherAppIsActive ? 5 : 4
     }
     static func atEnd(_ s: TVStatus.Session) -> Bool {
         guard s.playing, let p = s.position, let d = s.duration, d > 0 else { return false }
@@ -3057,7 +3087,6 @@ struct PlayingTab: View {
             art
             names.padding(.top, 20)
             controls.padding(.top, 18)
-            showOnTV.padding(.top, 12)
         }
     }
     func cover(_ c: some View) -> some View {
@@ -3209,7 +3238,8 @@ struct PlayingTab: View {
     // (the 11-10 shelf ruling; gate 276: under a YouTube video its first card was the same video). Never the music
     // search either, which is only for when Mint is what's on or nothing is.
     @ObservedObject private var stremio = BrowseStore.shared(.stremio)
-    var watching: Bool { otherAppIsActive && model.status?.session != nil }
+    // Music is music's alone now: a film's episodes and what comes next are the Remote's.
+    var watching: Bool { false }
     // A show on, with its episodes in the right pane.
     var showsEpisodes: Bool { model.status?.session?.pkg == "com.stremio.one" && nextUp.series != nil }
     // Open flat, Recently played goes under the transport on the left, so the picture's pane isn't two-thirds empty
