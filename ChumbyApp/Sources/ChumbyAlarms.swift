@@ -1216,7 +1216,7 @@ struct AlarmsTab: View {
                             skipping = true
                             Task { await model.cancelNap(); skipping = false }
                         } label: {
-                            Group { if skipping { ProgressView() } else { Label("Cancel nap", systemImage: "xmark") } }
+                            Group { if skipping { ProgressView() } else { GlassKeyLabel(title: "Cancel nap", symbol: "xmark") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
                         .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
@@ -1227,7 +1227,7 @@ struct AlarmsTab: View {
                             skipping = true
                             Task { await model.skipNext(); skipping = false }
                         } label: {
-                            Group { if skipping { ProgressView() } else { Label("Skip", systemImage: "forward.end.fill") } }
+                            Group { if skipping { ProgressView() } else { GlassKeyLabel(title: "Skip", symbol: "forward.end.fill") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
                         .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
@@ -2071,5 +2071,20 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+// A small glass button's word with its symbol: the symbol a size under the word and close beside it. A plain Label
+// drew the symbol as large as a heading with a wide gap, so "Skip" read off-centre (Richard, 2026-11-20: "the skip
+// button … the text looks off").
+struct GlassKeyLabel: View {
+    let title: String
+    let symbol: String
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).imageScale(.small).font(.footnote.weight(.bold))
+            Text(title)
+        }
+        .padding(.horizontal, 2)
     }
 }
