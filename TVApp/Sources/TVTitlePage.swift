@@ -120,10 +120,11 @@ struct TitlePage: View {
                     HStack(spacing: 0) {
                         VStack(spacing: 0) {
                             Spacer(minLength: 8)
-                            card(maxH: g.size.height * 0.66, maxW: g.size.width * 0.36)
+                            card(maxH: g.size.height * 0.66, maxW: g.size.width * 0.38)
                             Spacer(minLength: 8)
                         }
-                        .frame(width: g.size.width * 0.44)
+                        // The card's side ends at the fold, the words begin after it: nothing sits across the hinge.
+                        .frame(width: g.size.width * 0.5)
                         .zIndex(1)
                         ScrollView {
                             VStack(alignment: .leading, spacing: 0) {

@@ -45,7 +45,8 @@ struct TVApp: App {
                 .phoneContinuation()
                 .onOpenURL { u in
                     if u.host == "phone" { PhoneOpen.open(url: u, model: model) }
-                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }  // 9: Status, Settings pushed
+                    // What is playing has one home each: a film or show is the Remote's, a song Music's (widgets and the island ask for 2).
+                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 2 && model.videoIsCurrent ? 0 : t }  // 9: Status, Settings pushed
                     // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
                     // known (a launch from cold has to hear from the TV first; about three seconds at most, then said).
                     if u.host == "next" {
