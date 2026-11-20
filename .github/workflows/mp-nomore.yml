@@ -1,6 +1,7 @@
-name: Mac Pro folded tab bar shots
-# Temporary, branch-only: the Mac Pro app's tabs and pages shot folded (upright and on its side), open upright and open
-# flat, for the mp-nomore branch's gate. Published to the mp-nomore release. Removed before merge.
+name: Mac Pro tabs, Dashboard and upgrade shots
+# Temporary, branch-only: every tab of the Mac Pro app in every posture (folded upright and on its side, open upright, open
+# flat, and open flat at Richard's own size), the Dashboard in each state, every step of the upgrade, and films of tab
+# changes, a fling to the foot of every tab, and push and Back, for the mp-nomore branch's gate. Published to the mp-nomore release. Removed before merge.
 on:
   push:
     branches: [mp-nomore]
@@ -13,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 95
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,7 +33,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 75
+        timeout-minutes: 100
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -70,93 +71,105 @@ jobs:
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
-          stills() {
-            local d=$1 x=$2
-            shot claude$x $d 8 -tab 2
-            shot session$x $d 9 -tab 2 -pose session
-            shot macos$x $d 8 -tab 4
-            shot settings$x $d 8 -tab 9
-            # Settings is the system's gear in the bar on every tab (plan 2a): tapped from the Dashboard and from macOS.
-            film settings-gear$x $d 3 "tap Settings" -tab 6
-            film settings-gear-macos$x $d 3 "tap Settings" -tab 4
-            shot everything$x $d 9 -tab 6 -pose health
-            shot everything-one$x $d 9 -tab 6 -pose healthone
-            # The Dashboard with one part down: the Everything tile names it.
-            shot dash-one$x $d 8 -tab 6 -pose chipbad
-            shot status-one$x $d 8 -tab 0 -pose chipbad
-            shot history-cpu$x $d 9 -tab 0 -openHistory cpu
-            shot history-download$x $d 9 -tab 0 -openHistory rx
+          # Every tab at rest: name suffix, display, then any extra launch arguments.
+          TABS="status:0 apps:1 claude:2 macos:4 control:5 dash:6"
+          tabs() {
+            local x=$1 d=$2; shift 2
+            for t in $TABS; do shot tab-${t%%:*}$x $d 8 -tab ${t##*:} "$@"; done
           }
-          dash() {
-            local d=$1 x=$2
-            shot dash$x $d 8 -tab 6
-            shot dash-off$x $d 8 -tab 6 -pose consoleoff
-            shot dash-console$x $d 8 -tab 6 -pose console
-            shot dash-board$x $d 8 -tab 6 -pose consoleboard
-            for P in $(cat ci/qol-poses.txt 2>/dev/null); do shot dash-$P$x $d 8 -tab 6 -pose $P; done
-            # Open flat, the left pane (the middle is the hinge's gap).
-            sx=0.5; [ "$x" = "-open" ] && sx=0.25
-            film dash-scroll$x $d 4 "drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2;drag $sx 0.25 $sx 0.85" -tab 6
-            film status-scroll$x $d 3 "drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2" -tab 0
-            # Control after its Mac rows moved to the Dashboard, and Status beside it.
-            shot control$x $d 8 -tab 5
-            film control-scroll$x $d 3 "drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2;drag $sx 0.8 $sx 0.2" -tab 5
-            shot status$x $d 8 -tab 0
-            # Apps as it opens (designer gate, 2026-11-19: only its failure pose was shot).
-            shot apps$x $d 8 -tab 1
-            # A fling: three quick throws down the Dashboard and one back, for the frames between.
-            film dash-fling$x $d 3 "drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.2 $sx 0.9 0.08" -tab 6
-            # The posed failure stays up once said (about 2 s after the open apps are drawn, which folded is only once
-            # they're scrolled to): shot well after, never before it is said (designer gate, 2026-11-19).
-            shot apps-fail$x $d 10 -tab 1 -pose appsfail
-            film apps-failfilm$x $d 6 "" -tab 1 -pose appsfail
-            # The pages the gate had never seen (designer gate, 2026-11-19): Claude, a session, macOS, Settings, Everything
-            # all well and with one part down, and two histories.
-            stills $d $x
-            # Read on fd 3, so nothing a film runs can swallow the next lines.
-            # Upright open, the tab bar's buttons aren't separate on the accessibility tree: its own file taps them by place.
-            f=ci/qol-touches-$d$x.txt; [ -f $f ] || f=ci/qol-touches-$d.txt
-            [ -f $f ] && while IFS='|' read -r -u 3 n t a; do film "$n$x" $d 4 "$t" $a < /dev/null; done 3< $f
+          # The Dashboard in each state of the Mac's screen (criterion 18): the Console showing, hidden behind other apps,
+          # Glance, the display asleep, not running, stepped aside, and the Mac out of reach.
+          dashstates() {
+            local x=$1 d=$2; shift 2
+            shot dash-showing$x $d 8 -tab 6 -pose console "$@"
+            shot dash-hidden$x $d 8 -tab 6 -pose consolebehind "$@"
+            shot dash-glance$x $d 8 -tab 6 -pose consoleglance "$@"
+            shot dash-asleep$x $d 8 -tab 6 -pose consoleasleep "$@"
+            shot dash-off$x $d 8 -tab 6 -pose consoleoff "$@"
+            shot dash-board$x $d 8 -tab 6 -pose consoleboard "$@"
+            shot dash-unreachable$x $d 8 -tab 6 -pose unreachable "$@"
+            shot dash-one$x $d 8 -tab 6 -pose chipbad "$@"
           }
-          # Folded first (the outer display), then open upright, then open flat.
-          dash 1 ""
-          # Folded upright (mp-nomore): the drawn bar at the foot, all six tabs, never "More" (Richard, 2026-11-20:
-          # "i said more never"). Every tab tapped in turn, a pushed page above the bar, and the badge.
-          film bar-folded 1 2 "tap Dashboard;tap Control;tap macOS;tap Claude;tap Apps;tap Status;tap Dashboard;tap tile.CPU;tap Dashboard" -tab 0
+          # The upgrade, every step from posed states (criterion 21), then its card on the Dashboard scrolled to.
+          UPGRADES="room blocked freed patcher held downloading checksred checksgreen installing away patches done noreturn"
+          upgrades() {
+            local x=$1 d=$2 list=$3; shift 3
+            for u in $list; do shot upgrade-$u$x $d 9 -tab 6 -pose upgrade-$u "$@"; done
+          }
+          # The films: every tab tapped in turn; a fling to the foot of every tab and back to its top (three throws down,
+          # three up), in each pane where there are two; a page pushed and swiped back, twice; the Dashboard scrolled
+          # slowly; the upgrade opened from its card and a clean-up asked for. "$3" is the tab taps for this posture.
+          films() {
+            local x=$1 d=$2 taps=$3 sx=$4 sx2=$5; shift 5
+            film tabs$x $d 2 "$taps" -tab 0 "$@"
+            for t in $TABS; do
+              film flingend-${t%%:*}$x $d 3 "drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.2 $sx 0.9 0.08;drag $sx 0.2 $sx 0.9 0.08;drag $sx 0.2 $sx 0.9 0.08" -tab ${t##*:} "$@"
+              [ -n "$sx2" ] && film flingend-${t%%:*}-right$x $d 3 "drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.2 $sx2 0.9 0.08;drag $sx2 0.2 $sx2 0.9 0.08;drag $sx2 0.2 $sx2 0.9 0.08" -tab ${t##*:} "$@"
+            done
+            film pushback$x $d 3 "tap tile.Storage;drag 0.01 0.5 0.75 0.5 0.35;tap tile.CPU;drag 0.01 0.5 0.75 0.5 0.35;tap \"tile.Fans & heat\";drag 0.01 0.5 0.75 0.5 0.35" -tab 6 "$@"
+            film dash-scroll$x $d 4 "drag $sx 0.8 $sx 0.3 0.6;drag $sx 0.8 $sx 0.3 0.6;drag $sx 0.8 $sx 0.3 0.6;drag $sx 0.3 $sx 0.8 0.6" -tab 6 "$@"
+            film dash-strip$x $d 3 "tap chip.page.home;tap chip.board.machine;tap chip.board.machine;tap chip.page.storage;tap dash.screen" -tab 6 "$@"
+            # The card sits under the tiles (the right pane's, where there are two): scrolled to, then opened.
+            local ux=${sx2:-$sx}
+            film upgrade-open$x $d 4 "drag $ux 0.85 $ux 0.15 0.5;drag $ux 0.85 $ux 0.15 0.5;tap upgrade.card;tap cleanup.caches" -tab 6 "$@"
+          }
+          RAIL="tap Dashboard;tap Control;tap macOS;tap Claude;tap Apps;tap Status;tap Dashboard;tap tile.CPU;tap Dashboard"
+          # Open upright the system's bar holds all six; its buttons aren't separate on the accessibility tree, so they are
+          # tapped by place.
+          BAR="touch 0.73 0.945 0.05;touch 0.638 0.945 0.05;touch 0.546 0.945 0.05;touch 0.454 0.945 0.05;touch 0.362 0.945 0.05;touch 0.27 0.945 0.05;touch 0.73 0.945 0.05;tap tile.CPU;touch 0.73 0.945 0.05"
+
+          # 1. Folded upright (the outer display): the drawn bar along the foot.
+          tabs "" 1
+          dashstates "" 1
+          upgrades "" 1 "$UPGRADES"
+          films "" 1 "$RAIL" 0.5 ""
+          f=ci/qol-touches-1.txt
+          while IFS='|' read -r -u 3 n t a; do film "$n" 1 4 "$t" $a < /dev/null; done 3< $f
           film bar-keyboard 1 3 'tap "Message the session";tap "Message the session"' -tab 2 -pose session
-          shot bar-otaoffer 1 8 -tab 1 -pose otaoffer
-          # A session page turned from folded upright onto its side and back with the keyboard up (the box tapped first):
-          # the screen and the controls go to two panes, clear of the rail, and the box keeps its focus.
-          # Tapped twice (the first can land while the page is still settling), so the keyboard is surely up before the turn.
-          film session-turn 1 5 'tap "Message the session";tap "Message the session";rotate 1;rotate 3' -tab 2 -pose session
-          # Folded on its side (one right turn), which CI had never shot: the Dashboard, a session page, a history page,
-          # Apps and Control. Then back upright before opening.
+          shot settings 1 8 -tab 9
+          film settings-gear 1 3 "tap Settings" -tab 6
+
+          # 2. Folded on its side: the drawn rail.
           $D "$DEVICE" rotate 1; sleep 5
-          shot dash-land 1 8 -tab 6
-          shot session-land 1 9 -tab 2 -pose session
-          shot history-cpu-land 1 9 -tab 0 -openHistory cpu
-          shot apps-land 1 8 -tab 1
-          shot control-land 1 8 -tab 5
-          # The rail on its side (mp-nomore): all six tabs in it, never "More" (Richard, 2026-11-19: "never more tabs thing").
-          # Each tab in front (history-cpu-land shows a pushed page, its Back above the rail), and every tab tapped in turn from the rail.
-          shot status-land 1 8 -tab 0
-          shot claude-land 1 8 -tab 2
-          shot macos-land 1 8 -tab 4
-          film rail-land 1 2 "tap Dashboard;tap Control;tap macOS;tap Claude;tap Apps;tap Status;tap Dashboard;tap tile.CPU;tap Dashboard" -tab 0
-          # Turned with a tab under the system's More before (Dashboard): on its side and back, the tab stays in front.
+          tabs -land 1
+          dashstates -land 1
+          upgrades -land 1 "room freed"
+          films -land 1 "$RAIL" 0.3 0.7
           film rail-turn 1 3 "rotate 3;rotate 1" -tab 6
-          # The gear on its side, beside the drawn rail, from two tabs; and Settings itself there.
-          film settings-gear-land 1 3 "tap Settings" -tab 6
-          film settings-gear-control-land 1 3 "tap Settings" -tab 5
-          shot settings-land 1 8 -tab 9
-          # The update offer with two apps ready is taller than the screen on its side: scrolled to its Update button.
-          film otaoffer-land 1 3 "drag 0.5 0.8 0.5 0.3 0.4" -tab 1 -pose otaoffer
           $D "$DEVICE" rotate 3; sleep 5
+
+          # 3. Open upright: the system's bar, which holds all six (watched by the probe; logs.zip has tabs-log.txt).
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
-          dash 3 -portrait
+          tabs -portrait 3
+          dashstates -portrait 3
+          upgrades -portrait 3 "room freed checksred"
+          films -portrait 3 "$BAR" 0.5 ""
+
+          # 4. Open flat, the simulator's own size (951 x 669 pt): the drawn rail, two panes.
           $D "$DEVICE" rotate 3; sleep 5
-          dash 3 -open
+          # First what main draws there (-systemTabs YES): the system's rail, for the record of how many it holds here.
+          shot before-status-open 3 8 -tab 0 -systemTabs YES
+          shot before-dash-open 3 8 -tab 6 -systemTabs YES
+          tabs -open 3
+          dashstates -open 3
+          upgrades -open 3 "$UPGRADES"
+          films -open 3 "$RAIL" 0.25 0.7
+          film dash-posture-open 3 4 "tap tile.Storage;rotate 1;rotate 3" -tab 6
+
+          # 5. Open flat at HIS size: his screenshot of 2026-11-20 is 2576 x 1812 px, 859 x 604 pt at 3x, shorter than the
+          # simulator's. The app's window is made that size (-windowSize). First the system's own rail at that size
+          # (-systemTabs YES): if these two shots show four tabs and "•••" as his phone did, CI can see what he saw; if
+          # they show six, the size alone is not the cause and these shots prove nothing about his phone (say so).
+          shot before-status-his 3 8 -tab 0 -windowSize 859x604 -systemTabs YES
+          shot before-dash-his 3 8 -tab 6 -windowSize 859x604 -systemTabs YES
+          tabs -his 3 -windowSize 859x604
+          dashstates -his 3 -windowSize 859x604
+          upgrades -his 3 "room freed" -windowSize 859x604
+          # Touches by place are in the display's fractions; the window is the top-left 0.9 of it.
+          films -his 3 "$RAIL" 0.22 0.63 -windowSize 859x604
+          # What the tab probe saw in every posture (one line per change of size).
+          cp "$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data)/Library/Caches/tabs-log.txt" dist/tabs.log 2>/dev/null || echo "no tab log" > dist/tabs.log
           ls dist
       - name: Publish
         if: always()

@@ -401,10 +401,17 @@ struct FoldSplit<L: View, R: View>: View {
                     if open, FoldSeen.bySize[key] != read || FoldSeen.last != read { FoldSeen.last = read; FoldSeen.bySize[key] = read }
                     if held?.key != key || held?.split != read { held = (key, read) }
                 }
+                // Two panes side by side: no scroll indicators in either. Each pane is its own scroll view, and each drew its
+                // own bar, one at the fold and one by the rail (Richard, 2026-11-20, Status open flat: "this dual scroll
+                // bar shit looks awful").
+                let twoPanes = wide
                 ArrangementView {
-                    left.environment(\.paneOuter, use.outer).padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
+                    left.environment(\.paneOuter, use.outer).padding(.leading, use.outer).padding(.trailing, use.gutter)
+                        .scrollIndicators(twoPanes ? .hidden : .automatic, axes: .vertical)
+                        .splitArrangementLayoutRatio(use.ratio)
                 } secondary: {
                     right.padding(.leading, use.gutter)
+                        .scrollIndicators(twoPanes ? .hidden : .automatic, axes: .vertical)
                 }
                 .arrangementViewStyle(.split)
                 .onChange(of: read, initial: true) { _, v in
@@ -425,6 +432,7 @@ struct FoldSplit<L: View, R: View>: View {
             left.frame(maxWidth: .infinity)
             right.frame(maxWidth: .infinity)
         }
+        .scrollIndicators(.hidden, axes: .vertical)
     }
 }
 
@@ -736,5 +744,102 @@ enum TabTour {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             for t in tabs + tabs { set(t); try? await Task.sleep(nanoseconds: 1_600_000_000) }
         }
+    }
+}
+
+// Whether the system's own tab bar or rail is showing "More" (the "•••" item) right now, read from UIKit itself, never
+// guessed from a size (Richard, 2026-11-20: "never a more thing ever"). His phone open flat showed the system rail with
+// four tabs and "•••" where the build's shots showed six: the rail had kept the split it made at a narrower width (the
+// app opened folded, then unfolded). So the app asks the tab bar what it shows, and wherever it would overflow it draws
+// the rail or bar itself (SideRailTabs, BottomBarTabs) with every tab. Put in the background of a tab's page.
+#if canImport(UIKit)
+struct TabOverflowProbe: UIViewRepresentable {
+    let tabs: Int
+    let report: (Bool) -> Void
+    func makeUIView(context: Context) -> Probe { let v = Probe(); v.isUserInteractionEnabled = false; v.tabs = tabs; v.report = report; return v }
+    func updateUIView(_ v: Probe, context: Context) { v.tabs = tabs; v.report = report }
+    final class Probe: UIView {
+        var tabs = 0
+        var report: (Bool) -> Void = { _ in }
+        private var last: Bool?
+        override func didMoveToWindow() { super.didMoveToWindow(); look() }
+        override func layoutSubviews() { super.layoutSubviews(); look() }
+        private func look() {
+            // After this pass: the bar lays its items out in the same pass as the page.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil, let tbc = self.tabController() else { return }
+                let over = Self.overflows(tbc, tabs: self.tabs)
+                guard over != self.last else { return }
+                self.last = over
+                TabsLog.note("system tabs \(Int(self.window?.bounds.width ?? 0))x\(Int(self.window?.bounds.height ?? 0)): \(over ? "MORE" : "all \(self.tabs)") (items \(tbc.tabBar.items?.count ?? -1), hidden \(tbc.tabBar.isHidden))")
+                self.report(over)
+            }
+        }
+        private func tabController() -> UITabBarController? {
+            var r: UIResponder? = self
+            while let x = r { if let t = x as? UITabBarController { return t }; r = x.next }
+            func find(_ c: UIViewController?) -> UITabBarController? {
+                guard let c else { return nil }
+                if let t = c as? UITabBarController { return t }
+                for k in c.children { if let t = find(k) { return t } }
+                return find(c.presentedViewController)
+            }
+            return find(window?.rootViewController)
+        }
+        // Three ways UIKit can say it: the More item among the bar's items, fewer items than tabs, or a "More" button
+        // anywhere in the tab bar controller's own views (the rail draws it as "•••").
+        static func overflows(_ tbc: UITabBarController, tabs: Int) -> Bool {
+            let items = tbc.tabBar.items ?? []
+            let more = tbc.moreNavigationController.tabBarItem
+            if items.contains(where: { $0 === more }) { return true }
+            if !items.isEmpty, items.count < tabs { return true }
+            func hasMore(_ v: UIView, depth: Int) -> Bool {
+                if depth > 14 { return false }
+                if v.isHidden || v.alpha < 0.01 { return false }
+                if let l = v.accessibilityLabel, l == "More" || l == "•••", v.window != nil { return true }
+                return v.subviews.contains { hasMore($0, depth: depth + 1) }
+            }
+            return hasMore(tbc.tabBar, depth: 0) || tbc.view.subviews.filter { $0 !== tbc.tabBar && !(tbc.selectedViewController?.view.isDescendant(of: $0) ?? false) }.contains { hasMore($0, depth: 0) }
+        }
+    }
+}
+#endif
+// What the tab probe saw, to Caches/tabs-log.txt (rare lines: one per change), for the build's logs.
+enum TabsLog {
+    static func note(_ s: String) {
+        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let url = dir.appendingPathComponent("tabs-log.txt")
+        let line = ISO8601DateFormatter().string(from: Date()) + " " + s + "\n"
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? Data(line.utf8).write(to: url) }
+        SwipeLog.note(s)
+    }
+}
+extension View {
+    // TabOverflowProbe behind a tab's page, where UIKit exists.
+    @ViewBuilder func probesTabOverflow(_ on: Bool, tabs: Int, _ report: @escaping (Bool) -> Void) -> some View {
+        #if canImport(UIKit)
+        self.background { if on { TabOverflowProbe(tabs: tabs, report: report).frame(width: 1, height: 1).allowsHitTesting(false).accessibilityHidden(true) } }
+        #else
+        self
+        #endif
+    }
+}
+
+// The build's shots at a size the simulator hasn't: -windowSize 859x604 makes the app's window that many points, at the
+// display's top left (his phone open flat is 859 x 604 pt, the simulator's 951 x 669; the system's rail holds fewer tabs
+// in the shorter one). Only with the launch argument; never on the phone.
+enum ShotWindow {
+    static var size: CGSize? {
+        guard let p = UserDefaults.standard.string(forKey: "windowSize")?.split(separator: "x").compactMap({ Double($0) }), p.count == 2, p[0] > 100, p[1] > 100 else { return nil }
+        return CGSize(width: p[0], height: p[1])
+    }
+    @MainActor static func apply() {
+        #if canImport(UIKit)
+        guard let size else { return }
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows where w.frame.size != size { w.frame = CGRect(origin: .zero, size: size); w.clipsToBounds = true }
+        }
+        #endif
     }
 }

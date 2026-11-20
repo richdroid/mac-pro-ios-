@@ -498,6 +498,7 @@ struct RootView: View {
         #if canImport(UIKit)
         if let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow ?? ($0 as? UIWindowScene)?.windows.first }).first {
             _sideways = State(initialValue: Self.isSideways(w.bounds.size))
+            _window = State(initialValue: w.bounds.size)
         }
         #endif
     }
@@ -510,7 +511,31 @@ struct RootView: View {
     // Where the system's bar holds five tabs and puts the rest under "More": wherever the width is compact (UIKit's own
     // rule for a tab bar), not by a guessed size.
     @Environment(\.horizontalSizeClass) private var widthClass
-    private var narrow: Bool { widthClass == .compact }
+    private var narrow: Bool { widthClass == .compact && !Self.systemTabs && Self.railItems.count > Self.systemBarHolds }
+    // What the system's own shows on this phone before the rest go under "More", as seen there: the bar along the foot
+    // of a compact width holds five; the rail down the side holds four, folded on its side and open flat alike (his
+    // screenshot of 2026-11-20, Status open flat, 859 x 604 pt: Status, Apps, Claude, macOS, then "•••"). The build's
+    // simulator is 669 pt tall open flat and its rail held six, so the size was never the thing to ask: the count is.
+    static let systemBarHolds = 5, systemRailHolds = 4
+    // Wider than tall (on its side, or open flat) with more tabs than the system's rail shows: the app draws the rail.
+    private var wide: Bool { window.width > window.height && window.height > 0 && !Self.systemTabs && Self.railItems.count > Self.systemRailHolds }
+    // The window's size, and the sizes where the system's own bar or rail was seen to overflow into "More" (TabOverflowProbe):
+    // there the app draws its own from then on, kept across launches so it is there from the first frame next time.
+    @State private var window: CGSize = .zero
+    @State private var overflowed: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "tabsOverflowed") ?? [])
+    private var sizeKey: String { "\(Int(window.width))x\(Int(window.height))" }
+    // The build's "before" (-systemTabs YES): the system's bar and rail wherever main had them, never replaced, so CI can
+    // show the "•••" his phone showed. -probeOnly YES: the system's bar folded upright too, replaced only once it is seen
+    // to overflow, to prove the probe.
+    static let systemTabs = UserDefaults.standard.bool(forKey: "systemTabs") || UserDefaults.standard.bool(forKey: "probeOnly")
+    static let probeOff = UserDefaults.standard.bool(forKey: "systemTabs")
+    private var drawnHere: Bool { !Self.probeOff && overflowed.contains(sizeKey) }
+    private func sawOverflow(_ over: Bool) {
+        guard over, !Self.probeOff, window != .zero, !overflowed.contains(sizeKey) else { return }
+        overflowed.insert(sizeKey)
+        UserDefaults.standard.set(Array(overflowed), forKey: "tabsOverflowed")
+    }
+    private var badge: (Int) -> Int { { $0 == 1 ? updateCount : 0 } }
     // The tabs, in order, for the system's bar and for the rail drawn on its side alike.
     // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
     // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went behind the
@@ -568,19 +593,31 @@ struct RootView: View {
                 // 2026-11-19: "never more tabs thing"), so on its side the app draws the rail itself, the system's look
                 // (a glass capsule of icons, the tab in front in the accent colour), all six in it. Every other posture
                 // keeps the system's own bar, which fits all six only where it's wide (open); upright and narrow the app draws a bar too.
-                if sideways {
-                    SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { $0 == 1 ? updateCount : 0 }) { screen($0) }
+                if sideways || wide {
+                    SideRailTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
                 } else if narrow {
                     // Upright and narrow (folded), the system's bar holds five and put Dashboard under "More": the app
                     // draws the bar itself there too, all six in it (Richard, 2026-11-20: "i said more never").
-                    BottomBarTabs(selection: tabBinding, items: Self.railItems, badge: { $0 == 1 ? updateCount : 0 }) { screen($0) }
+                    BottomBarTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
+                } else if drawnHere {
+                    // Wherever the system's own was seen to overflow (open flat on his phone: four and "•••"), the app's own,
+                    // in the system's place: the rail down the side when wide, the bar along the foot when tall.
+                    if window.width > window.height {
+                        SideRailTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
+                    } else {
+                        BottomBarTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
+                    }
                 } else {
                     TabView(selection: tabBinding) {
                         // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
                         // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
                         // elements r squished tg looks ugly").
                         ForEach(Self.railItems) { it in
-                            Tab(value: it.value) { screen(it.value) } label: { it.label }
+                            Tab(value: it.value) {
+                                screen(it.value)
+                                    // Asks UIKit whether its bar shows "More" here; if so the app's own takes over.
+                                    .probesTabOverflow(it.value == model.tab, tabs: Self.railItems.count) { sawOverflow($0) }
+                            } label: { it.label }
                                 // The updates waiting, as a number on the tab, the App Store's way.
                                 .badge(it.value == 1 ? updateCount : 0)
                         }
@@ -598,7 +635,9 @@ struct RootView: View {
         .background { MacFollower(nav: model.nav) }
         // The whole window, keyboard or not, so typing never reads as a turn.
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { Self.isSideways($0.size) } action: { sideways = $0 } }
-        .onAppear { MacPrefs.shareWithWidgets(); AppBadge.set(updateCount) }
+        // The window's whole size (the keyboard ignored), the key for where the system's tabs overflowed.
+        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGSize.self) { $0.size } action: { window = $0 } }
+        .onAppear { MacPrefs.shareWithWidgets(); AppBadge.set(updateCount); ShotWindow.apply() }
         // And on the app's icon on the home screen, like the App Store's.
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
@@ -1007,6 +1046,7 @@ struct StackPages: ViewModifier {
                 case .storage: StorageView(model: model)
                 case .startup: StartupView(model: model)
                 case .actions: MacActionsView(model: model)
+                case .upgrade: UpgradeView(model: model)
                 } }
                 .railRoom()
             }

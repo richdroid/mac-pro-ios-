@@ -1,9 +1,12 @@
 import SwiftUI
 
 // The Dashboard tab (Richard, 2026-11-14: "have it so i have a version of the dashboard on my phone like same stats etc
-// diff tab and consolidate console into it"; and of the Console tab's buttons: "awful"). The Mac's Console, on the phone:
-// what the Mac's screen is on with three plain keys, then the same tiles as the Console's Home, each opening the phone's
-// own page for it and, held, putting that page on the Mac. Boards and pages for the Mac's screen follow as chips.
+// diff tab and consolidate console into it"; 2026-11-20: "not up to par at all and integration is very lacking").
+// Rebuilt to the 2026-11-20 brief, top to bottom: the Mac's screen now (what the Console shows, in words and as a small
+// picture, with its three keys); what the Console can show, as a strip of small screens, the one on the Mac ringed and
+// following the Mac both ways; the Console's Home tiles in groups (the machine, the house and work, upkeep), each opening
+// the phone's page with the Console following (MacFollow); the upgrade, full width, whenever one is pending; then the
+// things that drive the Mac. No setting lives here (Boards take turns and Animations are in Settings).
 
 struct DashboardTab: View {
     @EnvironmentObject var model: AppModel
@@ -17,6 +20,8 @@ struct DashboardTab: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject private var watch = RestartWatch.shared
     @ObservedObject private var health = HealthSummary.shared
+    @ObservedObject private var fans = ConsoleSummary.shared.fans
+    @ObservedObject private var upgrade = ConsoleSummary.shared.upgrade
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -28,11 +33,10 @@ struct DashboardTab: View {
     var body: some View {
         Group {
             switch side {
-            case .all: screenCard; tiles; showOnMac
-            // Open flat, the Console and what's on its screen on the left, the Mac's tiles filling the right: the screen's
-            // two settings alone left the right pane half empty (CI 5ee8ad1).
-            case .left: screenCard; showOnMac
-            case .right: tiles
+            case .all: screenCard; strip; tiles; UpgradeCard(); drive
+            // Open flat: the screen, its strip and the driving on the left; the tiles and the upgrade on the right.
+            case .left: screenCard; strip; drive
+            case .right: tiles; UpgradeCard()
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
@@ -69,19 +73,39 @@ struct DashboardTab: View {
         return ("\(page) · on the Mac’s screen", .green)
     }
 
+    // What the Console shows, as a small screen: the page's sign on a dark display, dark with a moon while the display
+    // sleeps, empty while the Console isn't running. Drawn, not a picture from the Mac: the bridge has no still of the
+    // screen to give. Tapped, it opens Screen, the Mac's real display.
+    struct MiniScreen: View {
+        let symbol: String?, name: String?, lit: Bool, ring: Bool
+        var width: CGFloat = 132
+        var body: some View {
+            let h = (width * 0.62).rounded()
+            VStack(spacing: width > 110 ? 6 : 0) {
+                if let symbol { Image(systemName: symbol).font(width > 110 ? .title2 : .body).foregroundStyle(lit ? macBlue : Color(white: 0.45)) }
+                if width > 110, let name { Text(name).font(.caption2.weight(.medium)).foregroundStyle(lit ? Color.primary : Color.secondary).lineLimit(1).minimumScaleFactor(0.8).padding(.horizontal, 6) }
+            }
+            .frame(width: width, height: h)
+            .background(Color(white: lit ? 0.17 : 0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ring ? macBlue : Color(white: 0.24), lineWidth: ring ? 2 : 1) }
+        }
+    }
     var screenCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    // Always named the Console, so the card says what it is; the page it shows is in the line under it.
-                    let (name, symbol) = ("Console", running ? ConsolePlace.name(st!).1 : "macwindow")
-                    Image(systemName: symbol).font(.title3).foregroundStyle(running ? macBlue : .secondary)
-                        .frame(width: 44, height: 44).background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(remote.read ? name : " ").font(.headline).lineLimit(1)
-                        HStack(spacing: 6) {
-                            Circle().fill(light.color).frame(width: 8, height: 8)
-                            Text(light.say).font(.footnote).foregroundStyle(light.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary)).lineLimit(1).minimumScaleFactor(0.85)
+                HStack(spacing: 14) {
+                    let asleep = st?.display == "asleep"
+                    let (name, symbol): (String?, String?) = !remote.read ? (nil, nil) : !running ? ("Not running", "macwindow") : asleep ? ("Display asleep", "moon.zzz") : (ConsolePlace.name(st!).0, ConsolePlace.name(st!).1)
+                    Button { model.openScreen() } label: { MiniScreen(symbol: symbol, name: name, lit: running && !asleep, ring: false) }
+                        .buttonStyle(PressStyle())
+                        .accessibilityLabel("The Mac’s screen").accessibilityHint("Opens Screen")
+                        .accessibilityIdentifier("dash.screen")
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Console").font(.headline).lineLimit(1)
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Circle().fill(light.color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                            Text(light.say).font(.footnote).foregroundStyle(light.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                                .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -97,16 +121,16 @@ struct DashboardTab: View {
                     } else {
                         Key("Hide", "eye.slash", busy: remote.busy == "hide", on: false) { remote.send(model, "hide", "hide") }
                     }
+                    Key("Glance", "bed.double", busy: remote.busy == "glance", on: st?.glance == true) {
+                        remote.send(model, "glance", "glance", st?.glance == true ? "off" : "on")
+                    }
+                    .disabled(!running)
                     // Wake only on his tap (API.md): never sent by itself.
                     if st?.display == "asleep" {
                         Key("Wake", "sun.max", busy: remote.busy == "display:wake", on: false) { remote.send(model, "display:wake", "display", "wake") }.disabled(!running)
                     } else {
                         Key("Sleep", "moon", busy: remote.busy == "display:sleep", on: false) { remote.send(model, "display:sleep", "display", "sleep") }.disabled(!running)
                     }
-                    Key("Glance", "bed.double", busy: remote.busy == "glance", on: st?.glance == true) {
-                        remote.send(model, "glance", "glance", st?.glance == true ? "off" : "on")
-                    }
-                    .disabled(!running)
                 }
                 // A key waiting on the Console's answer shows its own wait; the others stay as they are (one command at
                 // a time is the remote's own rule), so nothing greys or flickers under a tap.
@@ -114,8 +138,8 @@ struct DashboardTab: View {
             }
             .padding(16)
             .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
-        }
-        .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+        } header: { Text("The Mac’s screen") }
     }
 
     // One of the three keys: a glyph over its word, all the same size, filled when it's on. The wait is drawn over the glyph,
@@ -156,12 +180,6 @@ struct DashboardTab: View {
         let page: String?          // the Console page it puts on the Mac's screen, held
         let open: () -> Void
     }
-    // When the Mac last checked every part, said the way Status's chip and Everything's page do: the second line adds.
-    var checkedLine: String {
-        guard let at = s.healthAt, at > 0 else { return " " }
-        let m = Int(Date().timeIntervalSince1970 - at / 1000) / 60
-        return m < 1 ? "Checked just now" : m < 60 ? "Checked \(m) min ago" : "Checked \(m / 60) h ago"
-    }
     // The tiles' words, shorter, for a narrow tile: never a shrunk figure.
     static func shorter(_ f: String?) -> [String] {
         switch f { case "All running": ["Running"]; case "Up to date": ["Current"]; case "Restarting": ["Restart"]; default: [] }
@@ -170,7 +188,7 @@ struct DashboardTab: View {
         let open = { model.macPage = .health }
         if watch.active { return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: "Restarting", line: "Getting everything up", page: "everything", open: open) }
         guard let n = bad, n > 0 else {
-            return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: bad.map { _ in "All running" }, line: bad.map { _ in checkedLine }, good: bad.map { _ in true }, page: "everything", open: open)
+            return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: bad.map { _ in "All running" }, line: bad.map { _ in "No part needs a look" }, good: bad.map { _ in true }, page: "everything", open: open)
         }
         let w = health.say(n)
         return TileData(id: "everything", title: "Everything", symbol: "checklist", figure: w.figure, line: w.line, good: false, alts: w.alts, figs: w.figs, page: "everything", open: open)
@@ -211,7 +229,12 @@ struct DashboardTab: View {
             let x = MacConsole.linkSummary(l)
             t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", figure: x.good ? "All up" : "\(max(1, l.links.filter { !$0.up && $0.state != "off" }.count))", line: x.good ? "\(l.links.filter(\.up).count) links" : x.text, good: x.good, page: nil, open: linksOpen))
         } else if !links.unsupported { t.append(TileData(id: "links", title: "Connections", symbol: "point.3.connected.trianglepath.dotted", page: nil, open: linksOpen)) }
-        if let u = updates.value {
+        // The macOS update that is waiting says where it stands and opens the upgrade itself: "1 waiting" on a tile like
+        // any other said nothing of the room it was short of (Richard, 2026-11-20).
+        if let g = upgrade.value, g.pending, let v = g.target?.version ?? g.current.split(separator: " ").first.map(String.init) {
+            let line = g.phase == "room" ? "needs \(UpgradeFeed.gb(g.short)) more room" : g.phase == "held" ? "waits for the patcher" : g.phase == "ready" ? "ready to install" : g.phase == "downloading" ? "downloading" : g.phase == "patching" ? "patching" : "installing"
+            t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: v, line: line, good: g.phase == "room" || g.phase == "held" ? false : nil, alts: [g.phase == "room" ? "needs room" : line], page: "updates") { model.macPage = .upgrade })
+        } else if let u = updates.value {
             let waiting = (u.macos.pending ?? []).count + (u.brew?.outdated ?? []).count
             t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: u.macos.pending == nil ? nil : waiting == 0 ? "Up to date" : "\(waiting)", line: waiting == 0 ? "macOS \(u.macos.current.split(separator: " ").first ?? "")" : "waiting", good: waiting == 0 ? true : nil, page: "updates", open: updatesOpen))
         } else if !updates.unsupported { t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", page: "updates", open: updatesOpen)) }
@@ -226,93 +249,111 @@ struct DashboardTab: View {
             let line = v.online == false ? "Not answering" : ep.map { [$0, v.session?.description?.dropFirst().first].compactMap { $0 }.joined(separator: " · ") } ?? song.map { [$0, v.music?.artist].compactMap { $0 }.joined(separator: " · ") } ?? "Nothing playing"
             t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, alts: [ep ?? song].compactMap { $0 }, page: "tv", open: tvOpen))
         } else if !tv.unsupported { t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", page: "tv", open: tvOpen)) }
+        if let f = fans.value?.fans.first {
+            t.append(TileData(id: "fan", title: "Fan", symbol: "fan", figure: "\(Int(f.rpm.rounded()))", line: "rpm · \(Int((f.level * 100).rounded()))% of its range", alts: ["rpm"], page: "temps") { model.macPage = .fans })
+        } else if !fans.unsupported { t.append(TileData(id: "fan", title: "Fan", symbol: "fan", page: "temps") { model.macPage = .fans }) }
+        let n = s.claude.sessions.count
+        t.append(TileData(id: "sessions", title: "Sessions", symbol: "terminal", figure: "\(n)", line: n == 0 ? "None running" : s.claude.sessions.prefix(3).map(\.name).joined(separator: ", "), alts: [n == 1 ? "session" : "sessions"], page: "activity") { model.tab = 2 })
         if let w = s.usage.plan?.sevenDay {
-            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, alts: ["of the week"], page: "activity") { model.tab = 2 })
+            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week’s limit", good: w < 90, alts: ["of the week"], page: "activity") { model.tab = 2 })
         }
         return t
     }
 
-    // The same tiles as Status's (WebTile), each opening the phone's page for it: two across where a tile would be narrower
-    // than 175 pt (folded upright, a pane open flat), three where there's room (open upright, and folded on its side, where
-    // two across made the short page twice as long to scroll). Chosen from the width in the one layout pass (TileGrid),
-    // never read back afterwards, so the first frame is already the right grid.
+    // The Console's Home tiles, in its groups: the machine first, then the house and work, then upkeep. The same tiles as
+    // Status's (WebTile), each opening the phone's page for it, the Console following (MacFollow): two across where a tile
+    // would be narrower than 175 pt (folded upright, a pane open flat), three where there's room. Chosen from the width in
+    // the one layout pass (TileGrid), never read back afterwards, so the first frame is already the right grid; a last
+    // row that isn't full shares the width, so no group ends in a hole.
+    static let groups: [(title: String, ids: [String])] = [
+        ("The machine", ["cpu", "memory", "temps", "fan", "activity", "processes"]),
+        ("The house and work", ["tv", "claude", "sessions"]),
+        ("Upkeep", ["everything", "storage", "updates", "startup", "links"]),
+    ]
     var tiles: some View {
-        Section {
-            TileGrid {
-                ForEach(tileData) { d in
-                    WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open, details: d.alts, figures: d.figs.isEmpty ? Self.shorter(d.figure) : d.figs)
-                }
+        let all = tileData
+        return ForEach(Self.groups, id: \.title) { g in
+            let mine = g.ids.compactMap { id in all.first { $0.id == id } }
+            if !mine.isEmpty {
+                Section {
+                    TileGrid {
+                        ForEach(mine) { d in
+                            WebTile(title: d.title, value: d.figure ?? "–", detail: d.line ?? " ", symbol: d.symbol, good: d.good, onMac: d.page != nil && d.page == onMac, open: d.open, details: d.alts, figures: d.figs.isEmpty ? Self.shorter(d.figure) : d.figs)
+                        }
+                    }
+                    .opacity(model.stale ? staleDim : 1)
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+                } header: { Text(g.title) }
             }
-            .opacity(model.stale ? staleDim : 1)
-            // The row runs edge to edge of the card; the header is the system's own, laid out as Control's are (its
-            // spacing tuned by hand was 2-9 pt off theirs, designer gate 2026-11-18).
-            .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-        } header: {
-            // Open flat the tiles have the right pane to themselves and start level with the Console's card on the left.
-            if side == .all { Text("The Mac") }
         }
     }
 
-    // MARK: For the Mac's screen: boards and pages
+    // MARK: What the Console can show
 
-    func chip(_ name: String, _ symbol: String, on: Bool, busy: Bool, id: String, action: @escaping () -> Void) -> some View {
+    // One page or board as a small screen with its name under it; the one on the Mac's screen has the ring.
+    func thumb(_ name: String, _ symbol: String, on: Bool, busy: Bool, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: symbol).font(.subheadline).opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.mini) } }
-                Text(name).font(.subheadline.weight(.medium)).lineLimit(1).fixedSize()
+            VStack(spacing: 6) {
+                MiniScreen(symbol: busy ? nil : symbol, name: nil, lit: on, ring: on, width: 92)
+                    .overlay { if busy { ProgressView().controlSize(.small) } }
+                Text(name).font(.caption.weight(on ? .semibold : .regular)).foregroundStyle(on ? Color.primary : Color.secondary).lineLimit(1).fixedSize()
             }
-            .foregroundStyle(on ? Color.white : Color.primary)
-            .padding(.horizontal, 14).frame(height: 40)
-            .background(on ? macBlue : Color(white: 0.15), in: Capsule())
+            .frame(minWidth: 92)
+            .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
         .accessibilityLabel(name)
         .accessibilityIdentifier("chip." + id)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
-
-    var showOnMac: some View {
-        Group {
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    // Clear of the header above (it was cut to "oards", CI 68b580c).
-                    // In line with the headings, clear of the card's rounded corner (it cut "Boards" to "3oards", CI 64e4a2c).
-                    Text("Boards").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20)
-                    ChipRow(ids: ConsolePlace.boards.map { "board." + $0.id }, lit: { running ? st?.board.map { "board." + $0 } : nil }) { id in
-                        if let b = ConsolePlace.boards.first(where: { "board." + $0.id == id }) {
-                            let on = running && st?.board == b.id
-                            chip(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
-                        }
-                    }
-                    Text("Pages").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 4)
-                    ChipRow(ids: ConsolePlace.pages.map { "page." + $0.id }, lit: { onMac.map { "page." + $0 } }) { id in
-                        if let p = ConsolePlace.pages.first(where: { "page." + $0.id == id }) {
-                            chip(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: id) { remote.send(model, "page:" + p.id, "page", p.id) }
-                        }
+    // Home, Mac Pro and Fans & heat, then the boards, then the other pages.
+    static let stripIds: [String] = ConsolePlace.pages.prefix(3).map { "page." + $0.id } + ConsolePlace.boards.map { "board." + $0.id } + ConsolePlace.pages.dropFirst(3).map { "page." + $0.id }
+    var strip: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                // Tap one and the Mac goes there; the Mac changing page at the desk moves the ring here (the row watches
+                // the Console itself).
+                ChipRow(ids: Self.stripIds, lit: { running ? (st?.board.map { "board." + $0 } ?? onMac.map { "page." + $0 }) : nil }) { id in
+                    if let b = ConsolePlace.boards.first(where: { "board." + $0.id == id }) {
+                        let on = running && st?.board == b.id
+                        thumb(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
+                    } else if let p = ConsolePlace.pages.first(where: { "page." + $0.id == id }) {
+                        thumb(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: id) { remote.send(model, "page:" + p.id, "page", p.id) }
                     }
                 }
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-            } header: { Text("For the Mac’s screen") }
-            // Two settings, as rows of the system's own card, as in Settings.
-            Section {
-                Toggle(isOn: Binding(get: { st?.rotate == true }, set: { on in remote.send(model, "rotate", "rotate", on ? "on" : "off") })) {
-                    Text("Boards take turns")
-                }
-                .tint(macBlue)
-                HStack {
-                    Text("Animations")
-                    Spacer(minLength: 12)
-                    Picker("Animations", selection: Binding(get: { st?.animations ?? "full" }, set: { remote.send(model, "animations", "animations", $0) })) {
-                        Text("Full").tag("full"); Text("Gentle").tag("gentle"); Text("Off").tag("off")
-                    }
-                    .pickerStyle(.segmented).fixedSize()
-                }
-            } footer: {
-                if let f = remote.fail, ["board", "page", "rotate", "animations"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text) }
+                if let f = remote.fail, ["board", "page"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text).padding(.leading, 20) }
             }
+            .disabled(!running)
+            .opacity(running ? 1 : 0.4)
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+        } header: { Text("Showing on the Mac") }
+    }
+
+    // MARK: Drive the Mac
+
+    func driveRow(_ title: String, _ symbol: String, _ note: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(role: destructive ? .destructive : nil, action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol).foregroundStyle(destructive ? Color.red : macBlue).frame(width: 28)
+                Text(title).foregroundStyle(destructive ? Color.red : Color.primary)
+                Spacer(minLength: 8)
+                Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                RowChevron()
+            }
+            .contentShape(Rectangle())
         }
-        .disabled(!running)
-        .opacity(running ? 1 : 0.4)
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("drive." + title)
+    }
+    var drive: some View {
+        Section {
+            // Sending lives on Control, with the files on their way; one tap there.
+            driveRow("Send to Mac", "square.and.arrow.up", "Photos, files") { model.tab = 5 }
+            if summary.mp { driveRow("Run an action", "bolt", "Clean, ship, tests") { model.macPage = .actions } }
+            driveRow("Bring everything up", "checklist", "Every part, by name") { model.macPage = .health }
+            driveRow("Startup items", "power", "On and off") { model.macPage = .startup }
+            driveRow("Restart the Mac…", "arrow.clockwise", "Checks first", destructive: true) { model.macPage = .restart }
+        } header: { Text("Drive the Mac") }
     }
 }
 
@@ -368,24 +409,27 @@ struct ChipRow<C: View>: View {
     }
 }
 
-// The Dashboard's tiles in even columns: three across when each would be at least 175 pt wide, else two (twelve tiles fill
-// either whole). Every tile in a row is offered the row's height, laid out from the width alone.
+// The Dashboard's tiles in even columns: three across when each would be at least 175 pt wide, else two. Every tile in a
+// row is offered the row's height, laid out from the width alone. A last row that isn't full shares the whole width
+// between its tiles, so a group of five or three never ends in a hole.
 struct TileGrid: Layout {
     var spacing: CGFloat = 12
     static func columns(_ width: CGFloat) -> Int { width >= 175 * 3 + 12 * 2 ? 3 : 2 }
     struct Cache { var width: CGFloat = -1; var rows: [CGFloat] = [] }
     func makeCache(subviews: Subviews) -> Cache { Cache() }
     func updateCache(_ cache: inout Cache, subviews: Subviews) { cache.width = -1 }
-    private func cell(_ width: CGFloat) -> (Int, CGFloat) {
+    // How many tiles are in the row a tile is in, and that row's tile width.
+    private func span(_ i: Int, of count: Int, _ width: CGFloat) -> (Int, CGFloat) {
         let n = Self.columns(width)
-        return (n, max((width - spacing * CGFloat(n - 1)) / CGFloat(n), 0))
+        let inRow = i / n == (count - 1) / n ? count - (i / n) * n : n
+        return (inRow, max((width - spacing * CGFloat(inRow - 1)) / CGFloat(inRow), 0))
     }
     private func rows(_ width: CGFloat, _ subviews: Subviews, _ cache: inout Cache) -> [CGFloat] {
         if cache.width == width { return cache.rows }
-        let (n, w) = cell(width)
+        let n = Self.columns(width)
         var r: [CGFloat] = []
         for (i, v) in subviews.enumerated() {
-            let h = v.sizeThatFits(ProposedViewSize(width: w, height: nil)).height
+            let h = v.sizeThatFits(ProposedViewSize(width: span(i, of: subviews.count, width).1, height: nil)).height
             if i % n == 0 { r.append(h) } else { r[r.count - 1] = max(r[r.count - 1], h) }
         }
         cache.width = width; cache.rows = r
@@ -398,12 +442,13 @@ struct TileGrid: Layout {
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         let r = rows(bounds.width, subviews, &cache)
-        let (n, w) = cell(bounds.width)
+        let n = Self.columns(bounds.width)
         var y = bounds.minY
         for (row, h) in r.enumerated() {
             for c in 0..<n {
                 let i = row * n + c
                 guard i < subviews.count else { break }
+                let w = span(i, of: subviews.count, bounds.width).1
                 subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (w + spacing), y: y), proposal: ProposedViewSize(width: w, height: h))
             }
             y += h + spacing
