@@ -197,7 +197,10 @@ struct Backdrop: View {
                             Image(decorative: image, scale: 1).resizable().interpolation(.high)
                         } else {
                             let p = Palette.from(name: ref.artist + ref.album)
-                            LinearGradient(colors: [p.vivid.color, p.deep.color], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            // The same brightness cap as the blurred cover, so white reads on the stand-in too.
+                            let l = 0.2126 * p.vivid.r + 0.7152 * p.vivid.g + 0.0722 * p.vivid.b
+                            let k = l > ArtStore.backdropLuma ? ArtStore.backdropLuma / l : 1
+                            LinearGradient(colors: [p.vivid.scaled(k).color, p.deep.scaled(min(1, k * 1.5)).color], startPoint: .topLeading, endPoint: .bottomTrailing)
                         }
                     }
                     .frame(width: side, height: side)

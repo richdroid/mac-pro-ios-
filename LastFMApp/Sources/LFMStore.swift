@@ -74,7 +74,7 @@ struct Profile: Sendable {
     @ObservationIgnored private var polled = false
     // When Last.fm last answered the poll, and how long a song it called "now playing" is believed without a new answer.
     @ObservationIgnored private var answered = Date.distantPast
-    static let nowLasts: TimeInterval = 600
+    static let nowLasts: TimeInterval = 240
     @ObservationIgnored private var insightTask: Task<Void, Never>?
     @ObservationIgnored private var lastInsight = Date.distantPast
 

@@ -83,9 +83,9 @@ final class ArtStore: @unchecked Sendable {
         guard let data else { return }
         _ = decode(ref, data, px: 1000)
         // The backdrop as it was blurred last time, from the disk: no Core Image before the first frame.
-        if let d = try? Data(contentsOf: file("backdrop:" + ref.key)), let src = CGImageSourceCreateWithData(d as CFData, nil),
+        if let d = try? Data(contentsOf: file("backdrop2:" + ref.key)), let src = CGImageSourceCreateWithData(d as CFData, nil),
            let b = CGImageSourceCreateImageAtIndex(src, 0, nil) {
-            images.setObject(CGImageBox(b), forKey: "\(ref.key)@backdrop" as NSString)
+            images.setObject(CGImageBox(b), forKey: "\(ref.key)@backdrop2" as NSString)
         }
     }
 
@@ -201,22 +201,38 @@ final class ArtStore: @unchecked Sendable {
         return blurred(ref, small)
     }
     private func blurred(_ ref: ArtRef, _ small: CGImage) -> CGImage? {
-        let key = "\(ref.key)@backdrop" as NSString
+        let key = "\(ref.key)@backdrop2" as NSString
         let ci = CIImage(cgImage: small).clampedToExtent()
         let blurred = ci.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 14])
             .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.35, kCIInputBrightnessKey: -0.04])
             .cropped(to: CIImage(cgImage: small).extent)
-        guard let out = lock.withLock({ context.createCGImage(blurred, from: blurred.extent) }) else { return nil }
+        // A bright cover (yellow, white, pastel) made the whole ground too light for the white words over it (gate,
+        // run 38: 1.3 : 1). The backdrop's average brightness is capped, keeping its hue, so white always reads.
+        let capped = lock.withLock { Self.capped(blurred, context: context) }
+        guard let out = lock.withLock({ context.createCGImage(capped, from: capped.extent) }) else { return nil }
         images.setObject(CGImageBox(out), forKey: key)
         // Kept small on disk for warm() on the next launch.
         let m = NSMutableData()
         if let dest = CGImageDestinationCreateWithData(m, "public.jpeg" as CFString, 1, nil) {
             CGImageDestinationAddImage(dest, out, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-            if CGImageDestinationFinalize(dest) { try? (m as Data).write(to: file("backdrop:" + ref.key), options: .atomic) }
+            if CGImageDestinationFinalize(dest) { try? (m as Data).write(to: file("backdrop2:" + ref.key), options: .atomic) }
         }
         return out
     }
-    func cachedBackdrop(_ ref: ArtRef) -> CGImage? { images.object(forKey: "\(ref.key)@backdrop" as NSString)?.image }
+    static let backdropLuma = 0.12
+    private static func capped(_ img: CIImage, context: CIContext) -> CIImage {
+        let avg = img.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: img.extent)])
+        var px = [UInt8](repeating: 0, count: 4)
+        context.render(avg, toBitmap: &px, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        let luma = (0.2126 * Double(px[0]) + 0.7152 * Double(px[1]) + 0.0722 * Double(px[2])) / 255
+        guard luma > backdropLuma else { return img }
+        let k = CGFloat(backdropLuma / luma)
+        return img.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: k, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: k, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: k, w: 0)])
+    }
+    func cachedBackdrop(_ ref: ArtRef) -> CGImage? { images.object(forKey: "\(ref.key)@backdrop2" as NSString)?.image }
 }
 
 // A cover, square, with a designed stand-in until it comes and if it never does: the album's own colour and a disc.
