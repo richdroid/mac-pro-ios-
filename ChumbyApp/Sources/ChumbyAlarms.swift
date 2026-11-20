@@ -341,11 +341,13 @@ struct RingingCard: View {
             let snoozed = s.ring.snoozed
             VStack(spacing: 14) {
                 VStack(spacing: 3) {
-                    // Ringing hands over to Snoozed one at a time: the old title is gone before the new one fades in.
+                    // The title cross-fades in place, as the ringing page's line does: the new word is on its way up as the
+                    // old one goes, so the card is never without one (gate, 11-20: two blank frames between "Snoozed
+                    // until" and "Stopping…").
                     ZStack {
                         Text(model.ringWorking ?? (snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing"))
                             .id(model.ringWorking ?? (snoozed ? "s" : "r"))
-                            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+                            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.14))))
                     }
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     Text(name(s.ring)).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
@@ -416,6 +418,9 @@ struct NapSection: View {
     @AppStorage("napSetAt") private var napSetAt = 0.0
     @State private var sending: Int?
     static let lengths = [10, 20, 30, 60]
+    // How far what's there fades before the rows change places: not to nothing, so the card is never drawn empty for a
+    // frame as the old rows go and the new ones come (gate, 11-20); faint enough that the two never read as drawn twice.
+    static let floor = 0.12
     // Which rows the list holds, and whether they're drawn, while a nap is set or called off (AlarmsTab.napMoves); `due`
     // is the nap's time, kept while its row fades out.
     let row: Bool
@@ -426,9 +431,9 @@ struct NapSection: View {
     var body: some View {
         Group {
             if row, let due {
-                napRow(due).opacity(faded ? 0 : 1)
+                napRow(due).opacity(faded ? Self.floor : 1)
             } else {
-                chips.opacity(faded ? 0 : 1)
+                chips.opacity(faded ? Self.floor : 1)
                 Button { edit(nil) } label: {
                     Label("Another time or sound", systemImage: "slider.horizontal.3").font(.body.weight(.semibold))
                         .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
@@ -436,7 +441,7 @@ struct NapSection: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Set a nap with another time or sound")
-                .opacity(faded ? 0 : 1)
+                .opacity(faded ? Self.floor : 1)
             }
             if let f = model.failed("nap") { FailNote(text: f) }
         }
@@ -1345,7 +1350,7 @@ struct AlarmsTab: View {
 
     // A nap set or called off is three moves, one after the other, never two sets of rows drawn over each other (the
     // list's own row change crossfaded the chips and the nap's row for about a tenth of a second): what's there fades
-    // out, the rows change places while nothing is drawn in them, and what's new fades in. `napRows` is which rows the
+    // out to a trace, the rows change places, and what's new fades in. `napRows` is which rows the
     // list holds; until the first change it's as the Chumby said when the tab was first drawn (`napFirst`), so the rows
     // only ever change inside the three moves; its `due` keeps the row's time while the row fades out.
     final class NapFirst { var row: Bool?; var due: Date? }

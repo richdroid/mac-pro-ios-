@@ -1124,7 +1124,9 @@ struct HomeTab: View {
             ZStack {
                 Color(red: 0.04, green: 0.04, blue: 0.05)
                 if let i = model.shot { Image(platform: i).resizable().interpolation(.medium) }
-                else if !model.unreachable { ProgressView().tint(.white) }
+                // Before its first picture, the screen wakes as the Chumby's own does: the octopus, breathing on the dark
+                // glass, where a spinner was.
+                else if !model.unreachable { WakingScreen() }
                 // Gone quiet: soft static for a moment, then the screen goes dark.
                 if let goneAt { ScreenStatic(since: goneAt) }
                 LinearGradient(colors: [.white.opacity(0.17), .clear], startPoint: .topLeading, endPoint: UnitPoint(x: 0.5, y: 0.5)).allowsHitTesting(false)
@@ -1424,6 +1426,25 @@ struct HomeTab: View {
 }
 
 // The screen of a Chumby that's gone quiet: grain that fades to black over a second and a half.
+// The device's screen before its first picture arrives: the octopus faint on the dark glass, slowly brightening and
+// dimming, as a Chumby starting up shows him. Still under Reduce Motion.
+struct WakingScreen: View {
+    @Environment(\.accessibilityReduceMotion) private var still
+    var body: some View {
+        GeometryReader { g in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still)) { ctx in
+                let k = still ? 0.5 : 0.5 - 0.5 * cos(2 * .pi * ctx.date.timeIntervalSinceReferenceDate / 2.4)
+                OctopusMark(color: ChumbyPalette.hex(0x79bbff), eyes: Color(red: 0.04, green: 0.04, blue: 0.05), blink: 1)
+                    .frame(height: g.size.height * 0.34)
+                    .opacity(0.35 + 0.4 * k)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityLabel("Waiting for the Chumby's screen")
+    }
+}
+
 struct ScreenStatic: View {
     let since: Date
     @State private var done = false
@@ -2033,7 +2054,13 @@ struct ChannelsTab: View {
     // second chooser to choose.
     var channelSection: some View {
         Section {
-            if shown.isEmpty && !picked.isEmpty { Text("Nothing in this channel yet.").foregroundStyle(.secondary) }
+            // Said as Alarms says it has nothing set: the octopus, quiet, beside the line.
+            if shown.isEmpty && !picked.isEmpty {
+                HStack(spacing: 10) {
+                    OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34).accessibilityHidden(true)
+                    Text("Nothing in this channel yet.").foregroundStyle(.secondary)
+                }
+            }
             // By id, never by index: following the playing channel swaps `rows` under the list.
             ForEach(shown, id: \.id) { widgetRow($0) }
                 .onMove { from, to in
