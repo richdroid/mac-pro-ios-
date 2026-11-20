@@ -16,8 +16,14 @@ final class TVNotify: NSObject, UNUserNotificationCenterDelegate {
 
     // The build's simulator shots launch with -address or a pose: no prompt over them, and no Mac to tell.
     var staged: Bool {
+        // Never on a simulator: something there starts the app with no arguments now and then, and the prompt then sat
+        // over every folded shot of a run (CI 439d813).
+        #if targetEnvironment(simulator)
+        return true
+        #else
         let args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         return args["address"] != nil || args["pose"] != nil
+        #endif
     }
 
     func install() {
