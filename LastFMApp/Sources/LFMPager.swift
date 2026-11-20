@@ -108,6 +108,20 @@ struct Pager: View {
                     // Opened on a section other than the first (a link, a pose): put there before anything shows it
                     // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20).
                     .task { await place(reader) }
+                    // The page's width changed under it (the side bar arriving, a turn, the fold): the scroll keeps its
+                    // old offset, which is no longer a page's edge, so the page before showed at the side (run 41:
+                    // today sat 12 pt off with his page's chevron beside it). Put back on its page, at rest only.
+                    .onChange(of: pw) { _, _ in
+                        let p = page
+                        Task { @MainActor in
+                            for _ in 0..<4 {
+                                guard phase == .idle, page == p else { return }
+                                var t = Transaction(); t.disablesAnimations = true
+                                withTransaction(t) { reader.scrollTo(p, anchor: .leading) }
+                                try? await Task.sleep(nanoseconds: 80_000_000)
+                            }
+                        }
+                    }
                     // Asked to move from outside (a name tapped, a stretch chosen, a link): by position, and if the scroll
                     // hasn't got there once the move has had time, put there directly. Only for a change from outside:
                     // one the pager made itself as it landed is never corrected, and nothing is moved while a scroll is
@@ -184,7 +198,7 @@ struct Pager: View {
         for _ in 0..<80 {
             // Never against his finger: the first touch ends the placing.
             if phase != .idle { break }
-            if abs(motion.f - CGFloat(start)) < 0.02, motion.x > 0 { break }
+            if abs(motion.f - CGFloat(start)) < 0.004, motion.x > 0 { break }
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { reader.scrollTo(panels[start].id, anchor: .leading) }
             try? await Task.sleep(nanoseconds: 120_000_000)

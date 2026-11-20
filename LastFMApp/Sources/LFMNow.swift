@@ -224,7 +224,7 @@ struct NowHero: View {
             // showed the stand-in between). Still, no breathing: a forever animation with a 38 pt shadow redrew the
             // hero every frame (run 39 review, fault 8).
             ArtView(s.art, px: 1000, corner: 14)
-                .shadow(color: tint.opacity(0.5), radius: 38, y: 16)
+                .shadow(color: tint.opacity(Diag.off("shadow") ? 0 : 0.5), radius: Diag.off("shadow") ? 0 : 38, y: Diag.off("shadow") ? 0 : 16)
                 .zoomSource("hero|\(s.id)")
         }
         .buttonStyle(Press())
@@ -260,7 +260,7 @@ struct NowHero: View {
         VStack(alignment: .leading, spacing: S.pair) {
             HStack(spacing: 7) {
                 if playing, !store.trouble {
-                    Image(systemName: "waveform").symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
+                    Image(systemName: "waveform").symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, isActive: !Diag.off("wave"))
                     Text("Now playing")
                 } else if playing {
                     // Last.fm gone: what it last said was playing, not live bars over a song that may have ended (run 34).

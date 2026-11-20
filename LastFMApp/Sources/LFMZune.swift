@@ -35,7 +35,7 @@ struct MixName: View {
             if fit >= size * 0.5 {
                 // A slow sway across the room it has, about 10 pt a second: a layer behind, not a ticker. One repeating
                 // animation of an offset, not a 30-a-second timeline that worked the view out again every tick.
-                let on = moving && !still && slack >= 2
+                let on = moving && !still && slack >= 2 && !Diag.off("drift")
                 // The drift is the render server's (a layer animation), not a SwiftUI one: a forever animation here was
                 // worked out on the main thread every frame, on every page of the tab, for as long as a song was on
                 // (run 40's hitch log: today, his page and his story all lost frames while playing; idle they didn't).
@@ -434,7 +434,7 @@ struct ArtWall: View {
     }
     var body: some View {
         let refs = Self.covers
-        if refs.count >= 6 {
+        if refs.count >= 6, !Diag.off("wall") {
             let cols = width >= 560 ? 8 : 5
             let side = (width / CGFloat(cols)).rounded(.up)
             // As deep as what's on: the cover and the song's words under it folded; the cover beside its words with room.

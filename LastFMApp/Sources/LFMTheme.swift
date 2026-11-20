@@ -350,6 +350,12 @@ enum LaunchLog {
 // rather than from the runner's own recording (run 39 review, F-B). A display link counts every frame later than one
 // and a half refresh intervals. Caches/hitches.txt gets one line a second (that second's frames, late frames, frames
 // missed and longest gap, so a hitch can be matched to the moment of the film it fell in) under a first line of totals.
+// The build's films can switch one moving thing off (-off wave,wall,drift,shadow), so the hitch log can say which of
+// them costs frames rather than a guess (run 41: his page held 15 frames a second at rest with a song on).
+enum Diag {
+    private static let offs = Set((UserDefaults.standard.string(forKey: "off") ?? "").split(separator: ",").map(String.init))
+    static func off(_ s: String) -> Bool { offs.contains(s) }
+}
 #if canImport(UIKit)
 @MainActor final class HitchLog: NSObject {
     static let shared = HitchLog()
