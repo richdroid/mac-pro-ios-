@@ -305,24 +305,29 @@ struct TitlePage: View {
     }
     func throwIt(_ v: CGSize) {
         let m = model
-        if let r = st.ref {
+        var send: (@MainActor () -> Void)?
+        if st.ref != nil {
             guard let s = st.stream else {
                 carry.springHome(v)
                 st.say(st.noStreams ? "No streams to play" : "Still finding streams")
                 return
             }
-            _ = r
             st.sentToken = s.token
-            Thrower.sendStream(m, item: st.cardItem, stream: s, list: st.streams, velocity: v, avoid: st.failed, startOver: st.startOver)
+            let item = st.cardItem, list = st.streams, avoid = st.failed, over = st.startOver
+            send = { Thrower.sendStream(m, item: item, stream: s, list: list, velocity: v, avoid: avoid, startOver: over) }
         } else {
-            Thrower.sendPlain(m, target: st.target)
+            let target = st.target
+            send = { Thrower.sendPlain(m, target: target) }
         }
         let tint = ImageStore.shared.cachedBand(URL(string: art))
         let title = st.item.title
+        // The card leaves first, with his speed, in the same turn as his release; the send follows on the next turn, so
+        // nothing the send does can hold the card where he let go (gate on cbfc0b5: up to a second between the two).
         carry.fly(v) {
             Hand.shared.land(title: title, art: st.item.art, tint: tint)
             carry.reappear()
         }
+        Task { @MainActor in send?() }
     }
     // MARK: the words
     var facts: String {

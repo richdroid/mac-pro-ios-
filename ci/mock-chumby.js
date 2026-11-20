@@ -294,6 +294,8 @@ const tvScene = scene => {
   return JSON.stringify(v);
 };
 function tvRoute(q, s) {
+  // Every POST the TV app makes, under any scene, for the flick films' proof of what was and wasn't sent.
+  if (q.method === 'POST' && q.url.includes('/api/tv/')) { try { require('fs').appendFileSync('/tmp/tv-posts.log', Date.now() + ' POST ' + q.url + '\n'); } catch {} }
   // Frames the app took longer than 34 ms to draw, in any scene, kept for the build (r21: stalls as numbers).
   if (q.method === 'POST' && /\/api\/tv\/hitch$/.test(q.url)) {
     let body = ''; q.on('data', c => body += c);

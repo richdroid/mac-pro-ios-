@@ -22,6 +22,8 @@ struct TVNow: Equatable {
         }
         guard let s = model.status else { return TVNow(kind: .unknown, title: "TV", line: nil, art: nil, playing: nil) }
         // What the phone last knew stands until a reading says otherwise: never "Connecting…" over a known state (9.7).
+        // The Mac answers and the TV doesn't: said here as the Remote's picture says it, not the app last in front.
+        if !model.staleStatus, !s.online { return TVNow(kind: .away, title: "Can’t reach the TV", line: nil, art: nil, playing: nil) }
         if s.screen == "asleep" { return TVNow(kind: .asleep, title: "Off", line: nil, art: nil, playing: nil) }
         if !model.staleStatus, let a = s.away { return TVNow(kind: .away, title: a.line, line: nil, art: nil, playing: nil) }
         if s.comingOn { return TVNow(kind: .home, title: "Waking the TV…", line: nil, art: nil, playing: nil) }

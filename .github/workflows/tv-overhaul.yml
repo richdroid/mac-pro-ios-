@@ -119,7 +119,7 @@ jobs:
           # short pull, let go under the line), then carried up over the line slowly and let go there (thrown from rest).
           flick() {
             local name=$1 d=$2 kind=$3
-            rm -f /tmp/tv-home-applied.log
+            rm -f /tmp/tv-home-applied.log /tmp/tv-posts.log
             curl -s $M/fnormal/reset > /dev/null
             rec $name $d
             xcrun simctl launch "$DEVICE" $APP -address $M/fnormal -tab 3 -pose streams -handLog YES
@@ -135,7 +135,8 @@ jobs:
             fi
             sleep 8
             endfilm $name $d
-            grep -E 'play-stream|prepare|/api/tv/(send|key)' /tmp/tv-home-applied.log > dist/tv-$name-bridge.log 2>/dev/null || echo "no bridge lines" > dist/tv-$name-bridge.log
+            # Every POST the app made during this film: a refusal has no play-stream line, a throw has one.
+            cp /tmp/tv-posts.log dist/tv-$name-bridge.log 2>/dev/null || echo "no POST at all" > dist/tv-$name-bridge.log
             cp /tmp/tv-home-applied.log dist/tv-$name-applied.log 2>/dev/null || true
           }
           flicks() { local d=$1 x=$2; flick flick-throw$x $d throw; flick flick-cancel$x $d cancel; flick flick-carry$x $d carry; }
@@ -178,9 +179,30 @@ jobs:
           # Open portrait first (the posture he holds), then open flat (on its side: where the rail made a More), then
           # folded, then folded on its side.
           P=${{ matrix.posture }}
+          # A posture is set, then proved by a shot's shape, and tried again if the simulator didn't take it (cbfc0b5: one
+          # job never unfolded and one never turned, and both said success). Unproved, the job fails.
+          wide() { xcrun simctl io "$DEVICE" screenshot --display=$1 /tmp/turn.png > /dev/null 2>&1; [ "$(sips -g pixelWidth /tmp/turn.png | awk '/pixel/ {print $2}')" -gt "$(sips -g pixelHeight /tmp/turn.png | awk '/pixel/ {print $2}')" ]; }
+          # set_posture <open|closed> <turn> <display> <wide|tall>
+          set_posture() {
+            local n
+            for n in 1 2 3 4; do
+              $D "$DEVICE" pose $1; sleep 6
+              $D "$DEVICE" rotate $2; sleep 5
+              xcrun simctl launch "$DEVICE" $APP -address $M -tab 3 > /dev/null; sleep 6
+              if wide $3; then [ $4 = wide ] && break; else [ $4 = tall ] && break; fi
+              echo "posture not taken (try $n): $1 turn $2"
+              xcrun simctl terminate "$DEVICE" $APP || true
+              $D "$DEVICE" rotate $(( $2 == 1 ? 3 : 1 )); sleep 4
+              [ $n = 4 ] && { echo "POSTURE FAILED: $1 turn $2 $4"; touch dist/posture-failed; }
+            done
+            xcrun simctl terminate "$DEVICE" $APP || true
+            echo "posture $1 turn $2: $(sips -g pixelWidth -g pixelHeight /tmp/turn.png | awk '/pixel/ {printf "%s ", $2}')"
+          }
+          # Once through before anything is shot, so no shot is the simulator's first launch of the app.
+          xcrun simctl launch "$DEVICE" $APP -address $M/live -tab 3 > /dev/null; sleep 25; xcrun simctl terminate "$DEVICE" $APP || true
           if [ $P = portrait ]; then
-            $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
-            $D "$DEVICE" rotate 1; sleep 5
+            set_posture open 1 3 tall
+            [ -f dist/posture-failed ] && exit 1
             tabs 3 -portrait
             flicks 3 -portrait
             flings 3 -portrait
@@ -188,8 +210,8 @@ jobs:
             tour tour-portrait 3
             episodes episodes-portrait 3
           elif [ $P = flat ]; then
-            $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
-            $D "$DEVICE" rotate 3 || true; sleep 5
+            set_posture open 3 3 wide
+            [ -f dist/posture-failed ] && exit 1
             tabs 3 -flat
             flicks 3 -flat
             flings 3 -flat
@@ -197,16 +219,10 @@ jobs:
             tour tour-flat 3
             episodes episodes-flat 3
           else
-            # Folded from open and upright, as a hand does it. Then checked: a fresh simulator folded straight away came up
-            # on its side (b88affc: the "folded" shots were 2034x1398), so which turn is upright is read from a shot.
-            $D "$DEVICE" pose open || true; sleep 5
-            $D "$DEVICE" rotate 1 || true; sleep 4
-            $D "$DEVICE" pose closed || true; sleep 5
-            UP=1; SIDE=3
-            $D "$DEVICE" rotate $UP || true; sleep 4
-            xcrun simctl io "$DEVICE" screenshot --display=1 /tmp/turn.png
-            if [ "$(sips -g pixelWidth /tmp/turn.png | awk '/pixel/ {print $2}')" -gt "$(sips -g pixelHeight /tmp/turn.png | awk '/pixel/ {print $2}')" ]; then UP=3; SIDE=1; $D "$DEVICE" rotate $UP || true; sleep 4; fi
-            echo "folded upright is rotate $UP"
+            # Folded, the touch tool's turn 3 is upright and turn 1 is on its side (b88affc, where touches landed true).
+            UP=3; SIDE=1
+            set_posture closed $UP 1 tall
+            [ -f dist/posture-failed ] && exit 1
             tabs 1 ""
             flicks 1 ""
             flings 1 ""
@@ -243,7 +259,7 @@ jobs:
           (cd dist && zip -qr ../shots-$P.zip . -i '*.png' || zip -q ../shots-$P.zip /dev/null)
           (cd dist && zip -qr0 ../films-$P.zip . -i '*.mp4' || zip -q ../films-$P.zip /dev/null)
           (cd dist && zip -qr ../logs-$P.zip . -i '*.log' || zip -q ../logs-$P.zip /dev/null)
-          echo "$GITHUB_SHA ${{ job.status }}" > status-$P.txt
+          if [ -f dist/posture-failed ]; then echo "$GITHUB_SHA posture-failed" > status-$P.txt; else echo "$GITHUB_SHA ${{ job.status }}" > status-$P.txt; fi
           gh release view tv-overhaul >/dev/null 2>&1 || gh release create tv-overhaul --prerelease --title "TV overhaul shots" --notes "The TV app's overhaul: shots, films and logs from branch tv-overhaul."
           for f in shots-$P.zip films-$P.zip logs-$P.zip status-$P.txt; do
             for i in 1 2 3; do gh release upload tv-overhaul "$f" --clobber && break; sleep 15; done

@@ -1368,7 +1368,12 @@ struct RemoteTab: View {
         // The television off with the box still up is the same key, in the same place: it turns the television on.
         if asleep || away == .off {
             Button { model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") } } label: {
-                Label("Wake the TV", systemImage: "power").font(.title3.weight(.semibold)).lineLimit(1).fixedSize().padding(.horizontal, 22).frame(height: 60)
+                // All of "Wake the TV" where the pad is wide enough for it, else "Wake": never cut, never over the keys beside.
+                ViewThatFits(in: .horizontal) {
+                    Label("Wake the TV", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 20)
+                    Label("Wake", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 16)
+                }
+                .font(.title3.weight(.semibold)).frame(height: 60)
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else if let away, !unreachable {
@@ -1574,16 +1579,18 @@ struct RemoteTab: View {
     }
     // Open upright, not typing: the picture beside the pad, then the bar, the transport, the episode line, the keys'
     // row, volume, and the apps at the foot. Every place is kept whatever is on, so nothing moves as a show starts.
-    func uprightColumn(width: CGFloat, height: CGFloat) -> some View {
-        var grid = RemoteGrid.keys(width - 40, maxKey: 72)
+    func uprightColumn(width: CGFloat, height: CGFloat, margin: CGFloat = 20) -> some View {
+        var grid = RemoteGrid.keys(width - 2 * margin, maxKey: 72)
         grid.play = min(grid.play, 80)
+        // Folded there is less height: the same rows, 10 pt apart rather than 14.
+        let gap: CGFloat = height < 600 ? 10 : 14
         let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
         // What is under the top row: the bar, the transport, the episode line, two rows of keys, the gaps and the apps.
-        let rest = Self.barSlot + 80 + 46 + 2 * grid.key + 6 * 14 + strip
+        let rest = Self.barSlot + 80 + 46 + 2 * grid.key + 6 * gap + strip
         let d = max(110, min(((grid.width - 16) * 9 / 25).rounded(.down), height - rest))
         let pw = min(grid.width - 16 - d, d * 16 / 9)
         return VStack(spacing: 0) {
-            VStack(spacing: 14) {
+            VStack(spacing: gap) {
                 HStack(spacing: 0) {
                     picture(closable: true).frame(width: pw, height: pw * 9 / 16)
                     Spacer(minLength: 16)
@@ -1599,7 +1606,7 @@ struct RemoteTab: View {
                 .frame(width: grid.width, height: 80)
                 .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
                 ZStack { Color.clear; episodes }.frame(width: grid.width, height: 46)
-                VStack(spacing: 14) {
+                VStack(spacing: gap) {
                     keysBlock(grid, transport: false)
                     HStack(spacing: RemoteGrid.sideGap) {
                         VolumeKey(down: true, size: grid.key)
@@ -1714,6 +1721,12 @@ struct RemoteTab: View {
                 // Every size is fixed per posture (gate, 2026-11-11): the room under the picture is always counted with Mint's
                 // player in it, so nothing moves as a song or a show starts; the pad is one diameter, and spare height is
                 // space either side of it, never pad. Typing keeps the column it had, so the keys stay where they were.
+                // Folded and not typing: the open phone's column at this width (2026-11-20). The old folded column put the
+                // transport under the apps row and its keys at 42 pt (gate on cbfc0b5).
+                if !lay {
+                    GeometryReader { g in uprightColumn(width: g.size.width, height: g.size.height, margin: 14) }
+                        .overlay { episodesPanel() }
+                } else {
                 GeometryReader { geo in
                     let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.barSlot + 46 + 2 * RemoteGrid.foldedGap)
                     let grid = lay ? (foldedGrid ?? fresh) : fresh
@@ -1758,8 +1771,8 @@ struct RemoteTab: View {
                 .padding(.horizontal, 14).padding(.bottom, 8)
                 // The apps under the column, inside the page's own width: as a bottom inset the row ran on under the
                 // tab rail, which cut a tile in half (CI b88affc, folded).
-                .stripUnder(lay ? nil : appStrip)
                 .overlay { episodesPanel() }
+                }
             }
         }
         // Always a line under the title, blank when there's nothing to say, so "Remote" never moves as a show starts or
@@ -2149,20 +2162,24 @@ struct AppStrip: View {
     var body: some View {
         let apps = AppsTab.watching(model.status?.apps ?? [])
         let all = apps.isEmpty ? (model.status?.apps ?? []) : apps
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(all.prefix(8)) { Banner(app: $0, browses: false, width: Self.tile) }
-                Button { model.tick(); pagePush.push(AppsRoute.all) } label: {
-                    Label("All apps", systemImage: "square.grid.2x2").font(.system(size: 15, weight: .semibold)).labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 14).frame(height: Self.tile * TVLook.bannerSize.height / TVLook.bannerSize.width)
-                        .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+        let h = Self.tile * TVLook.bannerSize.height / TVLook.bannerSize.width
+        // The banners slide; the key to all of them stays whole at the row's end (it was the last thing in the slide, cut
+        // by the screen's edge: gate on cbfc0b5).
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) { ForEach(all.prefix(8)) { Banner(app: $0, browses: false, width: Self.tile) } }
             }
-            .padding(.horizontal, 14)
+            .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+            Button { model.tick(); pagePush.push(AppsRoute.all) } label: {
+                Image(systemName: "square.grid.2x2").font(.system(size: 18, weight: .semibold))
+                    .frame(width: max(h, 44), height: max(h, 44))
+                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).accessibilityLabel("All apps")
         }
-        .frame(height: Self.tile * TVLook.bannerSize.height / TVLook.bannerSize.width)
+        .padding(.horizontal, 14)
+        .frame(height: max(h, 44))
     }
 }
 // Every app on the TV, opened from the Remote's row.
