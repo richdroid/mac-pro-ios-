@@ -518,6 +518,12 @@ private struct BackToTop: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
+            // The foot of every scrolling page is the bar's own room plus 16 pt, fixed: it never changes while scrolling.
+            // A page shorter than the screen doesn't scroll or bounce, and so never collapses its title (brief 3.7).
+            .contentMargins(.bottom, 16, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+            // One indicator at most where two panes scroll side by side: none (2026-11-20, "this dual scroll bar").
+            .scrollIndicators(.hidden)
             // How far the page has scrolled, for its title to go up with it.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
                 if let pageScroll, abs(pageScroll.y - y) > 0.25 { pageScroll.y = y }

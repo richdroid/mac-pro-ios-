@@ -22,7 +22,7 @@ final class TVModel {
     var staleStatus = true
     let mirrorStore = MirrorStore()
     // The TV's screen on the Remote: on unless he's turned it off, and kept that way.
-    var mirrorLive = UserDefaults.standard.object(forKey: "mirrorLive") as? Bool ?? true
+    var mirrorLive = true
     #if os(iOS)
     let live = LiveMirror()
     #endif

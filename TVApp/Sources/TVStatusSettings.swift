@@ -32,6 +32,7 @@ struct SettingsPages: ViewModifier {
                 }
             }
             .navigationDestination(for: StremioRoute.self) { _ in StremioAccountPage() }
+            .navigationDestination(for: AppsRoute.self) { _ in AppsPage() }
             .navigationDestination(for: ManagePage.self) { page in
                 switch page {
                 case .apps: ManageAppsView(store: store)
