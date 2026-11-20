@@ -1626,9 +1626,15 @@ struct RemoteTab: View {
                             Spacer(minLength: 0)
                         }
                     } else {
+                        // With the lip and the title above it, the pane over the fold left the picture a sliver (CI 53b4243:
+                        // about 15 pt tall). The picture's pane now runs past the fold, down to the room the pad, one row
+                        // of keys and the apps need (318 pt), so the picture is a picture; where the screen is too short
+                        // for that it ends at the fold as before.
+                        let top = max(crease.minY, g.size.height - 318)
+                        let past = top > crease.minY + 1
                         VStack(spacing: 0) {
-                            side(apps: false).frame(height: max(0, crease.minY))
-                            Color.clear.frame(height: crease.height)
+                            side(apps: false).frame(height: max(0, top))
+                            Color.clear.frame(height: past ? 0 : crease.height)
                             keysColumn.frame(maxHeight: .infinity)
                         }
                     }

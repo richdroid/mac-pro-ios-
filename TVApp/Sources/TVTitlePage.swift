@@ -231,25 +231,32 @@ struct TitlePage: View {
     @ViewBuilder var chip: some View {
         let onTV = model.isOnTV(st.cardItem, st.target.source)
         let starting = model.starting.map { !$0.played && !$0.failed && $0.token != nil && $0.token == st.sentToken } ?? false
-        HStack(spacing: 6) {
-            if onTV { chipText("Playing on the TV", icon: "play.tv.fill", lit: true) }
-            else if starting { chipText("Starting…", icon: "tv", lit: true) }
-            else if st.ref != nil {
-                if let s = st.stream { chipText(StreamWords.chip(s), icon: nil, lit: false) }
-                else if st.noStreams { chipText("No streams", icon: nil, lit: false) }
-                else { chipText("Finding streams…", icon: nil, lit: false) }
-                if let p = st.progress, p > 0.01, p < 0.97 {
-                    chipText(st.startOver ? "Start over" : "Resume" + (resumeClock(p).map { " " + $0 } ?? ""), icon: st.startOver ? "backward.end.fill" : "play.fill", lit: false)
-                }
-            }
+        // Side by side where the card is wide enough for both in full; otherwise one over the other. Never cut short
+        // ("1080p ·…" and "Resu…" on a 224 pt card, CI 53b4243).
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) { chips(onTV: onTV, starting: starting) }
+            VStack(spacing: 6) { chips(onTV: onTV, starting: starting) }
         }
         .lineLimit(1)
+    }
+    @ViewBuilder func chips(onTV: Bool, starting: Bool) -> some View {
+        if onTV { chipText("Playing on the TV", icon: "play.tv.fill", lit: true) }
+        else if starting { chipText("Starting…", icon: "tv", lit: true) }
+        else if st.ref != nil {
+            if let s = st.stream { chipText(StreamWords.chip(s), icon: nil, lit: false) }
+            else if st.noStreams { chipText("No streams", icon: nil, lit: false) }
+            else { chipText("Finding streams…", icon: nil, lit: false) }
+            if let p = st.progress, p > 0.01, p < 0.97 {
+                chipText(st.startOver ? "Start over" : "Resume" + (resumeClock(p).map { " " + $0 } ?? ""), icon: st.startOver ? "backward.end.fill" : "play.fill", lit: false)
+            }
+        }
     }
     func chipText(_ t: String, icon: String?, lit: Bool) -> some View {
         HStack(spacing: 5) {
             if let icon { Image(systemName: icon).font(.system(size: 12, weight: .bold)) }
             Text(t).font(.system(size: 14, weight: .semibold)).monospacedDigit()
         }
+        .fixedSize()
         .padding(.horizontal, 10).frame(height: 30)
         .foregroundStyle(lit ? .black : .white)
         .background(lit ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.black.opacity(0.62)), in: Capsule())

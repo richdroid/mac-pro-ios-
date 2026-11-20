@@ -8,13 +8,18 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-concurrency:
-  group: tv-overhaul
-  cancel-in-progress: false
 jobs:
   shots:
     runs-on: xcode-27
     timeout-minutes: 100
+    # One job per posture, side by side: in one job the run ended at its time limit before the folded phone was reached.
+    strategy:
+      fail-fast: false
+      matrix:
+        posture: [portrait, flat, folded]
+    concurrency:
+      group: tv-overhaul-${{ matrix.posture }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,7 +43,7 @@ jobs:
         timeout-minutes: 85
         run: |
           set +e
-          exec > >(tee dist/sim.log) 2>&1
+          exec > >(tee dist/sim-${{ matrix.posture }}.log) 2>&1
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
           xcrun simctl boot "$DEVICE"
@@ -62,7 +67,7 @@ jobs:
             sleep $wait
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
             xcrun simctl terminate "$DEVICE" $APP || true
-            echo "tv-$name $(sips -g pixelWidth -g pixelHeight dist/tv-$name.png 2>/dev/null | awk '/pixel/ {printf "%s ", $2}')" >> dist/tv-sizes.log
+            echo "tv-$name $(sips -g pixelWidth -g pixelHeight dist/tv-$name.png 2>/dev/null | awk '/pixel/ {printf "%s ", $2}')" >> dist/tv-sizes-${{ matrix.posture }}.log
           }
           rec() { xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$2 --force dist/tv-$1.mp4 > /dev/null 2>&1 & REC=$!; sleep 3; }
           endfilm() {
@@ -118,8 +123,8 @@ jobs:
             curl -s $M/fnormal/reset > /dev/null
             rec $name $d
             xcrun simctl launch "$DEVICE" $APP -address $M/fnormal -tab 3 -pose streams -handLog YES
-            sleep 13
-            local at; at=$(spot card)
+            # The card says where it is once its page is up: waited for, not guessed (two of six films had no card at 13 s).
+            local at="" n; for n in $(seq 1 30); do sleep 1; at=$(spot card) && [ -n "$at" ] && break; done; sleep 3; at=$(spot card)
             if [ -z "$at" ]; then echo "no card position for $name"; else
               set -- $at; local x=$1 y=$2
               case $kind in
@@ -131,6 +136,7 @@ jobs:
             sleep 8
             endfilm $name $d
             grep -E 'play-stream|prepare|/api/tv/(send|key)' /tmp/tv-home-applied.log > dist/tv-$name-bridge.log 2>/dev/null || echo "no bridge lines" > dist/tv-$name-bridge.log
+            cp /tmp/tv-home-applied.log dist/tv-$name-applied.log 2>/dev/null || true
           }
           flicks() { local d=$1 x=$2; flick flick-throw$x $d throw; flick flick-cancel$x $d cancel; flick flick-carry$x $d carry; }
           # Push and Back: a title's page opened, then the system's Back by the edge swipe; and Settings the same.
@@ -164,64 +170,71 @@ jobs:
             for i in 1 2; do $D "$DEVICE" drag 0.45 0.90 0.54 0.70 0.25 || true; sleep 1.5; done
             $D "$DEVICE" drag 0.50 0.90 0.50 0.72 1.0 || true; sleep 2
             $D "$DEVICE" drag 0.75 0.82 0.25 0.82 0.3 || true; sleep 2
-            $D "$DEVICE" drag 0.25 0.82 0.75 0.80 0.3 || true; sleep 2
+            $D "$DEVICE" drag 0.80 0.70 0.30 0.72 0.3 || true; sleep 2
             for i in 1 2 3; do $D "$DEVICE" drag 0.50 0.72 0.46 0.90 0.25 || true; sleep 1.5; done
             endfilm $name $d
           }
 
           # Open portrait first (the posture he holds), then open flat (on its side: where the rail made a More), then
           # folded, then folded on its side.
-          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
-          $D "$DEVICE" rotate 1; sleep 5
-          tabs 3 -portrait
-          flicks 3 -portrait
-          flings 3 -portrait
-          backs 3 -portrait
-          tour tour-portrait 3
-          episodes episodes-portrait 3
-          $D "$DEVICE" rotate 3 || true; sleep 5
-          tabs 3 -flat
-          flicks 3 -flat
-          flings 3 -flat
-          backs 3 -flat
-          tour tour-flat 3
-          episodes episodes-flat 3
-          $D "$DEVICE" rotate 1 || true; sleep 3
-          $D "$DEVICE" pose closed || true; sleep 5
-          $D "$DEVICE" rotate 1 || true; sleep 3
-          tabs 1 ""
-          flicks 1 ""
-          flings 1 ""
-          backs 1 ""
-          tour tour 1
-          episodes episodes 1
-          $D "$DEVICE" rotate 3 || true; sleep 4
-          for T in 3 0 2 6; do shot tab$T-fland 1 8 $M -tab $T; done
-          curl -s $M/fnormal/reset > /dev/null; shot title-film-fland 1 12 $M/fnormal -tab 3 -pose streams
-          flick flick-throw-fland 1 throw
-          $D "$DEVICE" rotate 1 || true; sleep 4
-          # The turn between postures, on Watch and on a title's page.
-          for pass in outer inner; do
-            display=1; [ $pass = inner ] && display=3
-            rec posture-watch-$pass $display
-            xcrun simctl launch "$DEVICE" $APP -address $M -tab 3
-            sleep 8
-            $D "$DEVICE" pose open; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" pose closed; sleep 6
-            endfilm posture-watch-$pass $display
-          done
-          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || echo "no hitches reported" > dist/tv-hitches.log
-          cp /tmp/tv-home-applied.log dist/tv-applied.log 2>/dev/null || true
+          P=${{ matrix.posture }}
+          if [ $P = portrait ]; then
+            $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+            $D "$DEVICE" rotate 1; sleep 5
+            tabs 3 -portrait
+            flicks 3 -portrait
+            flings 3 -portrait
+            backs 3 -portrait
+            tour tour-portrait 3
+            episodes episodes-portrait 3
+          elif [ $P = flat ]; then
+            $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            tabs 3 -flat
+            flicks 3 -flat
+            flings 3 -flat
+            backs 3 -flat
+            tour tour-flat 3
+            episodes episodes-flat 3
+          else
+            $D "$DEVICE" pose closed || true; sleep 5
+            $D "$DEVICE" rotate 1 || true; sleep 3
+            tabs 1 ""
+            flicks 1 ""
+            flings 1 ""
+            backs 1 ""
+            tour tour 1
+            episodes episodes 1
+            $D "$DEVICE" rotate 3 || true; sleep 4
+            for T in 3 0 2 6; do shot tab$T-fland 1 8 $M -tab $T; done
+            curl -s $M/fnormal/reset > /dev/null; shot title-film-fland 1 12 $M/fnormal -tab 3 -pose streams
+            flick flick-throw-fland 1 throw
+            $D "$DEVICE" rotate 1 || true; sleep 4
+            # The turn between postures, on Watch.
+            for pass in outer inner; do
+              display=1; [ $pass = inner ] && display=3
+              rec posture-watch-$pass $display
+              xcrun simctl launch "$DEVICE" $APP -address $M -tab 3
+              sleep 8
+              $D "$DEVICE" pose open; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" pose closed; sleep 6
+              endfilm posture-watch-$pass $display
+            done
+          fi
+          cp /tmp/tv-hitches.log dist/tv-hitches-$P.log 2>/dev/null || echo "no hitches reported" > dist/tv-hitches-$P.log
+          cp /tmp/tv-home-applied.log dist/tv-applied-$P.log 2>/dev/null || true
           ls dist
       - name: Publish
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
-          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
-          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
-          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          P=${{ matrix.posture }}
+          mv dist/build.log dist/build-$P.log 2>/dev/null || true
+          (cd dist && zip -qr ../shots-$P.zip . -i '*.png' || zip -q ../shots-$P.zip /dev/null)
+          (cd dist && zip -qr0 ../films-$P.zip . -i '*.mp4' || zip -q ../films-$P.zip /dev/null)
+          (cd dist && zip -qr ../logs-$P.zip . -i '*.log' || zip -q ../logs-$P.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status-$P.txt
           gh release view tv-overhaul >/dev/null 2>&1 || gh release create tv-overhaul --prerelease --title "TV overhaul shots" --notes "The TV app's overhaul: shots, films and logs from branch tv-overhaul."
-          for f in shots.zip films.zip logs.zip status.txt; do
+          for f in shots-$P.zip films-$P.zip logs-$P.zip status-$P.txt; do
             for i in 1 2 3; do gh release upload tv-overhaul "$f" --clobber && break; sleep 15; done
           done
