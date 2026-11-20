@@ -2,7 +2,7 @@
 # Shrinks the films job's films for the release, after the simulator has shut down, two at a time, inside a hard
 # deadline, so the publish after it can never hang (run 35 waited on shrinks until the job's limit).
 # Usage: lfm-shrink-all.sh SRC OUT DEADLINE_SECONDS PARALLEL. Each film: ci/lfm-shrink.swift's tool, else avconvert's
-# 960x540 preset, else kept as filmed if under 40 MB, else dropped; whatever the deadline cuts short is treated the same
+# 960x540 preset, else kept as filmed if under 80 MB, else dropped; whatever the deadline cuts short is treated the same
 # way (kept if small). The folded films go first: they're the ones the gate reads in frames.
 src=$1 out=$2 deadline=${3:-900} par=${4:-2}
 mkdir -p "$out"
@@ -56,6 +56,7 @@ rm -f "$out"/.part-* "$out"/.av-* "$out"/.err-*
 for f in $list; do
   n=$(basename "$f")
   [ -s "$out/$n" ] && continue
-  if [ "$(stat -f %z "$f")" -lt 40000000 ]; then cp "$f" "$out/"; echo "kept as filmed: $n"; else echo "dropped (too large, not shrunk): $n"; fi
+  # Under 80 MB as filmed: run 37 dropped sync, scroll-you and both posture films at 40 MB, the ones a gate reads.
+  if [ "$(stat -f %z "$f")" -lt 80000000 ]; then cp "$f" "$out/"; echo "kept as filmed: $n"; else echo "dropped (too large, not shrunk): $n"; fi
 done
 echo "shrinking took $((SECONDS - start)) s"

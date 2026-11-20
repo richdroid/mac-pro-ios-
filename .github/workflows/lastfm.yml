@@ -154,7 +154,7 @@ jobs:
     needs: shots
     if: ${{ !cancelled() }}
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 160
     steps:
       - uses: actions/checkout@v4
         with:
@@ -164,7 +164,8 @@ jobs:
           name: lastfm-sim
       - name: Films
         continue-on-error: true
-        timeout-minutes: 75
+        # Run 37 reached 75 minutes in the upright films (the posture changes take a minute each on the runner).
+        timeout-minutes: 100
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -224,7 +225,7 @@ jobs:
           xcrun simctl shutdown "$DEVICE"
       - name: Publish films
         if: always()
-        timeout-minutes: 30
+        timeout-minutes: 40
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -236,8 +237,8 @@ jobs:
           release
           upload film-shots.zip
           swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
-          # 15 minutes for all the shrinking, two at a time; then whatever is left is kept as filmed if small.
-          bash ci/lfm-shrink-all.sh dist small 900 2 | tee dist/publish.log
+          # 20 minutes for all the shrinking, two at a time; then whatever is left is kept as filmed if under 80 MB.
+          bash ci/lfm-shrink-all.sh dist small 1200 2 | tee dist/publish.log
           (cd small && ls -la >> ../dist/publish.log)
           (cd small && zip -q0 ../films-upright.zip *-portrait*.mp4 lfm-posture-*.mp4 2>/dev/null; zip -q0 ../films-flat.zip *-open*.mp4 2>/dev/null; ls *.mp4 2>/dev/null | grep -v -e '-portrait' -e '-open' -e '^lfm-posture-' | zip -q0 ../films.zip -@ 2>/dev/null)
           for z in films.zip films-upright.zip films-flat.zip; do [ -f $z ] || zip -q $z /dev/null; done
