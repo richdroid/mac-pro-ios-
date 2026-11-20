@@ -107,11 +107,11 @@ jobs:
             rec $name $d
             xcrun simctl launch "$DEVICE" $APP -address $address -swipeLog YES "$@"
             sleep 10
-            for i in 1 2 3 4 5; do $D "$DEVICE" drag 0.5 0.8 0.5 0.25 0.12 || echo "drag failed"; sleep 1.4; done
-            $D "$DEVICE" drag 0.5 0.8 0.5 0.25 0.9 || true; sleep 2.5
+            for i in 1 2 3 4 5; do $D "$DEVICE" drag $FX 0.8 $FX 0.25 0.12 || echo "drag failed"; sleep 1.4; done
+            $D "$DEVICE" drag $FX 0.8 $FX 0.25 0.9 || true; sleep 2.5
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-foot.png
-            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag 0.5 0.25 0.5 0.8 0.12 || true; sleep 1.4; done
-            $D "$DEVICE" drag 0.5 0.25 0.5 0.8 0.9 || true; sleep 2.5
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $FX 0.25 $FX 0.8 0.12 || true; sleep 1.4; done
+            $D "$DEVICE" drag $FX 0.25 $FX 0.8 0.9 || true; sleep 2.5
             endfilm $name $d
           }
           flings() { local d=$1 x=$2 T; for T in 3 0 2 6; do fling flingend-tab$T$x $d $M -tab $T; done; fling flingend-live$x $d $M/live -tab 3; fling flingend-settings$x $d $M -tab 9; }
@@ -202,6 +202,7 @@ jobs:
             xcrun simctl terminate "$DEVICE" $APP || true
             echo "posture $1 turn $2: $(sips -g pixelWidth -g pixelHeight /tmp/turn.png | awk '/pixel/ {printf "%s ", $2}')"
           }
+          FX=0.5
           # Once through before anything is shot, so no shot is the simulator's first launch of the app.
           xcrun simctl launch "$DEVICE" $APP -address $M/live -tab 3 > /dev/null; sleep 25; xcrun simctl terminate "$DEVICE" $APP || true
           if [ $P = portrait ]; then
@@ -215,6 +216,9 @@ jobs:
             episodes episodes-portrait 3
           elif [ $P = flat ]; then
             set_posture open 0 3 wide
+            # Open flat the page is two panes: a pull down the middle lands on the fold between them and moves nothing
+            # (654ff00: page y stayed 0 in every flat fling). The left pane is pulled.
+            FX=0.27
             [ -f dist/posture-failed ] && exit 1
             tabs 3 -flat
             flicks 3 -flat

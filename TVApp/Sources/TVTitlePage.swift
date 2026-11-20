@@ -28,6 +28,7 @@ struct TitleRoute: Hashable { let id: UUID }
     var showsAllStreams = false
     // The token this page last sent, so its start's failure is this page's to answer.
     @ObservationIgnored var sentToken: String?
+    @ObservationIgnored var sentAt = Date.distantPast
     // Opened for another choice after a start failed: the streams that didn't start come set apart.
     init(_ t: FlickTarget) { target = t; failed = t.avoid }
 
@@ -152,7 +153,9 @@ struct TitlePage: View {
                 }
             }
         }
-        .background { TitleGround(art: st.item.art) }
+        // Up behind the lip as well, which sits above the stack: the page's ground ended in a hard line under it, a band
+        // across the top (gate on 654ff00).
+        .background { TitleGround(art: st.item.art).padding(.top, -140) }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -233,7 +236,9 @@ struct TitlePage: View {
         let onTV = model.isOnTV(st.cardItem, st.target.source)
         // Held from the throw until the TV shows it or it fails: not dropped back to the stream's chip in the moment between
         // the player answering and the TV's own word (gate on b97a5e7).
-        let starting = model.starting.map { !$0.failed && $0.token != nil && $0.token == st.sentToken } ?? false
+        // And through the moment after the start is over and before the TV's status names it (gate on 654ff00: the
+        // stream's chip showed for a frame between "Starting…" and "Playing on the TV").
+        let starting = st.sentToken != nil && (model.starting.map { !$0.failed && $0.token == st.sentToken } ?? (Date().timeIntervalSince(st.sentAt) < 20))
         // Side by side where the card is wide enough for both in full; otherwise one over the other. Never cut short
         // ("1080p ·…" and "Resu…" on a 224 pt card, CI 53b4243).
         ViewThatFits(in: .horizontal) {
@@ -314,7 +319,7 @@ struct TitlePage: View {
                 st.say(st.noStreams ? "No streams to play" : "Still finding streams")
                 return
             }
-            st.sentToken = s.token
+            st.sentToken = s.token; st.sentAt = Date()
             let item = st.cardItem, list = st.streams, avoid = st.failed, over = st.startOver
             send = { Thrower.sendStream(m, item: item, stream: s, list: list, velocity: v, avoid: avoid, startOver: over) }
         } else {
@@ -345,7 +350,7 @@ struct TitlePage: View {
             Text(st.item.title).font(.system(size: 28, weight: .bold)).lineLimit(2).minimumScaleFactor(0.8)
             if let e = st.episode, st.isSeries {
                 Text("S\(e.season) E\(e.episode)" + (Wording.episodeName(e.name, number: e.episode).map { " · " + $0 } ?? ""))
-                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             } else if !facts.isEmpty {
                 Text(facts).font(.system(size: 17, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
             }

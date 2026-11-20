@@ -1588,27 +1588,38 @@ struct RemoteTab: View {
         // Folded there is less height: the same rows, 10 pt apart rather than 14.
         let gap: CGFloat = height < 600 ? 10 : 14
         let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
-        // What is under the top row: the bar, the transport, the episode line, two rows of keys, the gaps and the apps.
-        let rest = Self.barSlot + 80 + 46 + 2 * grid.key + 6 * gap + strip
-        let d = max(110, min(((grid.width - 16) * 9 / 25).rounded(.down), height - rest))
-        let pw = min(grid.width - 16 - d, d * 16 / 9)
+        // Nothing on: no places are kept for the bar, the transport or the episode line (a 230 pt hole, gate on 654ff00).
+        // The picture sits over the pad and both take the room; when something starts they move beside each other in
+        // one spring and the rows come in under them. The episode line has a place only for a show.
+        let idle = !session && !musicShown
+        let lined = !idle && seriesOn
+        let rows: CGFloat = idle ? 2 : lined ? 5 : 4
+        let fixed = 2 * grid.key + (idle ? 0 : Self.barSlot + grid.play) + (lined ? 46 : 0) + strip + 8
+        let room = max(0, height - fixed - gap * rows)
+        let w = grid.width
+        // Idle: the pad a little under half the room, the picture the rest. Busy: one row, as tall as the room allows.
+        let d = idle ? max(120, min(room * 0.46, w * 0.62)).rounded(.down) : max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
+        let pw = idle ? min(w, max(0, room - gap - d) * 16 / 9) : min(w - 16 - d, d * 16 / 9)
+        let top = idle ? AnyLayout(VStackLayout(spacing: gap)) : AnyLayout(HStackLayout(spacing: max(16, w - pw - d)))
         return VStack(spacing: 0) {
             VStack(spacing: gap) {
-                HStack(spacing: 0) {
+                top {
                     picture(closable: true).frame(width: pw, height: pw * 9 / 16)
-                    Spacer(minLength: 16)
                     pad.frame(width: d, height: d)
                 }
-                .frame(width: grid.width, height: d)
-                ZStack { Color.clear; if !musicShown { progress } }.frame(width: grid.width, height: Self.barSlot)
+                .frame(width: w)
+                if !idle {
+                ZStack { Color.clear; if !musicShown { progress } }.frame(width: grid.width, height: Self.barSlot).transition(.opacity)
                 ZStack {
                     Color.clear
                     if musicShown { music }
-                    else if session { Transport(size: grid.key, playSize: grid.play).frame(width: grid.width + grid.gap).transition(.opacity) }
+                    else if session { Transport(size: grid.key, playSize: grid.play).frame(width: grid.width + grid.gap) }
                 }
-                .frame(width: grid.width, height: 80)
+                .frame(width: grid.width, height: grid.play)
                 .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
-                ZStack { Color.clear; episodes }.frame(width: grid.width, height: 46)
+                .transition(.opacity)
+                }
+                if lined { ZStack { Color.clear; episodes }.frame(width: grid.width, height: 46).transition(.opacity) }
                 VStack(spacing: gap) {
                     keysBlock(grid, transport: false)
                     HStack(spacing: RemoteGrid.sideGap) {
@@ -1622,9 +1633,8 @@ struct RemoteTab: View {
                 .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
                 .modifier(KeysArrive(gate: keysGate))
             }
-            .settledAnimation(.easeOut(duration: 0.25), value: session)
-            .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
-            .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
+            .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: idle)
+            .settledAnimation(.easeOut(duration: 0.25), value: lined)
             Spacer(minLength: 8)
             AppStrip(inset: margin).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).padding(.bottom, 8)
         }
