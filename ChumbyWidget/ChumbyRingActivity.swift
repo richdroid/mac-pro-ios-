@@ -87,7 +87,7 @@ struct RingKeys: View {
             key(ChumbyRingStopIntent()) {
                 Label("Stop", systemImage: "stop.fill").font(RingCardLook.face(17)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: height)
-                    .background(ChumbyPalette.ring, in: Capsule())
+                    .background(ChumbyPalette.orange, in: Capsule())
             }
             .buttonStyle(.plain)
         }
