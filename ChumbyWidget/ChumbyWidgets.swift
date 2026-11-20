@@ -112,6 +112,9 @@ struct ChumbyProvider: AppIntentTimelineProvider {
                 var r = try await api.raw("sys")
                 // Old is normal after a quiet spell, and asking starts a refresh. Only old twice means trouble.
                 if r.age > 60 { try await Task.sleep(nanoseconds: 3_000_000_000); r = try await api.raw("sys") }
+                // A copy a few seconds old can be from before a change just made in the app (day for night): asking
+                // has started the Mac's next reading, so it is asked once more for that one.
+                else if r.age > 4 { try await Task.sleep(nanoseconds: 2_500_000_000); if let again = try? await api.raw("sys"), again.age < r.age { r = again } }
                 guard let s = try? JSONDecoder().decode(Sys.self, from: r.data) else { continue }
                 e.sys = s; e.deviceDown = r.age > 60; e.reachable = !e.deviceDown
                 // A day/night tap a moment ago wins over a reading the Mac took before the Chumby had it.

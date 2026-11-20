@@ -28,6 +28,7 @@ struct ChumbyApp: App {
                     if p == .active { model.start(); RingPresenter.sync(model); if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }; CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true); await model.loadMacPlaying() } } else { model.stop() }
                     #if os(iOS)
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
+                    if p != .active { model.widgetsOnLeaving() }
                     #endif
                 }
                 .onAppear {
@@ -777,6 +778,7 @@ struct LiveOctopus: View {
     @EnvironmentObject var model: ChumbyModel
     let squishedAt: Date?
     var scale: CGFloat = 1
+    @State private var motion = OctoMotion()
     // How far his top edge may ever rise above where he rests, whatever bob, wobble or hop is playing: the wordmark sits just past it.
     var headroom: CGFloat = .infinity
     static let knee: CGFloat = 6
@@ -791,19 +793,25 @@ struct LiveOctopus: View {
         // Only when the Chumby itself has gone quiet: a route this phone can't use says nothing about him (2026-11-11).
         let asleep = model.dead
         let ringing = !model.unreachable && (model.sys.ringing.map { !$0.snoozed } ?? false)
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || model.tab != 0)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        // Every display frame (it was 30 a second, which stepped on a 120 Hz screen).
+        TimelineView(.animation(paused: still || model.tab != 0)) { ctx in
+            // His motion is carried forward frame by frame (OctoMotion), never worked out from the clock: worked out from
+            // the clock he jumped whenever his mood changed (a ring starting, snoozed or stopped; the Chumby going quiet
+            // or coming back), since each mood has its own pace, and again on coming back to Home, having stood still
+            // while the clock ran on (Richard, 11-20: "the octopus sometimes glitches").
+            let m = motion.step(ctx.date.timeIntervalSinceReferenceDate, asleep: asleep, ringing: ringing)
             // The same curves as the web app's CSS: ease-in-out both ways, as a sine.
             // Asleep he bobs less and a little higher, so the tips of his arms stay well clear of the bezel (about 8 pt).
-            let bob = (asleep ? -3 : -7) * scale * (0.5 - 0.5 * cos(2 * .pi * t / (asleep ? 7 : ringing ? 0.9 : 4.2))) - (asleep ? 5 : 0)
-            let swing = 0.5 - 0.5 * cos(2 * .pi * t / (ringing ? 0.32 : 3))
+            let bob = -m.bob * scale * (0.5 - 0.5 * cos(m.bobPhase)) - m.sink
+            let swing = 0.5 - 0.5 * cos(m.swingPhase)
             let wave = swing * 2 - 1
             let lift = swing
-            let cycle = t.truncatingRemainder(dividingBy: 5.3) / 5.3
-            let blink: CGFloat = asleep ? 0.06 : cycle > 0.94 ? (cycle < 0.97 ? 1 - (cycle - 0.94) / 0.03 * 0.94 : 0.06 + (cycle - 0.97) / 0.03 * 0.94) : 1
+            let cycle = m.blinkAt / 5.3
+            let wink: CGFloat = cycle > 0.94 ? (cycle < 0.97 ? 1 - (cycle - 0.94) / 0.03 * 0.94 : 0.06 + (cycle - 0.97) / 0.03 * 0.94) : 1
+            let blink = min(wink, m.lid)
             let (sx, sy, dy0) = squish(at: ctx.date)
             let dy = dy0 * scale
-            let stretch = 1 + (ringing ? 0.08 : 0.035) * lift
+            let stretch = 1 + m.stretch * lift
             // Where his top edge lands after the stretch (anchored 16% down), the squish (anchored 90% down) and the bob;
             // the skew only leans him sideways. Any lift past the headroom is taken back off the offset.
             let h = 92 * scale * ChumbyArt.octBox.height / ChumbyArt.octBox.width
@@ -811,10 +819,10 @@ struct LiveOctopus: View {
             let rise = max(0, -top)
             OctopusMark(color: ChumbyPalette.oct(scheme == .dark), blink: blink)
                 .scaleEffect(x: 1, y: stretch, anchor: UnitPoint(x: 0.5, y: 0.16))
-                .modifier(SkewEffect(skew: CGFloat(wave) * (ringing ? 11 : 4.5) * .pi / 180, anchorY: 0.16))
+                .modifier(SkewEffect(skew: CGFloat(wave) * m.lean * .pi / 180, anchorY: 0.16))
                 .scaleEffect(x: sx, y: sy, anchor: UnitPoint(x: 0.5, y: 0.9))
                 .offset(y: bob + dy + (rise - clamped(rise)))
-                .opacity(asleep ? 0.75 : 1)
+                .opacity(m.ink)
         }
     }
     func squish(at now: Date) -> (CGFloat, CGFloat, CGFloat) {
@@ -826,6 +834,34 @@ struct LiveOctopus: View {
         if p < 0.62 { let k = (p - 0.28) / 0.34; return (mix(1.28, 0.86, k), mix(0.68, 1.2, k), mix(12, -20, k)) }
         let k = (p - 0.62) / 0.38
         return (mix(0.86, 1, k), mix(1.2, 1, k), mix(-20, 0, k))
+    }
+}
+// The octopus's motion, carried from one frame to the next. Each mood has its own pace and reach (calm, ringing,
+// asleep); the phases move on by the time since the last frame at the pace of the moment, and the reaches ease to
+// the mood's over a quarter second, so a change of mood bends his motion and never breaks it. A frame after a pause
+// (another tab, the app in the background) counts as one frame, so he carries on from where he stood.
+final class OctoMotion {
+    struct Pose { var bobPhase = 0.0, swingPhase = 0.0, blinkAt = 0.0; var bob: CGFloat = 7, sink: CGFloat = 0, lean: CGFloat = 4.5, stretch: CGFloat = 0.035, lid: CGFloat = 1; var ink = 1.0 }
+    private var last: TimeInterval?
+    private var pose = Pose()
+    func step(_ t: TimeInterval, asleep: Bool, ringing: Bool) -> Pose {
+        let bob: CGFloat = asleep ? 3 : 7, sink: CGFloat = asleep ? 5 : 0, lean: CGFloat = ringing ? 11 : 4.5, stretch: CGFloat = ringing ? 0.08 : 0.035
+        let lid: CGFloat = asleep ? 0.06 : 1, ink = asleep ? 0.75 : 1.0
+        guard let was = last else {
+            last = t
+            pose.bob = bob; pose.sink = sink; pose.lean = lean; pose.stretch = stretch; pose.lid = lid; pose.ink = ink
+            return pose
+        }
+        let dt = min(max(t - was, 0), 1.0 / 20)
+        last = t
+        pose.bobPhase = (pose.bobPhase + dt * 2 * .pi / (asleep ? 7 : ringing ? 0.9 : 4.2)).truncatingRemainder(dividingBy: 2 * .pi)
+        pose.swingPhase = (pose.swingPhase + dt * 2 * .pi / (ringing ? 0.32 : 3)).truncatingRemainder(dividingBy: 2 * .pi)
+        pose.blinkAt = (pose.blinkAt + dt).truncatingRemainder(dividingBy: 5.3)
+        let k = CGFloat(1 - exp(-dt / 0.25))
+        pose.bob += (bob - pose.bob) * k; pose.sink += (sink - pose.sink) * k
+        pose.lean += (lean - pose.lean) * k; pose.stretch += (stretch - pose.stretch) * k
+        pose.lid += (lid - pose.lid) * k; pose.ink += (ink - pose.ink) * Double(k)
+        return pose
     }
 }
 // Snoozing: a ring of water round the octopus that drains as the snooze runs out.

@@ -347,7 +347,10 @@ final class ChumbyModel: ObservableObject {
                 ringReadings += 1
             }
             // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
+            // Day or night changed on the Chumby itself (its own button, its schedule), seen here: the widget is told.
+            let nightChanged = s.night != sys.night && seenAt != nil
             if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
+            if nightChanged { nightChangedAt = Date(); WidgetCenter.shared.reloadAllTimelines() }
             try? data.write(to: Self.cache("sys"), options: .atomic)
         }
     }
@@ -541,11 +544,38 @@ final class ChumbyModel: ObservableObject {
                 try await api?.cmd("night", v)
                 // Ending night mode also brings the screen back up, one after the other so neither gets lost.
                 if v == "off" { try await api?.cmd("screen", "bright") }
+                widgetsFollowNight()
             } catch {
                 fail("remote", "The Chumby didn’t get that. \(AlarmWriter.explain(error))")
                 sys.night = v == "off" ? 1 : 0
             }
         }
+    }
+    // Day or night changed from the app: the Home Screen widget is told, which it never was (Richard, 11-20: the widget
+    // "sometimes doesn't update" after night is switched to day in the app; it only caught up when iOS next refreshed
+    // it by itself). It reads the Mac's copy of the Chumby, which can be from before the change for some seconds, so
+    // it is told now and again once that copy is new, with the app kept awake for it if he has already left for the
+    // Home Screen; leaving the app within two minutes of a change tells it once more.
+    private var nightChangedAt: Date?
+    func widgetsFollowNight() {
+        nightChangedAt = Date()
+        WidgetCenter.shared.reloadAllTimelines()
+        #if canImport(UIKit)
+        var hold = UIBackgroundTaskIdentifier.invalid
+        hold = UIApplication.shared.beginBackgroundTask(withName: "Chumby widget follows night") { UIApplication.shared.endBackgroundTask(hold); hold = .invalid }
+        #endif
+        Task {
+            for wait in [4.0, 8.0] {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            #if canImport(UIKit)
+            if hold != .invalid { UIApplication.shared.endBackgroundTask(hold); hold = .invalid }
+            #endif
+        }
+    }
+    func widgetsOnLeaving() {
+        if let t = nightChangedAt, Date().timeIntervalSince(t) < 120 { WidgetCenter.shared.reloadAllTimelines() }
     }
     // The Chumby's volume, set from the phone (Sounds and Home's Playing card, the mute key): shown at once, held until the
     // Chumby reports it, never sent under an alarm (the ring sets its own volume and puts his back after).

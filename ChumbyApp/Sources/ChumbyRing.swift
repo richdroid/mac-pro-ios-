@@ -116,6 +116,7 @@ struct RingScreen: View {
     // Everything the page says, kept while the alarm is there, so its words hold still as it closes.
     struct Shown: Equatable { var name: String; var sound: String; var snoozed: Bool; var until: Date?; var at: Date? }
     @State private var frozen: Shown?
+    @State private var rattle = OctoRattle()
     @State private var sawRing = false
     @State private var stopping = false
     @State private var snoozing = false
@@ -262,13 +263,14 @@ struct RingScreen: View {
         let quiet = shown?.snoozed == true || nothing || away
         return VStack(spacing: 4) {
             // He rattles while it rings and sleeps through a snooze.
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || quiet)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
-                let swing = quiet || still ? 0 : sin(2 * .pi * t / 0.32) * 7
-                OctopusMark(color: ChumbyPalette.oct(dark), blink: quiet ? 0.08 : 1)
+            // His rattle dies away over a quarter second when the alarm is snoozed or stopped, and his eyes close with
+            // it: before, he stopped dead at whatever angle he had reached and snapped upright in one frame.
+            TimelineView(.animation(paused: still)) { ctx in
+                let m = rattle.step(ctx.date.timeIntervalSinceReferenceDate, on: !(quiet || still))
+                OctopusMark(color: ChumbyPalette.oct(dark), blink: 0.08 + 0.92 * m.amp)
                     .frame(width: big * 0.8)
-                    .rotationEffect(.degrees(swing), anchor: .bottom)
-                    .offset(y: quiet || still ? 0 : -3 * abs(sin(2 * .pi * t / 0.64)))
+                    .rotationEffect(.degrees(sin(m.phase) * 7 * m.amp), anchor: .bottom)
+                    .offset(y: -3 * abs(sin(m.phase / 2)) * m.amp)
             }
             .frame(height: big * 0.7)
             .accessibilityHidden(true)
@@ -435,5 +437,20 @@ struct SlideToStop: View {
         .accessibilityLabel("Stop the alarm")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { if !busy { done() } }
+    }
+}
+
+// The ringing page's octopus: his rattle's phase carried frame to frame, its reach eased in and out.
+final class OctoRattle {
+    private var last: TimeInterval?
+    private var phase = 0.0, amp = 0.0
+    func step(_ t: TimeInterval, on: Bool) -> (phase: Double, amp: Double) {
+        guard let was = last else { last = t; amp = on ? 1 : 0; return (phase, amp) }
+        let dt = min(max(t - was, 0), 1.0 / 20)
+        last = t
+        if amp > 0.001 || on { phase = (phase + dt * 2 * .pi / 0.32).truncatingRemainder(dividingBy: 4 * .pi) }
+        amp += ((on ? 1 : 0) - amp) * (1 - exp(-dt / 0.25))
+        if !on, amp < 0.001 { amp = 0 }
+        return (phase, amp)
     }
 }
