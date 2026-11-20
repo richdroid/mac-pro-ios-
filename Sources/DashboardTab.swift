@@ -248,7 +248,7 @@ struct DashboardTab: View {
         // any other said nothing of the room it was short of (Richard, 2026-11-20).
         if let g = upgrade.value, g.pending, let v = g.target?.version ?? g.current.split(separator: " ").first.map(String.init) {
             let line = g.phase == "room" ? "needs \(UpgradeFeed.gb(g.short)) more room" : g.phase == "held" ? "waits for the patcher" : g.phase == "ready" ? "ready to install" : g.phase == "downloading" ? "downloading" : g.phase == "patching" ? "patching" : "installing"
-            t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: v, line: line, good: g.phase == "room" || g.phase == "held" ? false : nil, alts: [g.phase == "room" ? "needs room" : line], page: "updates") { model.macPage = .upgrade })
+            t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: v, line: line, good: g.phase == "room" || g.phase == "held" ? false : nil, alts: g.phase == "room" ? ["needs room"] : [], page: "updates") { model.macPage = .upgrade })
         } else if let u = updates.value {
             let waiting = (u.macos.pending ?? []).count + (u.brew?.outdated ?? []).count
             t.append(TileData(id: "updates", title: "Updates", symbol: "arrow.down.circle", figure: u.macos.pending == nil ? nil : waiting == 0 ? "Up to date" : "\(waiting)", line: waiting == 0 ? "macOS \(u.macos.current.split(separator: " ").first ?? "")" : "waiting", good: waiting == 0 ? true : nil, page: "updates", open: updatesOpen))

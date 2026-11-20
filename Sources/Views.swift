@@ -1126,6 +1126,10 @@ struct WebTile: View {
     var details: [String] = []
     // Shorter figures likewise: a figure is never shrunk, so every tile in a row is one size (designer gate, 2026-11-18).
     var figures: [String] = []
+    // Each once: the same words twice in a ViewThatFits is a precondition failure in SwiftUI. The Updates tile's
+    // "ready to install" with itself as its shorter form took the app down in every upgrade state but "room", wherever
+    // the tiles were laid out (CI c43e051's crash report).
+    static func distinct(_ a: [String]) -> [String] { var seen = Set<String>(); return a.filter { seen.insert($0).inserted } }
     func figureText(_ value: String) -> Text {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
         let small = Font.system(size: 17, weight: .semibold)
@@ -1153,7 +1157,7 @@ struct WebTile: View {
             HStack(spacing: 7) {
                 if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
                 ViewThatFits(in: .horizontal) {
-                    ForEach([value] + figures, id: \.self) { v in figureText(v).lineLimit(1).fixedSize() }
+                    ForEach(Self.distinct([value] + figures), id: \.self) { v in figureText(v).lineLimit(1).fixedSize() }
                     figureText(figures.last ?? value).lineLimit(1)
                 }
                 .contentTransition(.numericText())
@@ -1164,7 +1168,7 @@ struct WebTile: View {
             }
             // The longest that fits whole, never cut with an ellipsis.
             ViewThatFits(in: .horizontal) {
-                ForEach([detail] + details, id: \.self) { d in Text(d).lineLimit(1).fixedSize() }
+                ForEach(Self.distinct([detail] + details), id: \.self) { d in Text(d).lineLimit(1).fixedSize() }
                 Text(details.last ?? detail).lineLimit(1)
             }
             .font(.footnote).foregroundStyle(.secondary).monospacedDigit()

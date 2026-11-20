@@ -139,7 +139,7 @@ jobs:
             shot tab-dash-late 1 20 -tab 6
             shot tab-status 1 8 -tab 0
             shotdrag tab-dash-foot 1 "drag 0.5 0.85 0.5 0.15 0.08;drag 0.5 0.85 0.5 0.15 0.08;drag 0.5 0.85 0.5 0.15 0.08" -tab 6
-            film bar-keyboard 1 3 'tap "Message the session";touch 0.5 0.2 0.05' -tab 2 -pose session
+            film bar-keyboard 1 3 "touch 0.5 0.805 0.05;touch 0.5 0.2 0.05" -tab 2 -pose session
             $D "$DEVICE" pose open; sleep 5
             $D "$DEVICE" rotate 1; sleep 5
             shot upgrade-freed-portrait 3 9 -tab 6 -pose upgrade-freed
@@ -167,7 +167,7 @@ jobs:
           films "" 1 "0.62 0.81" 0.5 "" full
           film dash-keys 1 4 "tap key.Show;tap key.Glance;tap key.Glance;tap key.Sleep;tap key.Wake" -tab 6 -pose consolebehind
           film dash-fail 1 1 "tap key.Hide" -tab 6 -pose consolefail
-          film bar-keyboard 1 3 'tap "Message the session";touch 0.5 0.2 0.05' -tab 2 -pose session
+          film bar-keyboard 1 3 "touch 0.5 0.805 0.05;touch 0.5 0.2 0.05" -tab 2 -pose session
           shot settings 1 8 -tab 9
           film settings-gear 1 3 "tap gear;drag 0.01 0.5 0.75 0.5 0.35" -tab 6
 
