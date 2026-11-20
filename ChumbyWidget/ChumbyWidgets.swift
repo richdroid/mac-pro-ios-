@@ -56,6 +56,10 @@ struct ChumbyEntry: TimelineEntry {
     static func label(_ name: String) -> String {
         var n = name.hasPrefix("Calendar: ") ? String(name.dropFirst(10)) : name
         if n.hasSuffix(JustOnce.suffix) { n = String(n.dropLast(JustOnce.suffix.count)) }
+        // "CR Shift: Backup Expediter (OT": the event's own words after its kind, and never a bracket the Chumby's
+        // 40-character name cut open (Richard's widget, 11-20: "Backup Expedi…").
+        if let r = n.range(of: ": ", options: .backwards), !n[r.upperBound...].isEmpty { n = String(n[r.upperBound...]) }
+        if let o = n.lastIndex(of: "("), !n[o...].contains(")") { n = String(n[..<o]).trimmingCharacters(in: .whitespaces) }
         return n
     }
     static func clock(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
@@ -301,7 +305,7 @@ struct AlarmBody: View {
                         if let u = entry.usualText { Text("usually \(u)").font(.trebuchet(12)).lineLimit(1) }
                     } else {
                         Text(clock.map { "\($0.0) \($0.1)" } ?? noAlarm).font(.trebuchet(19, .bold)).lineLimit(1).minimumScaleFactor(0.7)
-                        if entry.nextAt != nil { Text(entry.whenLine).font(.trebuchet(12)).lineLimit(1) }
+                        if entry.nextAt != nil { ViewThatFits(in: .horizontal) { Text(entry.whenLine).lineLimit(1).fixedSize(); Text(entry.whenText).lineLimit(1) }.font(.trebuchet(12)) }
                     }
                 }
                 // Leading, so nothing moves sideways from one state to the next; centred top to bottom, beside the octopus.
@@ -336,7 +340,7 @@ struct AlarmBody: View {
                         Text(c.1).font(.trebuchet(14, .bold))
                     }
                     .lineLimit(1)
-                    Text(entry.whenLine).font(.trebuchet(14)).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8)
+                    ViewThatFits(in: .horizontal) { Text(entry.whenLine).lineLimit(1).fixedSize(); Text(entry.whenText).lineLimit(1) }.font(.trebuchet(14)).opacity(0.85)
                     Spacer(minLength: 6)
                     // Only when it can reach the Chumby: a skip that can't be sent is a dead button.
                     if entry.reachable { SkipButton(entry: entry, height: 30) } else { NotAnswering(entry: entry) }
@@ -407,7 +411,7 @@ struct RemoteBody: View {
                         Text(a.meridiem).font(.trebuchet(13, .bold))
                     }
                     .lineLimit(1)
-                    Text(entry.whenLine).font(.trebuchet(13)).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8)
+                    ViewThatFits(in: .horizontal) { Text(entry.whenLine).lineLimit(1).fixedSize(); Text(entry.whenText).lineLimit(1) }.font(.trebuchet(13)).opacity(0.85)
                 } else {
                     Text(entry.reachable ? (entry.alarmsKnown ? "No alarm set" : "Chumby") : entry.problem).font(.trebuchet(15, .bold)).lineLimit(2).minimumScaleFactor(0.8)
                 }

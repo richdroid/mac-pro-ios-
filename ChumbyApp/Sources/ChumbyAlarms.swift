@@ -379,7 +379,7 @@ struct RingingCard: View {
                         Label("Stop", systemImage: "stop.fill").lineLimit(1).foregroundStyle(.white)
                             .frame(maxWidth: .infinity, minHeight: 56)
                             .contentShape(Capsule())
-                            .glassEffect(.regular.tint(ChumbyPalette.orange).interactive(), in: Capsule())
+                            .glassEffect(.regular.tint(ChumbyPalette.ring).interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }

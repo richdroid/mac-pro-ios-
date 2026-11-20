@@ -379,8 +379,8 @@ struct SlideToStop: View {
                     .overlay {
                         // Landed, it holds the stop mark (the status line says "Stopping…"); a spinner here left the
                         // page with one turning on the key.
-                        if busy && !landed { ProgressView().tint(ChumbyPalette.orange) }
-                        else { Image(systemName: k > 0.02 ? "stop.fill" : "chevron.right.2").font(.system(size: 22, weight: .heavy)).foregroundStyle(ChumbyPalette.orange) }
+                        if busy && !landed { ProgressView().tint(ChumbyPalette.ring) }
+                        else { Image(systemName: k > 0.02 ? "stop.fill" : "chevron.right.2").font(.system(size: 22, weight: .heavy)).foregroundStyle(ChumbyPalette.ring) }
                     }
                     .frame(width: Self.key, height: Self.key)
                     .padding(.leading, Self.inset)
