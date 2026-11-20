@@ -430,6 +430,10 @@ struct Page<C: View>: View {
     @Environment(\.horizontalSizeClass) private var hSize
     var barRoom: CGFloat { showsBar && !(hSize == .regular && !panes) ? 43.0 / 3 : 0 }
     var body: some View {
+        // The lip: the TV, along the top of this tab and of every page opened on it. Above the stack, not in it, so a push
+        // moves under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
+        VStack(spacing: 0) {
+        Lip(tab: tab).environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
@@ -470,9 +474,7 @@ struct Page<C: View>: View {
                 // (Richard, 2026-11-05). Only the Remote, which has no headings and no room to spare, keeps it in the bar.
                 .navigationBarTitleDisplayMode(alwaysInline ? .inline : .large)
         }
-        // The lip: the TV, along the top of this tab and of every page opened on it. Outside the stack, so a push moves
-        // under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
-        .safeAreaInset(edge: .top, spacing: 0) { Lip(tab: tab).environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } })) }
+        }
         .onChange(of: model.titleAsks) { _, _ in
             guard model.tab == tab, let t = model.titleAsk else { return }
             model.titleAsk = nil
@@ -3513,11 +3515,6 @@ struct DiscoverColumn: View {
         }
         // Films or shows and the genre are one key beside the page's name (WatchFilterKey), not three rows in the middle
         // of the shelves; searching is the Search tab's (2026-11-20).
-        Color.clear.frame(height: 0)
-            // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
-            .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
-                if let v { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
-            }
         if store.query.isEmpty { RecentRow(kind: kind) }
         if store.rows.isEmpty {
             Group {
@@ -3574,6 +3571,10 @@ struct DiscoverColumn: View {
                 tries += 1
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
+        }
+        // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
+        .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
+            if let v, part != .right { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
         }
         .refreshable { await store.load(force: true) }
         .task(id: kind) { await store.load() }

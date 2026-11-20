@@ -405,9 +405,14 @@ final class TVModel {
     }
     // Each ask for Settings (tab 9), for Status to push it.
     // A phone coming from a build with a Settings tab: Status is saved in its place, so Settings is pushed this once only.
-    var settingsAsked = { let t = UserDefaults.standard.integer(forKey: "tab"); guard t == 9 || t == 5 else { return 0 }; UserDefaults.standard.set(3, forKey: "tab"); return 1 }()
+    // Asked for at launch only by the build's shots or a link (the launch arguments): a phone whose saved tab was Status
+    // or Settings from an older build opens on Watch, with nothing pushed by itself.
+    private static var launchTab: Int? { UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["tab"].flatMap { ($0 as? Int) ?? Int("\($0)") } }
+    var settingsAsked = launchTab == 9 || launchTab == 5 ? 1 : 0
+    // Each ask is answered once, by the tab showing.
+    @ObservationIgnored var settingsAnswered = 0
     // Whether the ask was for the box's own page (once the Status tab) rather than Settings' first page.
-    @ObservationIgnored var settingsBox = UserDefaults.standard.integer(forKey: "tab") == 5
+    @ObservationIgnored var settingsBox = launchTab == 5
     var address: String { didSet { SavedAddress.save(address) } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?

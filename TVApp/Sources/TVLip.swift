@@ -51,6 +51,7 @@ struct Lip: View {
     let tab: Int
     static let height: CGFloat = 56
     @State private var pull: CGFloat = 0
+    @State private var place = FrameBox()
     var body: some View {
         let hand = Hand.shared
         let now = TVNow.read(model)
@@ -101,10 +102,20 @@ struct Lip: View {
         .offset(y: pull)
         .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 6)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
+            place.rect = r
             guard model.tab == tab, r.width > 40 else { return }
             Hand.shared.lipFrame = r
         }
-        .onChange(of: model.tab) { _, _ in pull = 0 }
+        .onChange(of: model.tab, initial: true) { _, t in
+            pull = 0
+            if t == tab, let r = place.rect, r.width > 40 { Hand.shared.lipFrame = r }
+        }
+        // A start that failed with no page left to answer it: said for a few seconds, then the lip is the TV's again.
+        .task(id: model.starting?.failed == true) {
+            guard model.starting?.failed == true, model.tab == tab else { return }
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if !Task.isCancelled, model.starting?.failed == true { model.clearStart() }
+        }
     }
     @ViewBuilder func picture(_ art: String?, kind: TVNow.Kind) -> some View {
         let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)

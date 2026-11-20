@@ -21,7 +21,6 @@ struct SettingsPages: ViewModifier {
     @Environment(\.pagePush) private var pagePush
     @StateObject private var store = ManageStore()
     let tab: Int
-    @State private var seen = 0
     @MainActor static var scripted = false
     func body(content: Content) -> some View {
         content
@@ -56,9 +55,8 @@ struct SettingsPages: ViewModifier {
                 }
             }
             .onChange(of: model.settingsAsked, initial: true) { _, n in
-                guard n > seen else { return }
-                seen = n
-                guard model.tab == tab else { return }
+                guard n > model.settingsAnswered, model.tab == tab else { return }
+                model.settingsAnswered = n
                 openSettings()
             }
     }

@@ -30,12 +30,16 @@ enum ThrowRules {
     static let on = UserDefaults.standard.string(forKey: "pose") != nil || UserDefaults.standard.bool(forKey: "handLog")
     private static let start = Date()
     private static var lines: [String] = []
+    private static var pending = false
     private static var file: URL? { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("hand-log.txt") }
     static func note(_ s: String) {
         guard on else { return }
         let t = String(format: "%.3f", Date().timeIntervalSince(start))
         lines.append(t + " " + s)
-        if lines.count % 4 == 1 { flush() } else { Task { @MainActor in try? await Task.sleep(nanoseconds: 300_000_000); flush() } }
+        // One write at most every half second, never one per line: the log must not cost the carry a frame.
+        guard !pending else { return }
+        pending = true
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 500_000_000); pending = false; flush() }
     }
     static func flush() {
         guard let file else { return }

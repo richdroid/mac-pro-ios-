@@ -28,7 +28,8 @@ struct TitleRoute: Hashable { let id: UUID }
     var showsAllStreams = false
     // The token this page last sent, so its start's failure is this page's to answer.
     @ObservationIgnored var sentToken: String?
-    init(_ t: FlickTarget) { target = t }
+    // Opened for another choice after a start failed: the streams that didn't start come set apart.
+    init(_ t: FlickTarget) { target = t; failed = t.avoid }
 
     var ref: (type: String, imdb: String, video: String?)? { target.send == nil && !item.isYouTube && target.source == .stremio ? item.stremioRef : nil }
     var isSeries: Bool { ref?.type == "series" }
@@ -211,6 +212,8 @@ struct TitlePage: View {
                 if Hand.shared.committed, !committedOnce { committedOnce = true; committed() }
             }
             .onEnded { v in release(v) })
+        // For the build's films: where the card is, so a real touch can pick it up.
+        .shotSpot("card", pose: UserDefaults.standard.string(forKey: "pose") ?? "-")
         .accessibilityElement(children: .combine)
         .accessibilityLabel(st.item.title)
         .accessibilityHint("Flick up to play on the TV")
