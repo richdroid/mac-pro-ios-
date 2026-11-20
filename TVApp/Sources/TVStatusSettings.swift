@@ -6,7 +6,7 @@ import SwiftUI
 // as every other page opened from a tab is (Apple's HIG for iPhone Duo; Richard, 2026-11-08).
 
 // The page Settings is pushed as, on Status' own stack.
-enum SettingsRoute: Hashable { case root }
+enum SettingsRoute: Hashable { case root, box }
 
 // A tab's page pushing onto its own stack when asked from outside a link (Settings asked for as tab 9). An existential, so
 // NavigationPath.append opens it to the concrete type its destination is registered for (never AnyHashable).
@@ -14,25 +14,23 @@ struct PagePush { var push: (any Hashable) -> Void = { _ in }; var pop: () -> Vo
 private struct PagePushKey: EnvironmentKey { static let defaultValue = PagePush() }
 extension EnvironmentValues { var pagePush: PagePush { get { self[PagePushKey.self] } set { self[PagePushKey.self] = newValue } } }
 
-struct StatusTab: View {
+// Every page Settings leads to, registered on each tab's stack, so the lip's gear opens it over whatever tab he is on and
+// Back returns there.
+struct SettingsPages: ViewModifier {
     @Environment(TVModel.self) var model
     @Environment(\.pagePush) private var pagePush
     @StateObject private var store = ManageStore()
-    // The last ask for Settings acted on, so coming back to the tab doesn't push it again.
+    let tab: Int
     @State private var seen = 0
     @MainActor static var scripted = false
-    var body: some View {
-        DeviceTab()
-            // The bar carries the gear only: the page draws its own large heading.
-            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { model.tick(); pagePush.push(SettingsRoute.root) } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Settings")
-                        .shotSpot("gear", pose: "settingsnav")
+    func body(content: Content) -> some View {
+        content
+            .navigationDestination(for: SettingsRoute.self) { r in
+                switch r {
+                case .root: TVSettingsPage()
+                case .box: BoxPage()
                 }
             }
-            .navigationDestination(for: SettingsRoute.self) { _ in TVSettingsPage() }
             .navigationDestination(for: StremioRoute.self) { _ in StremioAccountPage() }
             .navigationDestination(for: ManagePage.self) { page in
                 switch page {
@@ -41,12 +39,9 @@ struct StatusTab: View {
                 case .connection: ConnectionView()
                 }
             }
-            // For the build's film where touches can't reach (the cover display): Settings pushed and popped, then TV
-            // settings pushed and popped, at a finger's pace.
-            // Once per launch, and not tied to this view's life: the root steps off screen at each push, which cancelled and
-            // restarted a view task (37416ae: pushes and pops piling up).
+            // For the build's film where touches can't reach: Settings pushed and popped, then TV settings, at a finger's pace.
             .onAppear {
-                guard UserDefaults.standard.string(forKey: "pose") == "settingsscript", !Self.scripted else { return }
+                guard model.tab == tab, UserDefaults.standard.string(forKey: "pose") == "settingsscript", !Self.scripted else { return }
                 Self.scripted = true
                 let nav = pagePush
                 Task { @MainActor in
@@ -62,18 +57,50 @@ struct StatusTab: View {
             .onChange(of: model.settingsAsked, initial: true) { _, n in
                 guard n > seen else { return }
                 seen = n
+                guard model.tab == tab else { return }
                 openSettings()
             }
     }
     // Settings, and for the build's shots the page opened from it ("-pose connection", "-pose tvsettings", "-pose tvapps").
     func openSettings() {
         pagePush.push(SettingsRoute.root)
+        if model.settingsBox { model.settingsBox = false; pagePush.push(SettingsRoute.box); return }
         switch UserDefaults.standard.string(forKey: "pose") {
         case "connection": pagePush.push(ManagePage.connection)
         case "tvsettings": pagePush.push(ManagePage.settings)
         case "tvapps": pagePush.push(ManagePage.apps)
         default: break
         }
+    }
+}
+
+// The box's own figures (its processor, memory, storage, network), once the Status tab: a page of Settings now.
+struct BoxPage: View {
+    var body: some View {
+        DeviceTab()
+            .summonsBar()
+            .topShade()
+            .background { Ambience() }
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .barPage()
+    }
+}
+// The way from Settings to the box's page: one row, in the cards' own glass.
+struct BoxRow: View {
+    @Environment(TVModel.self) var model
+    @Environment(\.pagePush) private var pagePush
+    var body: some View {
+        Button { model.tick(); pagePush.push(SettingsRoute.box) } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 20, weight: .semibold)).frame(width: 30)
+                Text("The TV box").font(.system(size: 17, weight: .semibold))
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 18).frame(height: 60).contentShape(Rectangle())
+            .tvCard()
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -89,12 +116,12 @@ struct TVSettingsPage: View {
             // Unfolded, one list each side of the fold rather than one list across it, the two cards level.
             if panes {
                 FoldSplit {
-                    page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections(level: true).shotSpot("tvrow", pose: "settingsnav") })
+                    page(Group { PageHeading("Settings").padding(.horizontal, 4); BoxRow(); TVManageSections(level: true).shotSpot("tvrow", pose: "settingsnav") })
                 } right: {
                     page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections(); StremioSettingsSection() })
                 }
             } else {
-                page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections(); StremioSettingsSection() })
+                page(Group { PageHeading("Settings").padding(.horizontal, 4); BoxRow(); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections(); StremioSettingsSection() })
             }
         }
         .summonsBar()

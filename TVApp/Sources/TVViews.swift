@@ -251,21 +251,15 @@ struct RootView: View {
                 if t == 6 { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
                 resets[t, default: 0] += 1
             }) {
-                // Six tabs, in Richard's order (2026-11-11): Remote, Watch, Playing, Search, Apps, Status. Settings is behind a
-                // gear on Status. The values are the old ones, so every link, widget and intent still lands where it did.
-                Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
-                Tab(value: 3) { Page(title: "Watch", retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
-                Tab(value: 2) { Page(title: "Playing", retaps: resets[2, default: 0]) { PlayingTab() } } label: {
-                    // What kind of thing is on, in the side bar's own glyphs: a cover or an app's banner squeezed into it
-                    // read as a clipped "YouTub" among the symbols (Richard, 2026-11-05: "makes no sense").
-                    tabLabel("Playing", playingSymbol)
-                }
-                // The one search, for everything (Richard, 2026-11-11). A plain tab, not the system's search role: open
-                // upright the search-role tab took the keyboard from the page's own field the moment it had it (every
-                // open-upright run, 829e7c4 to c70f989: focus on, then off), and on the Duo it isn't set apart anyway.
-                Tab(value: 6) { Page(title: "Search", retaps: resets[6, default: 0]) { SearchPage() } } label: { tabLabel("Search", "magnifyingglass") }
-                Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 5) { Page(title: "Status", showsBar: true, retaps: resets[5, default: 0]) { StatusTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
+                // Four tabs, and never a fifth (Richard, 2026-11-20: "never a more thing ever"): the Duo's side rail holds
+                // four before it makes a More. Watch leads. Apps is a row on the Remote; the box's figures and Settings are
+                // behind the lip's gear. The values are the old ones, so links, widgets and intents land where they did.
+                Tab(value: 3) { Page(title: "Watch", tab: 3, retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
+                Tab(value: 0) { Page(title: "Remote", tab: 0, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
+                Tab(value: 2) { Page(title: "Music", tab: 2, retaps: resets[2, default: 0]) { PlayingTab() } } label: { tabLabel("Music", "music.note") }
+                // A plain tab, not the system's search role: open upright the search-role tab took the keyboard from the
+                // page's own field the moment it had it.
+                Tab(value: 6) { Page(title: "Search", tab: 6, retaps: resets[6, default: 0]) { SearchPage() } } label: { tabLabel("Search", "magnifyingglass") }
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
@@ -277,28 +271,15 @@ struct RootView: View {
                 // Opening Search brings the keyboard, unless it's already being asked for.
                 if t == 6, was != 6, !SendDraft.shared.wantsFocus { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
             }
-            // A card held on a shelf, over everything, where the finger has it (ShelfFlick).
-            .overlay { ShelfLiftOverlay() }
-            // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
-            // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
-            .overlay {
-                if let target = model.flicking {
-                    // On a show's or a stream's page it stops short of the side bar, so another tab is a tap away; the card
-                    // and the throw have the whole screen.
-                    // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far
-                    // wider than the bar (r19: an 88 pt strip of the page underneath showed between the two).
-                    FlickHost(target: target)
-                        // Landed on the Remote, it waits out of sight and out of touch's way to be taken down (retireFlick).
-                        .opacity(model.flickRetired ? 0 : 1)
-                        .allowsHitTesting(!model.flickRetired)
-                }
-            }
+            // A poster lifted off a shelf, over everything, where his finger has it (Liftable).
+            .overlay { HandOverlay() }
         }
+        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { Hand.shared.screen = $0 } }
         // What follows the status lives in small views of its own, so only they redraw when it changes.
         .background { StatusFollower(playingSymbol: $playingSymbol) }
         .overlay(alignment: .top) { ProblemBanner() }
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [0, 3, 2, 6, 1, 5]) { model.tab = $0 } }
+        .onAppear { followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 2, 6]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task { await BrowseStore.shared(.stremio).loadHome() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
@@ -430,8 +411,10 @@ struct Page<C: View>: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     let title: String
+    // Which tab this is, so only the one showing answers an ask to push a page.
+    var tab = -1
     var alwaysInline = false
-    // The system's bar shown over the page's own heading, for a toolbar item of its own (Status' gear); no title in it.
+    // The system's bar shown over the page's own heading, for a toolbar item of its own; no title in it.
     var showsBar = false
     // Taps on this tab's button while it's already showing.
     var retaps = 0
@@ -473,12 +456,27 @@ struct Page<C: View>: View {
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).modifier(TypingHidesTabBar(enabled: !alwaysInline)) }
+                // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
+                // tab exactly as he left it.
+                .navigationDestination(for: TitleRoute.self) { r in
+                    if let t = TitleRoutes.target(r) { TitlePage(target: t) }
+                }
+                .modifier(SettingsPages(tab: tab))
+                .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
                 // Large open as well as folded, so every page's name leads the headings under it, as in the Mac Pro app
                 // (Richard, 2026-11-05). Only the Remote, which has no headings and no room to spare, keeps it in the bar.
                 .navigationBarTitleDisplayMode(alwaysInline ? .inline : .large)
+        }
+        // The lip: the TV, along the top of this tab and of every page opened on it. Outside the stack, so a push moves
+        // under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
+        .safeAreaInset(edge: .top, spacing: 0) { Lip(tab: tab).environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } })) }
+        .onChange(of: model.titleAsks) { _, _ in
+            guard model.tab == tab, let t = model.titleAsk else { return }
+            model.titleAsk = nil
+            path.append(TitleRoutes.add(t))
         }
         .topShade()
         .background { Ambience() }

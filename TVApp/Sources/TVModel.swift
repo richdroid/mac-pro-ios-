@@ -145,30 +145,24 @@ final class TVModel {
     // done with: the keyboard never stays up over what a search led to (Richard, 2026-11-05).
     func flick(_ target: FlickTarget) {
         Keyboard.dismiss()
-        // One at a time. And a send that goes by itself (next episode, an episode picked from the list) taken twice within
-        // three seconds is the same tap, never a second start.
-        // One being taken down after landing on the Remote (retireFlick) doesn't count.
-        guard flicking == nil || flickRetired else { return }
-        // The very thing a start is already under way for (the card tapped again, the same episode picked again while the
-        // TV brings it up): straight to the Remote, where the start is shown; never a second send (2026-11-08).
-        if let st = starting, !st.failed, !st.played, let t = startingTarget, !target.streamsFirst, target.send == nil,
-           t.item.stremioRef?.imdb == target.item.stremioRef?.imdb, t.item.stremioRef?.video == target.item.stremioRef?.video,
-           target.item.stremioRef != nil {
-            tick(); tab = 0; return
-        }
+        // A key that says what it sends (next episode, the one before): sent as it is, no page, no tab change. The same
+        // key twice within three seconds is the same press.
         if target.autoplay {
             if let l = lastFlick, l.id == target.item.id, Date().timeIntervalSince(l.at) < 3 { return }
             lastFlick = (target.item.id, Date())
+            tick()
+            if target.send != nil || target.item.stremioRef == nil { Thrower.sendPlain(self, target: target) }
+            else { Thrower.sendBest(self, item: target.item, velocity: .zero) }
+            return
         }
-        var t = Transaction(); t.disablesAnimations = true
-        // Choosing from the first frame, in the same quiet transaction: set by the screen once it was up, the change
-        // animated the host's inset and the new page's first layout with it, so the page grew in from a narrow column
-        // ("Choos / e on / the TV", CI tv-flicktap at 13 s).
-        // The screen as it is, held over the window while the page is built under it (ScreenVeil); the page lifts it in
-        // its first frame, so the fade can't be held by the build. Under it the pages beneath go out of sight at once.
-        ScreenVeil.cover()
-        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true; flickArrived = true }
+        // Anything else he tapped opens as its page on the tab he is on: the poster a card for his hand (brief 3.4). The
+        // page is pushed by the tab's own stack, so the system's Back returns to the exact place he came from.
+        titleAsk = target
+        titleAsks += 1
     }
+    // The title asked for, and each ask counted, for the showing tab's stack to push.
+    @ObservationIgnored var titleAsk: FlickTarget?
+    var titleAsks = 0
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
     // without an episode on its card still opens its page, which says "On the TV".
@@ -400,15 +394,20 @@ final class TVModel {
     // field opening the Apps page): resigning the responder in the same turn raced the field's own focus.
     // Settings was tab 9; it sits behind a gear on Status now (Richard, 2026-11-11): asked for as tab 9 (a link, the build's
     // shots, the tab he last left it on), it's Status with Settings pushed.
-    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t == 9 ? 5 : t }() {
+    // Four tabs (2026-11-20, "never a more thing ever"): Watch 3, Remote 0, Music 2, Search 6. Apps (1, once 4) is a row on
+    // the Remote; Status (5) and Settings (9) are pages behind the lip's gear, pushed on the tab he is on.
+    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return [0, 2, 3, 6].contains(t) ? t : t == 1 || t == 4 ? 0 : 3 }() {
         didSet {
-            if tab == 9 { tab = 5; settingsAsked += 1; return }
+            if tab == 9 || tab == 5 { let box = tab == 5; tab = [0, 2, 3, 6].contains(oldValue) ? oldValue : 3; settingsBox = box; settingsAsked += 1; return }
+            if tab == 1 || tab == 4 { tab = 0; return }
             if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() }
         }
     }
     // Each ask for Settings (tab 9), for Status to push it.
     // A phone coming from a build with a Settings tab: Status is saved in its place, so Settings is pushed this once only.
-    var settingsAsked = { guard UserDefaults.standard.integer(forKey: "tab") == 9 else { return 0 }; UserDefaults.standard.set(5, forKey: "tab"); return 1 }()
+    var settingsAsked = { let t = UserDefaults.standard.integer(forKey: "tab"); guard t == 9 || t == 5 else { return 0 }; UserDefaults.standard.set(3, forKey: "tab"); return 1 }()
+    // Whether the ask was for the box's own page (once the Status tab) rather than Settings' first page.
+    @ObservationIgnored var settingsBox = UserDefaults.standard.integer(forKey: "tab") == 5
     var address: String { didSet { SavedAddress.save(address) } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?
