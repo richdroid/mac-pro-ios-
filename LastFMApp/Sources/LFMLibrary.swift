@@ -158,7 +158,7 @@ struct LibraryTab: View {
                                 .accessibilityLabel("\(e.rank). \(e.title)")
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
                 }
             }
         }
@@ -237,7 +237,7 @@ struct LibraryTab: View {
             HStack(spacing: S.gap) {
                 ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("loved|\(s.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(l.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                    Text(l.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
                     Text(l.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 8)

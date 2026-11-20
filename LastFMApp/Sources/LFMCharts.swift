@@ -428,7 +428,7 @@ struct ChartsTab: View {
                         .accessibilityLabel("\(e.rank). \(e.title)")
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
                 .animation(.smooth(duration: 0.35), value: n)
             }
             .padding(.horizontal, S.margin)

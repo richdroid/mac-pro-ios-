@@ -265,8 +265,9 @@ struct ArtView: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 0.5) }
+        // Square, as Zune's covers are (a corner of 3 pt at most); a round picture (his own) keeps its shape.
+        .clipShape(RoundedRectangle(cornerRadius: corner >= 40 ? corner : min(corner, S.square), style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: corner >= 40 ? corner : min(corner, S.square), style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 0.5) }
         .task(id: ref) {
             let had = image
             if let c = ArtStore.shared.cached(ref, px: px) {

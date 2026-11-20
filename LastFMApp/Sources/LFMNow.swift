@@ -108,8 +108,8 @@ struct TroubleNote: View {
         }
         .padding(.horizontal, S.inner).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Two lines in a capsule pinched at the ends; the cards' rounded rectangle (run 34).
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: S.corner, style: .continuous))
+        // A plain band, as flat as the rest: a note, not a control.
+        .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: S.square, style: .continuous))
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
@@ -180,7 +180,7 @@ struct NowHero: View {
                     let size: CGFloat = layout == .wide ? 110 : 84
                     MixName(text: s.artist, size: size, moving: !store.trouble)
                         .padding(.top, bandDrop(ceil(size * 1.2)) - S.pair)
-                        .id(s.artist).transition(.opacity)
+                        .id(s.artist)
                 }
             }
             .background { Color.clear.containerRelativeFrame(.vertical).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 } }
@@ -198,13 +198,12 @@ struct NowHero: View {
         } else {
             VStack(alignment: .leading, spacing: S.head) {
                 if titled { HubTitle(text: "listening", size: 72) }
-                // Before the very first answer: a record turning slowly on glass, never an empty box.
-                TimelineView(.animation(minimumInterval: 1 / 30)) { tl in
-                    Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.35))
-                        .frame(width: 120).rotationEffect(.degrees(tl.date.timeIntervalSinceReferenceDate * 40))
-                }
-                .frame(maxWidth: 400).aspectRatio(1, contentMode: .fit)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // Before the very first answer: a record turning slowly, never an empty box. (The symbol's own
+                // rotation, not a timeline worked out thirty times a second.)
+                Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.35))
+                    .frame(width: 120).symbolEffect(.rotate, options: .repeating)
+                    .frame(maxWidth: 400).aspectRatio(1, contentMode: .fit)
+                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: S.square, style: .continuous))
                 .padding(.horizontal, S.margin)
                 .accessibilityLabel("Waiting for your listening")
             }
@@ -272,11 +271,12 @@ struct NowHero: View {
                     Text("Played \(when(s.date))")
                 }
             }
-            .font(.subheadline.weight(.semibold))
+            // Zune's label: small bold capitals. Then the song large and light, the artist under it in weight.
+            .font(.caption.weight(.bold)).textCase(.uppercase).tracking(0.8)
             .foregroundStyle(.white.opacity(0.85))
             .padding(.bottom, S.pair)
-            Text(s.title).font(.system(.title, weight: .bold)).foregroundStyle(.white).lineLimit(2)
-            Text(s.artist).font(.title3).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
+            Text(s.title).font(.system(.largeTitle, weight: .light)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.8)
+            Text(s.artist).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
             if !s.album.isEmpty { Text(s.album).font(.body).foregroundStyle(S.soft).lineLimit(2) }
             // A line of its own, its place held so the page doesn't jump when it's known.
             if line {
@@ -503,7 +503,7 @@ struct RunRow: View {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: S.gap) {
                             VStack(alignment: .leading, spacing: S.pair / 2) {
-                                Text(newest.album).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                                Text(newest.album).font(.system(.title3)).foregroundStyle(.white).lineLimit(1)
                                 Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
                             }
                             .fixedSize()
@@ -511,7 +511,7 @@ struct RunRow: View {
                             Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).fixedSize()
                         }
                         VStack(alignment: .leading, spacing: S.pair / 2) {
-                            Text(newest.album).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                            Text(newest.album).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
                             Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(2)
                             Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.85)
                         }
@@ -546,7 +546,7 @@ struct TrackRow: View {
             HStack(spacing: S.gap) {
                 ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("recent|\(s.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                    Text(s.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
                     Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 8)

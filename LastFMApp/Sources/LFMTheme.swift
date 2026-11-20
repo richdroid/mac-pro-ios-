@@ -6,8 +6,10 @@ import UIKit
 import AppKit
 #endif
 
-// One scale for the whole app. Zune's spirit in Apple's grammar: very big, very thin lowercase titles that run off the
-// edge, bold lowercase section heads, numbers as the graphics, the cover's colours on a near-black ground.
+// One scale for the whole app, from real Zune and Windows Phone 7 (rotation-zune-2026-11-20): a near-black ground with
+// the colour in the covers; a type ramp of big steps where size and weight are the hierarchy (large light lowercase
+// names and heads, thin figures, small bold capitals for labels); everything hung from one left edge with no boxes
+// round it; square covers with tight gaps. Glass is kept for what iOS 26 puts in it and what he touches.
 enum S {
     // Spacing: one system, and nothing else anywhere (Richard, 2026-11-13: "spacing is bad rn").
     static let margin: CGFloat = 20      // a page's side inset
@@ -21,6 +23,8 @@ enum S {
     static let corner: CGFloat = 22      // cards
     static let art: CGFloat = 52         // a row's cover
     static let tile: CGFloat = 136       // a panorama's cover
+    static let square: CGFloat = 3       // a cover's corner: square, as Zune's are
+    static let mosaic: CGFloat = 4       // between the covers of a mosaic
     static let ground = Color(red: 0.035, green: 0.035, blue: 0.045)
     static let soft = Color.white.opacity(0.66)   // second lines (an artist under a title), never a footnote
     static let accent = Color(red: 1.0, green: 0.36, blue: 0.36)
@@ -113,9 +117,10 @@ struct SectionHead: View {
     var trailing: String? = nil
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(text).font(.system(.title2, weight: .bold)).foregroundStyle(.white)
+            // Zune's section name: large, light, lowercase, hung from the page's left edge.
+            Text(text.lowercased()).font(.system(.title, weight: .light)).foregroundStyle(.white.opacity(0.96)).lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 8)
-            if let trailing { Text(trailing).font(.system(.title3, weight: .light)).monospacedDigit().foregroundStyle(S.soft) }
+            if let trailing { Text(trailing).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
@@ -132,15 +137,18 @@ struct Figure: View {
             Text(value).font(.system(size: size, weight: .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
                 // One height whatever the shrink, so labels in a row of figures share a line.
                 .frame(height: ceil(size * 1.2), alignment: .bottom)
-            Text(label).font(.subheadline).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.85)
+            // What it counts, as Zune labels a figure: small bold capitals.
+            Text(label).textCase(.uppercase).font(.caption.weight(.bold)).tracking(0.6).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.75)
         }
         .accessibilityElement(children: .combine)
     }
 }
 
 extension View {
+    // What was a glass card is a plain block hung from the page's left edge, under its head: Zune boxes nothing, and
+    // some forty panes of glass each sampling the ground were the app's heaviest drawing (run 39 review, fault 8).
     func card(_ radius: CGFloat = S.corner) -> some View {
-        self.padding(S.inner).frame(maxWidth: .infinity, alignment: .leading).glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        self.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -202,7 +210,7 @@ struct Backdrop: View {
                 .rotationEffect(.degrees(-3))
                 .scaleEffect(1.06)
                 .position(x: g.size.width / 2, y: g.size.height * 0.36)
-                .opacity(0.78)
+                .opacity(0.62)
             }
             LinearGradient(stops: [.init(color: .black.opacity(0.05 + dim), location: 0), .init(color: .black.opacity(0.45 + dim), location: 0.55), .init(color: .black.opacity(0.82), location: 1)],
                            startPoint: .top, endPoint: .bottom)
@@ -234,32 +242,25 @@ struct Backdrop: View {
     }
 }
 
-// Page content fades out under a tab bar that runs across the foot (open upright), and under the clock at the top, so no
-// word reads through either; elsewhere the bars are on the side and nothing is masked.
+// Page content fades out under the clock at the top, so no word reads through it: the ground's colour drawn over the
+// content there, not a mask (two full-page masks were an off-screen pass each, every frame; run 39 review, fault 8).
+// At the foot the system's own glass tab bar floats over the page, as in every iOS 26 app.
 struct BarFade: ViewModifier {
-    @State private var bottom: CGFloat = 0
-    @State private var top: CGFloat = 0
     func body(content: Content) -> some View {
-        content
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottom = $0 }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { top = $0 }
-            .mask {
-                VStack(spacing: 0) {
-                    if top > 30 {
-                        Color.clear.frame(height: max(0, top - 18))
-                        LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom).frame(height: 18)
-                    }
-                    Color.black
-                    if bottom > 40 {
-                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 18)
-                        Color.clear.frame(height: bottom)
-                    }
+        content.overlay {
+            GeometryReader { g in
+                // From the very top of the screen, wherever this page begins (under the bars or below them).
+                let top = max(g.safeAreaInsets.top, g.frame(in: .global).minY)
+                if top > 30 {
+                    LinearGradient(stops: [.init(color: S.ground, location: 0), .init(color: S.ground.opacity(0.9), location: 0.55), .init(color: S.ground.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: top + 10).offset(y: -g.frame(in: .global).minY)
                 }
-                .ignoresSafeArea()
             }
+            .allowsHitTesting(false)
+        }
     }
 }
-
 // Where a cover tapped opens its page from, so the page grows out of it and shrinks back into it.
 private struct ZoomSpaceKey: EnvironmentKey { static let defaultValue: Namespace.ID? = nil }
 extension EnvironmentValues {
@@ -301,14 +302,17 @@ extension View {
     }
 }
 
-// A press with weight: what's under the finger sinks a little and darkens, and springs back with a small overshoot when
-// let go, so a card feels like a thing pressed rather than a picture tapped.
+// Zune's tilt: what's under the finger tips back in three dimensions and sinks a little, and springs back with a small
+// overshoot when let go. The answer to a press is the tilt, never a change of colour; the weight is in the press, none
+// in the drag.
 struct Press: ButtonStyle {
     var depth: CGFloat = 0.965
+    @Environment(\.accessibilityReduceMotion) private var still
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? depth : 1)
-            .brightness(configuration.isPressed ? -0.08 : 0)
+            .rotation3DEffect(.degrees(configuration.isPressed && !still ? 5 : 0), axis: (x: 1, y: -0.5, z: 0), perspective: 0.4)
+            .opacity(configuration.isPressed && still ? 0.8 : 1)
             .animation(configuration.isPressed ? .easeOut(duration: 0.1) : .spring(response: 0.34, dampingFraction: 0.52), value: configuration.isPressed)
     }
 }
@@ -371,7 +375,9 @@ enum LaunchLog {
         if late { total.late += 1; second.late += 1; total.missed += missed; second.missed += missed }
         total.longest = max(total.longest, gap); second.longest = max(second.longest, gap)
         guard now - mark >= 1 else { return }
-        lines.append(String(format: "t %5.1f frames %3d late %2d missed %3d longest_ms %4.0f", now - began, second.frames, second.late, second.missed, second.longest * 1000))
+        // (pager: how many times a pivot told its names where it is in this second; in a drag it should match the frames.)
+        lines.append(String(format: "t %5.1f frames %3d late %2d missed %3d longest_ms %4.0f pager %3d", now - began, second.frames, second.late, second.missed, second.longest * 1000, PagerMotion.moves))
+        PagerMotion.moves = 0
         second = (0, 0, 0, 0); mark = now
         let head = String(format: "total seconds %.1f frames %d late %d missed %d longest_ms %.0f interval_ms %.1f", now - began, total.frames, total.late, total.missed, total.longest * 1000, interval * 1000)
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("hitches.txt")

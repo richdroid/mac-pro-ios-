@@ -225,7 +225,7 @@ struct ErasSection: View {
             HStack(spacing: S.gap) {
                 ArtView(ref, px: 156, corner: 6).frame(width: S.art).zoomSource("era|\(e.from)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(e.artist).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                    Text(e.artist).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
                     Text("\(monthShort(e.from)) – \(monthShort(e.to))").font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
                 }
                 Spacer(minLength: 8)
@@ -256,7 +256,7 @@ struct ErasSection: View {
                 .padding(S.inner)
             }
             .frame(height: 220)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
         }
         .accessibilityElement(children: .combine)
     }
@@ -331,8 +331,8 @@ struct RecordsSection: View {
                 .padding(S.inner)
             }
             .frame(width: 250, height: 250)
-            .clipShape(RoundedRectangle(cornerRadius: S.corner, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: S.corner, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 0.5) }
+            .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: S.square, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 0.5) }
         }
         .accessibilityElement(children: .combine)
     }

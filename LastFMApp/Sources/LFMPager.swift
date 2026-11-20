@@ -1,16 +1,10 @@
 import SwiftUI
 
-// Zune's two ways across, in Apple's grammar (Richard, 2026-11-14: "emulate the windows phone app layout like swipe
-// right and shit on tabs where that makes sense", and "there's not enough friction").
-// - A panorama: a hub's sections side by side, the next one peeking at the far edge, the hub's huge title behind them
-//   sliding at a fraction of their speed so where he is reads in the title's place; each section's own header moves
-//   with its section.
-// - A pivot: sibling views of one thing (a chart's stretches, the library's shelves), their names in large light type
-//   across the top; the one he's on leads at the margin, the next ones follow dimmed and run off the edge, and slide
-//   along as he swipes.
-// Both land one section per swipe and snap to it (view-aligned, one at a time), bounce at their ends, and answer the
-// landing with a haptic (a snap for a panorama's section, a tick for a pivot, the app's shared words). They only live at
-// a tab's root, where there's no Back to fight; pushed pages keep the system's edge swipe.
+// Zune's pivot, in Apple's grammar: sibling views of one thing (a chart's stretches, the library's shelves, the sections
+// of his own page) side by side, their names in large light type across the top. One page per swipe with the system's
+// own paging, a bounce at the ends, a tick as it lands. The names follow his finger at their own rate. Pivots only
+// live at a tab's root, where there's no Back to fight; pushed pages keep the system's edge swipe.
+// (It was also a panorama once; he called that "almost impossible to use" on 2026-11-18 and every use is a pivot.)
 
 struct Panel: Identifiable {
     let id: Int
@@ -21,22 +15,27 @@ struct Panel: Identifiable {
     }
 }
 
-// Where the pager is, read only by the title and the headers, so the panels aren't worked out again as it moves.
+// Where the pager is, read only by the names, so the pages aren't worked out again as it moves.
 @MainActor @Observable final class PagerMotion {
     var x: CGFloat = 0
-    var lifts: [Int: CGFloat] = [:]
+    // How many times any pager told its names where it is, for the build's hitch log: proof the names are driven every
+    // frame of a drag.
+    @ObservationIgnored static var moves = 0
     // How many sections across the pager is (1.0 = resting on the second), kept beside x for the opening placement.
     var f: CGFloat = 0
 }
 
 struct Pager: View {
-    enum Look { case panorama, pivot }
+    enum Look { case pivot }
     let look: Look
     var title: String? = nil
     let panels: [Panel]
     @Binding var page: Int
     let top: Int
     var accessory: AnyView? = nil
+    // The accessory's height, said by who gives it (a row of 44 pt controls): the pages' top inset is known in the
+    // first layout, never measured a frame late.
+    var accessoryHeight: CGFloat = 44
     var locked = false
     @State private var motion: PagerMotion
     @State private var position: Int?
@@ -46,13 +45,13 @@ struct Pager: View {
     @State private var placed = false
     // The scroll's phase, so nothing moves the pager while his finger or a fling is on it.
     @State private var phase: ScrollPhase = .idle
-    // The page was set by the pager itself (a landing), not asked for from outside: no correction follows it.
-    @State private var selfSet = false
+    // The page the pager set itself as it landed (not asked for from outside): no correction follows that change.
+    @State private var selfPage: Int?
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
 
-    init(_ look: Look, title: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, panels: [Panel]) {
+    init(_ look: Look, title: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, accessoryHeight: CGFloat = 44, panels: [Panel]) {
         self.look = look; self.title = title; self.panels = panels; _page = page; self.top = top
-        self.accessory = accessory; self.locked = locked
+        self.accessory = accessory; self.accessoryHeight = accessoryHeight; self.locked = locked
         _position = State(initialValue: page.wrappedValue)
         let start = panels.firstIndex { $0.id == page.wrappedValue } ?? 0
         self.start = start
@@ -65,82 +64,52 @@ struct Pager: View {
 
     var body: some View {
         GeometryReader { g in
-            let w = g.size.width
-            // The bars above and below (the clock; the tab bar across the foot open upright): the sections scroll on under
-            // them, faded there by the page's BarFade, as a single page does, never cut off at their edge.
+            let pw = max(g.size.width, 1)
+            // The bars above and below (the clock; the tab bar across the foot open upright): the pages run on under
+            // them. Above, they pass under the names, into a fade drawn over them in the ground's own colour: no mask,
+            // which cost an off-screen pass of the whole pager every frame (run 39 review, fault 8).
             let bars = (top: g.safeAreaInsets.top, bottom: g.safeAreaInsets.bottom)
-            let peek: CGFloat = look == .panorama ? min(max((w * 0.05).rounded(), 22), 40) : 0  // 24 pt folded: the peek hints, the content keeps its width (review 2026-11-14, item 6)
-            let pw = max(w - peek, 1)
-            let titleSize = titleFont(w)
-            let headSize = headFont(pw)
+            let nameSize = PivotHeaders.size(panels.count, k)
+            let head = bars.top + S.head + ceil(nameSize * 1.25) + (accessory == nil ? 0 : S.head + accessoryHeight)
             ZStack(alignment: .topLeading) {
-                if look == .panorama, let title {
-                    PanoramaTitle(text: title, size: titleSize, small: Self.eyebrow, motion: motion, pw: pw, count: panels.count)
-                        .padding(.top, bars.top)
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                    if look == .pivot {
-                        PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw,
-                                     current: panels.firstIndex { $0.id == page } ?? 0) { i in
-                            withAnimation(.snappy(duration: 0.4)) { position = panels[i].id }
-                        }
-                        // The names run on to the right and fade out before the page's edge: never a word cut at the
-                        // side bar or lying under the camera (review 2026-11-14, item 7).
-                        .mask { HStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 44); Color.clear.frame(width: 4) } }
-                        .padding(.top, bars.top + S.head)
-                        if let accessory { accessory.padding(.top, S.head) }
-                    }
-                    ScrollViewReader { reader in
+                ScrollViewReader { reader in
                     ScrollView(.horizontal) {
-                        Group {
-                            if look == .pivot {
-                                // Every section built at once, at rest: lazily, a section was built whole on its first reveal,
-                                // mid-drag (run 39: 180 and 720 ms with no frame on the first swipe to a stretch).
-                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars, pw).frame(width: pw).id(p.id) } }
-                            } else {
-                                // Each section held to its own width: a row of covers running off one section's edge stopped showing at
-                                // the leading edge of the next (run 25: "Cassio V" from lately at the side of your story).
-                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars, pw).frame(width: pw).clipped().id(p.id) } }
-                            }
-                        }
-                        .scrollTargetLayout()
+                        // Every section built at once, at rest: lazily, a section was built whole on its first reveal,
+                        // mid-drag (run 39: 180 and 720 ms with no frame on the first swipe to a stretch).
+                        HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, head, bars.bottom, pw).frame(width: pw).id(p.id) } }
+                            .scrollTargetLayout()
                     }
                     // The system's own paging: a light flick turns the page (Richard, 2026-11-15: "too much like weight
-                    // with swipes"; view-aligned snapping held one page at a time and wanted a long drag). Every use is a
-                    // pivot now, a page the pager's full width, so a page is exactly one section.
+                    // with swipes").
                     .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $position, anchor: .leading)
-                    // Laid out on the section it opens to in its first frame: across the row by the section's share, which
-                    // with equal widths and the peek as the trailing margin is exactly that section's offset.
+                    // Laid out on the section it opens to in its first frame.
                     .defaultScrollAnchor(UnitPoint(x: panels.count > 1 ? CGFloat(start) / CGFloat(panels.count - 1) : 0, y: 0))
-                    // The last section comes to rest at the margin like the others, not pushed back by the peek.
-                    .contentMargins(.trailing, peek, for: .scrollContent)
                     .scrollIndicators(.hidden)
                     .scrollDisabled(locked)
-                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, v in motion.x = v; motion.f = v / pw }
-                    // The landing is decided as his finger lifts (from where the page is and which way it was flung), so
-                    // the page, the lit name, the names' own scroll and the tick all move together with the page, not
-                    // after it has come to rest (run 39: the names swapped only as the page landed). At rest, checked.
+                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, v in motion.x = v; motion.f = v / pw; PagerMotion.moves += 1 }
+                    // The landing is decided as his finger lifts (from where the page is and how hard it was thrown), so
+                    // the page, the lit name and the tick all move together with the page, not after it has come to
+                    // rest (run 39: the names swapped only as the page landed). At rest, checked.
                     .onScrollPhaseChange { _, new, context in
                         phase = new
                         if new == .decelerating {
                             let f = motion.f, v = context.velocity?.dx ?? 0
-                            let i = v > 0.2 ? f.rounded(.up) : v < -0.2 ? f.rounded(.down) : f.rounded()
+                            let i = v > 250 ? f.rounded(.up) : v < -250 ? f.rounded(.down) : f.rounded()
                             land(Int(i))
                         } else if new == .idle {
                             land(Int((motion.x / pw).rounded()))
                         }
                     }
                     // Opened on a section other than the first (a link, a pose): put there before anything shows it
-                    // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20: every
-                    // posed section showed the first).
+                    // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20).
                     .task { await place(reader) }
-                    // Asked to move from outside (a stretch chosen, a link): by position, and if the scroll hasn't got
-                    // there once the move has had time, put there directly, so the names and the page never disagree.
-                    // Only for a change from outside: one the pager made itself as it landed is never corrected, and
-                    // nothing is moved while a scroll is under way (run 39 review: a second quick swipe was thrown back).
+                    // Asked to move from outside (a name tapped, a stretch chosen, a link): by position, and if the scroll
+                    // hasn't got there once the move has had time, put there directly. Only for a change from outside:
+                    // one the pager made itself as it landed is never corrected, and nothing is moved while a scroll is
+                    // under way (run 39 review: a second quick swipe was thrown back).
                     .onChange(of: page) { _, p in
-                        if selfSet { selfSet = false; return }
+                        if p == selfPage { selfPage = nil; return }
                         guard let i = panels.firstIndex(where: { $0.id == p }) else { return }
                         if position != p { withAnimation(.snappy(duration: 0.4)) { position = p } }
                         Task { @MainActor in
@@ -148,69 +117,47 @@ struct Pager: View {
                             if page == p, phase == .idle, abs(motion.f - CGFloat(i)) > 0.02 { reader.scrollTo(p, anchor: .leading) }
                         }
                     }
-                    // A pivot's pages slide up under its names: faded there, not cut. A panorama's next section is a
-                    // hint at the far edge: it fades to nothing across the peek, so no half word or cut picture sits
-                    // there, nothing runs under the side bar, and the section left behind stops at the leading edge
-                    // (review 2026-11-14, item 5).
-                    .mask {
-                        VStack(spacing: 0) {
-                            // A soft fade, deep enough to read as one: at 12 pt "Show all 37" looked hard cut under the
-                            // pinned kinds (run 33).
-                            if look == .pivot { LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fade) }
-                            if look == .panorama {
-                                HStack(spacing: 0) {
-                                    Color.black
-                                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black.opacity(0.3), location: 0.2), .init(color: .clear, location: 0.85)],
-                                                   startPoint: .leading, endPoint: .trailing).frame(width: peek + 8)
-                                }
-                            } else { Color.black }
-                        }
-                    }
-                    }
-                    .padding(.top, look == .pivot ? S.pair : 0)
                 }
-                // Never wider than the display's width for it, whatever a title or a row of names would take.
-                .frame(minWidth: w, maxWidth: w, maxHeight: .infinity, alignment: .topLeading)
+                // The ground's colour over the top of the pages, solid behind the clock and the names and gone a little
+                // under them: what scrolls up fades out beneath the names.
+                LinearGradient(stops: [.init(color: S.ground, location: 0), .init(color: S.ground, location: (head - 26) / (head + 2)), .init(color: S.ground.opacity(0), location: 1)],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(width: pw, height: head + 2)
+                    .allowsHitTesting(false)
+                VStack(alignment: .leading, spacing: S.head) {
+                    PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw, size: nameSize,
+                                 current: panels.firstIndex { $0.id == page } ?? 0) { i in
+                        withAnimation(.snappy(duration: 0.4)) { position = panels[i].id }
+                    }
+                    if let accessory { accessory.frame(height: accessoryHeight) }
+                }
+                .padding(.top, bars.top + S.head)
+                .frame(width: pw, alignment: .leading)
             }
-            .ignoresSafeArea(.container, edges: .vertical)
         }
-        .sensoryFeedback(look == .pivot ? .tick : .snap, trigger: landed)
+        .ignoresSafeArea(.container, edges: .vertical)
+        .sensoryFeedback(.tick, trigger: landed)
         // The tab tapped again: back to the first section first, then to the top.
         .onChange(of: top) { _, _ in
             if let first = panels.first?.id, page != first { withAnimation(.snappy(duration: 0.45)) { position = first } }
         }
     }
 
-    // Each section scrolls on its own. A panorama's leaves room at its top for the title behind it, then its header.
-    private func panel(_ p: Panel, _ titleSize: CGFloat, _ headSize: CGFloat, _ bars: (top: CGFloat, bottom: CGFloat), _ pw: CGFloat) -> some View {
+    // Each section scrolls on its own, starting under the names and passing beneath them as it goes up.
+    private func panel(_ p: Panel, _ head: CGFloat, _ foot: CGFloat, _ pw: CGFloat) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 Color.clear.frame(height: 0).id("top")
-                VStack(alignment: .leading, spacing: 0) {
-                    if look == .panorama, !p.header.isEmpty || title != nil {
-                        // The first section sits under his name at its full size; the others under his name small, each
-                        // with its own name as large and thin as his (the same title, one per section).
-                        if title != nil { Color.clear.frame(height: p.header.isEmpty ? ceil(titleSize * 1.18) : ceil(Self.eyebrow * 1.5)) }
-                        if !p.header.isEmpty {
-                            Text(p.header).font(.system(size: headSize, weight: .thin)).tracking(-1.2).foregroundStyle(.white.opacity(0.94))
-                                .lineLimit(1).fixedSize()
-                                .padding(.leading, S.margin - 4).padding(.bottom, S.head)
-                                .accessibilityAddTraits(.isHeader)
-                        }
-                    }
-                    p.content
-                }
-                .padding(.top, look == .pivot ? Self.fade : title == nil ? S.head : 0)
-                .padding(.bottom, S.section)
+                p.content
+                    .padding(.top, S.head)
+                    .padding(.bottom, S.section)
+                    .frame(width: pw, alignment: .topLeading)
             }
-            .contentMargins(.top, look == .pivot ? 0 : bars.top, for: .scrollContent)
-            .contentMargins(.bottom, bars.bottom, for: .scrollContent)
+            .contentMargins(.top, head, for: .scrollContent)
+            .contentMargins(.bottom, foot, for: .scrollContent)
             .scrollIndicators(.hidden)
             .environment(\.pageWidth, pw)
             .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, v in
-                if look == .panorama, title != nil { motion.lifts[p.id] = v }
-            }
             .onChange(of: top) { _, _ in if page == p.id { withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } } }
             .task {
                 guard let a = Pose.anchor, page == p.id else { return }
@@ -229,10 +176,10 @@ struct Pager: View {
         for _ in 0..<80 {
             // Never against his finger: the first touch ends the placing.
             if phase != .idle { break }
+            if abs(motion.f - CGFloat(start)) < 0.02, motion.x > 0 { break }
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { reader.scrollTo(panels[start].id, anchor: .leading) }
             try? await Task.sleep(nanoseconds: 120_000_000)
-            if abs(motion.f - CGFloat(start)) < 0.02 { break }
         }
         placed = true
     }
@@ -241,111 +188,70 @@ struct Pager: View {
         guard placed || phase != .idle else { return }
         placed = true
         let id = panels[max(0, min(panels.count - 1, index))].id
-        if id != page { selfSet = true; page = id; landed += 1 }
-    }
-
-    // How deep a pivot's pages fade under its names; their content starts under it at rest.
-    static let fade: CGFloat = 24
-    // His name small, over every section but the first.
-    static let eyebrow: CGFloat = 22
-    // The title as large as the panorama's first section allows, from 88 pt, and always whole: a long name is set
-    // smaller until all of it fits, never run off an edge (Richard, 2026-11-14: his name cut at the side bar, then cut at
-    // the left as the panorama moved; "his name must never look broken").
-    private func titleFont(_ w: CGFloat) -> CGFloat {
-        guard let title else { return 0 }
-        let base = 88 * min(max(k, 0.9), 1.25)
-        return base * HubTitle.scale(title, base: base, room: w, least: 0.3)
-    }
-    // A section's own name: as thin and nearly as large, fitting its section.
-    private func headFont(_ pw: CGFloat) -> CGFloat {
-        let base = 56 * min(max(k, 0.9), 1.2)
-        let longest = panels.map(\.header).max { $0.count < $1.count } ?? ""
-        return base * HubTitle.scale(longest, base: base, room: pw, least: 0.5)
+        if id != page { selfPage = id; page = id; landed += 1 }
     }
 }
 
-// His name over a panorama. On the first section it is the title, huge and thin. As he moves on it doesn't slide away
-// and get cut (a name with its first letters gone reads as broken): it stays where it starts, whole, and settles into a
-// small line over the section's own title, so every section reads "his name, then where he is". It rises with the
-// section's scroll.
-private struct PanoramaTitle: View {
-    let text: String
-    let size: CGFloat
-    let small: CGFloat
-    let motion: PagerMotion
-    let pw: CGFloat
-    let count: Int
-    var body: some View {
-        let f = max(0, motion.x / pw)
-        let i0 = min(count - 1, Int(f.rounded(.down)))
-        let t = min(1, f - CGFloat(i0))
-        let lift = (motion.lifts[i0] ?? 0) * (1 - t) + (motion.lifts[min(i0 + 1, count - 1)] ?? 0) * t
-        // 0 on the first section, 1 from the second on.
-        let away = min(1, f)
-        let name = text.lowercased()
-        ZStack(alignment: .topLeading) {
-            Text(name)
-                .font(.system(size: size, weight: .thin)).tracking(-1.5)
-                .lineLimit(1).fixedSize()
-                .foregroundStyle(.white.opacity(0.94 * (1 - away)))
-                .scaleEffect(1 - away * (1 - small / size), anchor: .topLeading)
-                .offset(x: S.margin - 6 + 4 * away, y: 6 * away)
-                .accessibilityAddTraits(.isHeader)
-            Text(name)
-                .font(.system(size: small, weight: .regular))
-                .lineLimit(1).fixedSize()
-                .foregroundStyle(.white.opacity(0.66 * away))
-                .offset(x: S.margin - 2, y: 6)
-                .accessibilityHidden(true)
-        }
-        .offset(y: -lift)
-        .allowsHitTesting(false)
-    }
-}
-
-// A pivot's names across the top: the one he's on full white, the rest dimmed, every one of them a button that stays
-// where he can reach it. They used to slide so the current name sat at the margin and the ones passed faded to nothing,
-// which left no way back but a swipe and hid "all time" and "loved" off the edge (Richard, 2026-11-18: "its almost
-// impossible to use in its current state"). Now the row scrolls on its own to keep the name he's on in view, with the
-// one before it still showing at the left, and runs off the right edge with a fade when there are more.
+// A pivot's names across the top, the way Zune and Windows Phone set them: large and light, the one he's on in full
+// white, the rest dimmed and running off the right edge. They follow his finger every frame: each name lights as its
+// page comes across, and the row travels a name's width while the page travels a page, so the two move at different
+// rates (run 39: they waited for the page to stop, then jumped). Every name is a button, the one before the current
+// one stays in view at the left, and the row can be dragged on its own to reach the far ones (Richard, 2026-11-18:
+// names that left the screen made it "almost impossible to use").
 private struct PivotHeaders: View {
     let names: [String]
     let motion: PagerMotion
     let pw: CGFloat
+    let size: CGFloat
     let current: Int
     let choose: (Int) -> Void
-    @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
+    @State private var pos = ScrollPosition(edge: .leading)
+    static let gap: CGFloat = 20
+    // Seven stretches at full size left most of them off the screen folded; past four names they're set smaller.
+    static func size(_ count: Int, _ k: CGFloat) -> CGFloat { (count > 4 ? 34 : 46) * min(max(k, 0.9), 1.2) }
     var body: some View {
-        // Seven stretches at 40 pt left "week month 3 month" cut at the camera folded; past four names they're set
-        // smaller so most of them show at once (review, run 27).
-        let size = (names.count > 4 ? 32 : 40) * min(max(k, 0.9), 1.2)
-        let lead = S.margin - 3
         let f = max(0, min(CGFloat(names.count - 1), motion.f))
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                // Each name follows its own margin-wide spacer, and the row is scrolled to the spacers: scrolled to a
-                // name, the name lay flush on the display's edge with no margin (run 27). Room after the last name lets
-                // the last two reach the left as the others do, never clamped into a half word ("ing lately", run 27).
-                HStack(alignment: .firstTextBaseline, spacing: 22 - lead) {
-                    ForEach(names.indices, id: \.self) { i in
-                        let near = max(0, 1 - abs(CGFloat(i) - f))
-                        Color.clear.frame(width: lead, height: 1).id(i)
-                        Button { choose(i) } label: {
-                            Text(names[i]).font(.system(size: size, weight: .light)).tracking(-0.8).fixedSize()
-                                .foregroundStyle(.white.opacity(0.42 + 0.56 * near))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(i == current ? .isSelected : [])
+        let rests = Self.rests(names, size)
+        ScrollView(.horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: Self.gap) {
+                ForEach(names.indices, id: \.self) { i in
+                    let near = max(0, 1 - abs(CGFloat(i) - f))
+                    Button { choose(i) } label: {
+                        Text(names[i]).font(.system(size: size, weight: .light)).tracking(-0.8).fixedSize()
+                            .foregroundStyle(.white)
+                            .opacity(0.4 + 0.6 * near)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(i == current ? [.isSelected, .isHeader] : [])
                 }
-                .padding(.trailing, max(48, pw * 0.65))
             }
-            .scrollIndicators(.hidden)
-            .scrollClipDisabled(false)
-            .onAppear { proxy.scrollTo(max(0, current - 1), anchor: .leading) }
-            .onChange(of: current) { _, i in withAnimation(.snappy(duration: 0.35)) { proxy.scrollTo(max(0, i - 1), anchor: .leading) } }
+            .padding(.leading, S.margin - 2)
+            // Room after the last name, so the last ones reach the left as the others do.
+            .padding(.trailing, max(48, pw * 0.7))
         }
+        .scrollPosition($pos)
+        .scrollIndicators(.hidden)
         .frame(height: ceil(size * 1.25))
+        // The names run on to the right and fade out before the page's edge: never a word cut at the side bar.
+        .overlay(alignment: .trailing) {
+            LinearGradient(colors: [S.ground.opacity(0), S.ground], startPoint: .leading, endPoint: .trailing).frame(width: 40).allowsHitTesting(false)
+        }
+        .onAppear { pos.scrollTo(x: Self.at(f, rests)) }
+        .onChange(of: f) { _, f in pos.scrollTo(x: Self.at(f, rests)) }
+        .onChange(of: size) { _, _ in pos.scrollTo(x: Self.at(f, Self.rests(names, size))) }
+    }
+    // Where the row rests for each page: scrolled so the name before the current one leads at the margin (the first two
+    // pages rest at the row's start).
+    static func rests(_ names: [String], _ size: CGFloat) -> [CGFloat] {
+        var starts: [CGFloat] = [], x: CGFloat = 0
+        for n in names { starts.append(x); x += textWidth(n, size: size, tracking: -0.8, weight: -0.4) + gap }
+        return names.indices.map { $0 == 0 ? 0 : starts[$0 - 1] }
+    }
+    // Between two pages, between their two rests.
+    static func at(_ f: CGFloat, _ rests: [CGFloat]) -> CGFloat {
+        guard !rests.isEmpty else { return 0 }
+        let i = max(0, min(rests.count - 1, Int(f.rounded(.down)))), j = min(rests.count - 1, i + 1)
+        return rests[i] + (rests[j] - rests[i]) * (f - CGFloat(i))
     }
 }

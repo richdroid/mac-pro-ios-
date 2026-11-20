@@ -119,6 +119,9 @@ struct Profile: Sendable, Equatable {
         // His picture at the size his page draws it.
         if let p = profile { ArtStore.shared.warm(ArtRef(artist: p.name, album: "avatar", url: p.image), px: [240], backdrop: false) }
         shown = hero
+        // The covers of today's wall, decoded off the main thread while the first frame is made, so they're there in it.
+        let wall = ArtWall.gather(recent)
+        Task.detached(priority: .userInitiated) { for r in wall { ArtStore.shared.warm(r, px: [156], backdrop: false) } }
         // The build's mock makes its listening history off the main thread, while the first frame draws.
         if LastFM.shared.mock { Task.detached(priority: .userInitiated) { _ = MockLastFM.shared.profileName } }
         sync.onProgress = { [weak self] in self?.workInsights() }

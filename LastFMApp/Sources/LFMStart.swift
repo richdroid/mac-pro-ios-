@@ -11,12 +11,14 @@ struct StartTab: View {
     @Environment(\.paneLayout) private var pane
     @Environment(\.horizontalSizeClass) private var size
     @State private var page = min(max(Pose.panel, 0), 3)
-    @State private var sideways = false
     private var store: Store { Store.shared }
     private var sync: HistorySync { HistorySync.shared }
     private var links: Links { Links.shared }
     var body: some View {
-        Group {
+        // The shape of the room read in the pass that lays it out (it was measured after, so the first frame after a
+        // turn was the upright layout).
+        GeometryReader { g in
+            let sideways = g.size.width > g.size.height * 1.15
             if pane {
                 FoldSplit {
                     Page(top: top) {
@@ -34,7 +36,6 @@ struct StartTab: View {
                       panels: [Panel(0, ProfileHead.name.lowercased()) { stats(wide: size == .regular && !sideways, strip: true) }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
             }
         }
-        .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
         .onChange(of: links.panel) { _, p in if let p { page = p; links.panel = nil } }
     }
 
@@ -70,7 +71,9 @@ struct StartTab: View {
     // What's on, or nothing pretending to be: today's figures and the last song. Then the day and every scrobble.
     private func nowPanel(_ layout: NowHero.Layout) -> Panel {
         let playing = store.shown.map(\.nowPlaying) ?? true
-        return Panel(1, playing ? "now playing" : "today") {
+        // One name, playing or not: "now playing" over silence made no sense to him (2026-11-13), and a name that
+        // flipped between polls re-laid the row of names (run 39 review, fault 7). What's on says so in its own label.
+        return Panel(1, "today") {
             VStack(alignment: .leading, spacing: S.section) {
                 // First, as on his own page: under the hero it sat below the first screen folded (run 34).
                 // Open flat (.stage) his page's note is on screen in the left pane already: said once, not twice (run 36).
@@ -88,6 +91,12 @@ struct StartTab: View {
                 }
                 DaySection(lead: !playing).id("day")
                 RecentSection(skipFirst: !playing && !store.recent.isEmpty)
+            }
+            // Zune's Now Playing wall: his own covers behind what's on, in the playing cover's colour.
+            .background(alignment: .top) {
+                if playing, let s = store.shown {
+                    ArtWall(tint: (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.artist + s.album)).vivid.color)
+                }
             }
         }
     }
@@ -134,7 +143,7 @@ struct NowStrip: View {
         if let s = store.shown {
             Button(action: go) {
                 HStack(spacing: S.gap) {
-                    ArtView(s.art, px: 156, corner: 6).frame(width: S.art, height: S.art)
+                    ArtView(s.art, px: 156, corner: 0).frame(width: 64, height: 64)
                     VStack(alignment: .leading, spacing: S.pair / 2) {
                         HStack(spacing: 6) {
                             if s.nowPlaying, !store.trouble {
@@ -149,15 +158,14 @@ struct NowStrip: View {
                                 Text("Played \(when(s.date))")
                             }
                         }
-                        .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
-                        Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
+                        .font(.caption.weight(.bold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                        Text(s.title).font(.system(.title3, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
                 }
-                .padding(.vertical, 10).padding(.horizontal, 12)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                // Flat, hung from the page's edge like everything under it: a line of the page, not a pane of glass.
                 .contentShape(Rectangle())
             }
             .buttonStyle(Press())

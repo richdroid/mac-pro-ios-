@@ -254,8 +254,8 @@ struct RisingCard: View {
                     .padding(S.inner)
                 }
                 .frame(height: 300)
-                .clipShape(RoundedRectangle(cornerRadius: S.corner, style: .continuous))
-                .overlay { RoundedRectangle(cornerRadius: S.corner, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 0.5) }
+                .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: S.square, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 0.5) }
                 .zoomSource("rising|\(r.artist)")
                 }
                 .accessibilityElement(children: .combine)

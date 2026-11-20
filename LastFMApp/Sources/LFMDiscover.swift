@@ -137,26 +137,23 @@ struct DiscoverTab: View {
                     .glassEffect(.regular.interactive(), in: Capsule())
             }
             .frame(maxWidth: .infinity).padding(.vertical, S.section).padding(.horizontal, S.inner)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: S.corner, style: .continuous))
+            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: S.square, style: .continuous))
             .padding(.horizontal, S.margin)
         } else if m.recs.isEmpty {
             // The first time only: a record turning on glass while the first list is found.
             VStack(spacing: S.inner) {
-                TimelineView(.animation(minimumInterval: 1 / 30)) { tl in
-                    Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.4))
-                        .frame(width: 72).rotationEffect(.degrees(tl.date.timeIntervalSinceReferenceDate * 40))
-                }
+                Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.4))
+                    .frame(width: 72).symbolEffect(.rotate, options: .repeating)
                 Text(HistorySync.shared.complete || m.working ? "Finding artists like yours" : "Ready once your history is read")
                     .font(.body).foregroundStyle(.white)
             }
             .frame(maxWidth: .infinity).padding(.vertical, S.section)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: S.corner, style: .continuous))
             .padding(.horizontal, S.margin)
         } else {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "artists for you")
                 let mixed = m.recs.contains { $0.plays > 0 }
-                VStack(spacing: S.gap) { ForEach(m.recs) { r in ArtistRec(r: r, say: mixed) } }
+                VStack(spacing: S.figures) { ForEach(m.recs) { r in ArtistRec(r: r, say: mixed) } }
             }
             .padding(.horizontal, S.margin)
         }
@@ -208,7 +205,7 @@ struct TrackRec: View {
                 HStack(spacing: S.gap) {
                     ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("try|\(s.id)")
                     VStack(alignment: .leading, spacing: S.pair / 2) {
-                        Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                        Text(s.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
                         Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
                     }
                     Spacer(minLength: 0)

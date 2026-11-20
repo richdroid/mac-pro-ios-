@@ -59,12 +59,10 @@ struct MoveMark: View {
     }
 }
 
-// New to a chart or to him: white words on glass, never a solid white block.
+// New to a chart or to him: small bold capitals in white, as Zune marks a thing (never a solid white block).
 struct NewMark: View {
     var body: some View {
-        Text("new").font(.caption.weight(.bold)).foregroundStyle(.white).fixedSize()
-            .padding(.horizontal, 7).padding(.vertical, 2)
-            .glassEffect(.regular, in: Capsule())
+        Text("New").textCase(.uppercase).font(.caption2.weight(.heavy)).tracking(0.8).foregroundStyle(.white).fixedSize()
             .accessibilityLabel("New")
     }
 }
@@ -74,7 +72,7 @@ struct RankShade: View {
     var corner: CGFloat = 10
     var body: some View {
         RadialGradient(colors: [.black.opacity(0.62), .black.opacity(0.3), .clear], center: .bottomLeading, startRadius: 0, endRadius: 96)
-            .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: min(corner, S.square), style: .continuous))
             .allowsHitTesting(false)
     }
 }
@@ -91,7 +89,7 @@ struct EntryRow: View {
             HStack(spacing: S.gap) {
                 if showRank {
                     VStack(spacing: S.pair) {
-                        Text("\(e.rank)").font(.system(size: e.rank < 100 ? 22 : 17, weight: .light)).monospacedDigit().foregroundStyle(.white)
+                        Text("\(e.rank)").font(.system(size: e.rank < 100 ? 28 : 19, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                             .lineLimit(1).minimumScaleFactor(0.6)
                         MoveMark(move: e.move)
                     }
@@ -100,7 +98,7 @@ struct EntryRow: View {
                 ArtView(e.art, px: 156, corner: 6).frame(width: S.art).zoomSource("\(context)|\(e.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
                     // Two lines before a name is ever cut short (review 2026-11-14, item 6).
-                    Text(e.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2).multilineTextAlignment(.leading)
+                    Text(e.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2).multilineTextAlignment(.leading)
                     if e.kind != .artists { Text(e.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2) }
                     else if let s = e.secs { Text(duration(s)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
                     if let peak, peak > 0, e.plays > 0 {
@@ -118,7 +116,7 @@ struct EntryRow: View {
                 Spacer(minLength: 8)
                 // His plays, the number alone (the list says what it counts); sorted by a date, the date leads.
                 VStack(alignment: .trailing, spacing: S.pair / 2) {
-                    Text(trailing ?? number(e.plays)).font(.body.weight(.medium)).monospacedDigit().foregroundStyle(.white)
+                    Text(trailing ?? number(e.plays)).font(.system(.title3, weight: .light)).monospacedDigit().foregroundStyle(.white)
                     if trailing != nil, e.plays > 0 { Text(plays(e.plays)).font(.caption).monospacedDigit().foregroundStyle(S.soft) }
                 }
                 .fixedSize()
@@ -168,7 +166,7 @@ struct Panorama: View {
                     ArtView(e.art, px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(e.id)")
                     if ranks {
                         RankShade().frame(width: S.tile, height: S.tile)
-                        Text("\(k + 1)").font(.system(size: 64, weight: .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
+                        Text("\(k + 1)").font(.system(size: 72, weight: .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
                             .offset(x: -2, y: 18)
                     }
                 }

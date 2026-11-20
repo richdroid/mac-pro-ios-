@@ -59,7 +59,9 @@ struct MixName: View {
 struct RotationMosaic: View {
     // Seeded from the list kept last time, so the mosaic is in its place in the first frame and never slides in above
     // cards already on screen (run 39: "heavy rotation" faded in and pushed the page down 0.6 s after opening).
-    @State private var albums: [Entry] = RotationMosaic.kept()
+    @State private var albums: [Entry] = RotationMosaic.first
+    // Read from the disk once a launch (as a state's first value it was read again every time his page was made).
+    private static let first: [Entry] = kept()
     private var store: Store { Store.shared }
     private var sync: HistorySync { HistorySync.shared }
     var body: some View {
@@ -69,7 +71,7 @@ struct RotationMosaic: View {
                     SectionHead(text: "heavy rotation", trailing: "7 days")
                     // Laid out from the width it's given, in the same pass: it used to measure its own width, which
                     // could only grow, and after a turn of the phone the whole page stayed cut off at the left (run 39).
-                    MosaicLayout(gap: S.gap / 2) {
+                    MosaicLayout(gap: S.mosaic) {
                         bigTile(top)
                         ForEach(1..<9, id: \.self) { k in
                             if k < albums.count { smallTile(albums[k], rank: k + 1) } else { Color.clear }
@@ -111,7 +113,7 @@ struct RotationMosaic: View {
             ZStack(alignment: .bottomLeading) {
                 ArtView(e.art, px: 600, corner: 12).zoomSource("rotation|\(e.id)")
                 LinearGradient(stops: [.init(color: .clear, location: 0.35), .init(color: .black.opacity(0.72), location: 1)], startPoint: .top, endPoint: .bottom)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(number(e.plays)).font(.system(size: 34, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                     Text(e.album).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
@@ -349,5 +351,55 @@ struct MixView: View {
         ring = list
         try? await Task.sleep(nanoseconds: 120_000_000)
         withAnimation(still ? nil : .easeOut(duration: 0.3)) { shown = true }
+    }
+}
+
+// MARK: - The wall
+
+// Zune's desktop Now Playing: a wall of covers from his own listening, small square tiles edge to edge, dimmed to one
+// tint (the colour of the cover on now), the song over it. It lies behind the top of today's page and scrolls away with
+// it. Drawn once into one picture (it is still: nothing here moves by the frame), from covers already on the phone.
+struct ArtWall: View {
+    let tint: Color
+    @Environment(\.pageWidth) private var width
+    // His week's albums, then what he's played lately: gathered once a launch, there in the first frame.
+    private static let covers: [ArtRef] = gather(Store.shared.recent)
+    static func gather(_ recent: [Scrobble]) -> [ArtRef] {
+        var seen = Set<String>(), out: [ArtRef] = []
+        for r in recent.prefix(200).map(\.art) where !r.album.isEmpty && seen.insert(r.key).inserted {
+            out.append(r)
+            if out.count == 24 { break }
+        }
+        return out
+    }
+    var body: some View {
+        let refs = Self.covers
+        if refs.count >= 6 {
+            let cols = width >= 560 ? 8 : 5
+            let side = (width / CGFloat(cols)).rounded(.up)
+            // As deep as what's on: the cover and the song's words under it folded; the cover beside its words with room.
+            let depth: CGFloat = width >= 560 ? 440 : min(width - S.margin * 2, 440) + 300
+            let rows = Int((depth / side).rounded(.up))
+            VStack(spacing: 0) {
+                ForEach(0..<rows, id: \.self) { r in
+                    HStack(spacing: 0) {
+                        // Each row starts further along the list, so a short list doesn't stack the same cover in a column.
+                        ForEach(0..<cols, id: \.self) { c in ArtView(refs[(r * (cols + 2) + c) % refs.count], px: 156, corner: 0).frame(width: side, height: side) }
+                    }
+                }
+            }
+            .saturation(0)
+            .colorMultiply(tint)
+            .opacity(0.42)
+            // Darker toward its foot, where the song's words lie over it, and gone into the ground at the end.
+            .overlay { LinearGradient(stops: [.init(color: S.ground.opacity(0.3), location: 0), .init(color: S.ground.opacity(0.62), location: 0.55), .init(color: S.ground, location: 1)], startPoint: .top, endPoint: .bottom) }
+            .drawingGroup()
+            .frame(width: width, height: side * CGFloat(rows), alignment: .topLeading)
+            .clipped()
+            // From where the pivot's names fade the page out.
+            .offset(y: -S.head - 26)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 }
