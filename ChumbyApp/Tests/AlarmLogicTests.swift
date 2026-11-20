@@ -487,5 +487,22 @@ do {
     expect(r.vol == 12 && r.hold == nil, "with nothing held, the reading is shown")
 }
 
+// MARK: A Stop or Snooze the Chumby confirmed holds against old copies of its status
+section("ring readings after a Stop or Snooze")
+do {
+    let t0 = now
+    func sec(_ x: Double) -> Date { t0.addingTimeInterval(x) }
+    let ringing = "r\tWork\tBeep", snoozed = "s\tWork\tBeep\t1790000000"
+    expect(RingReading.believed(ringing, shown: "", takenAt: sec(0), stoppedAt: nil, snoozedAt: nil) == ringing, "with nothing confirmed, a ring is a ring")
+    expect(RingReading.believed(ringing, shown: "", takenAt: sec(-3), stoppedAt: t0, snoozedAt: nil) == "", "a copy taken before a confirmed Stop never rings again")
+    expect(RingReading.believed(snoozed, shown: ringing, takenAt: sec(1), stoppedAt: t0, snoozedAt: nil) == "", "nor one that says snoozed, taken as the Chumby noted the Stop")
+    expect(RingReading.believed(ringing, shown: "", takenAt: sec(60), stoppedAt: t0, snoozedAt: nil) == ringing, "the next alarm, a minute after a Stop, rings")
+    expect(RingReading.believed(ringing, shown: snoozed, takenAt: sec(-3), stoppedAt: nil, snoozedAt: t0) == snoozed, "a copy taken before a confirmed Snooze doesn't put Ringing back")
+    expect(RingReading.believed(ringing, shown: snoozed, takenAt: sec(540), stoppedAt: nil, snoozedAt: t0) == ringing, "the snooze's own re-ring is believed")
+    expect(RingReading.believed(ringing, shown: ringing, takenAt: sec(-3), stoppedAt: nil, snoozedAt: t0) == ringing, "a ring still shown as ringing stays as read")
+    expect(RingReading.believed("", shown: snoozed, takenAt: sec(-3), stoppedAt: nil, snoozedAt: t0) == "", "nothing ringing is never turned into a ring")
+    expect(RingReading.believed(ringing, shown: snoozed, takenAt: sec(-3), stoppedAt: sec(-86400), snoozedAt: t0) == snoozed, "yesterday's Stop says nothing about today's ring")
+}
+
 print(failures == 0 ? "ok: \(checks) checks" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

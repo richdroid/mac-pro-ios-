@@ -426,6 +426,24 @@ actor ChumbyAPI {
     }
 }
 
+// What a reading's ring line is taken to say, given when the Chumby last confirmed a Stop and a Snooze (RingDesk.note).
+// The Mac's copy of the Chumby's status can be ten seconds old, so one taken before a confirmation still says
+// "ringing": believed, it put the ringing card and page back over an alarm just stopped, or "Ringing" and the Snooze
+// key back over a snooze the Chumby had confirmed (11-20). Only a copy taken after the confirmation (and the two
+// seconds the Chumby's own note of it can take) says anything about the ring.
+enum RingReading {
+    static let margin: TimeInterval = 2
+    // `line`: the reading's ring line; `shown`: the one on screen; `takenAt`: when the reading was taken.
+    static func believed(_ line: String, shown: String, takenAt: Date, stoppedAt: Date?, snoozedAt: Date?) -> String {
+        var read = Sys(); read.ring = line
+        guard let r = read.ringing else { return line }
+        if let t = stoppedAt, takenAt < t.addingTimeInterval(margin) { return "" }
+        var now = Sys(); now.ring = shown
+        if !r.snoozed, now.ringing?.snoozed == true, let t = snoozedAt, takenAt < t.addingTimeInterval(margin) { return shown }
+        return line
+    }
+}
+
 // A level he just set, held on screen until the Chumby confirms it (Richard, 11-19: the volume "still fucked", the slider
 // didn't stick). The panel takes the level about a second after the command, and the Mac's copy of `sys` can be ten
 // seconds old, so readings taken before the level could have landed say nothing either way and the held level shows.

@@ -59,8 +59,10 @@ final class ChumbyModel: ObservableObject {
     // and nothing is ringing".
     @Published private(set) var ringReadings = 0
     private var ringSwept = false
-    private var ringStoppedAt: Date?
-    private var ringSnoozedAt: Date?
+    // When the Chumby last confirmed a Stop and a Snooze, whichever door the press came through (the app's own keys,
+    // the Lock Screen card, the notification, Siri): the desk's own note (RingDesk.note).
+    private var ringStoppedAt: Date? { RingDesk.confirmed(RingDesk.stoppedKey) }
+    private var ringSnoozedAt: Date? { RingDesk.confirmed(RingDesk.snoozedKey) }
     // A Stop or Snooze on its way and not yet confirmed by the Chumby: Home's ringing card and the ringing page say
     // "Stopping…" or "Snoozing…" with their keys dimmed, as the Lock Screen card does. Nil when nothing is pending.
     @Published private(set) var ringWorking: String?
@@ -268,12 +270,9 @@ final class ChumbyModel: ObservableObject {
             let fresh = r.age <= 10
             var s = try JSONDecoder().decode(Sys.self, from: r.data)
             if !fresh { s.ring = sys.ring }
-            // A copy taken before a Stop the Chumby has since taken still says "ringing": it isn't believed (the Mac's
-            // copy can be ten seconds old, twice the hold a Stop puts on readings).
-            if s.ringing != nil, let stopped = ringStoppedAt, Date().addingTimeInterval(-r.age) < stopped.addingTimeInterval(2) { s.ring = "" }
-            // The same for a Snooze the Chumby has confirmed: a copy taken before it still says "ringing", and believed, it
-            // put "Ringing" and the Snooze key back for a reading and brought the ringing page up again, mid-snooze.
-            if let n = s.ringing, !n.snoozed, sys.ringing?.snoozed == true, let z = ringSnoozedAt, Date().addingTimeInterval(-r.age) < z.addingTimeInterval(2) { s.ring = sys.ring }
+            // A copy taken before a Stop or a Snooze the Chumby has since confirmed still says "ringing": it isn't
+            // believed (RingReading; the Mac's copy can be ten seconds old).
+            s.ring = RingReading.believed(s.ring, shown: sys.ring, takenAt: Date().addingTimeInterval(-r.age), stoppedAt: ringStoppedAt, snoozedAt: ringSnoozedAt)
             readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
@@ -653,7 +652,6 @@ final class ChumbyModel: ObservableObject {
             case .confirmed, .nothingRinging:
                 withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
                 RingSeen.stopped(at: tapped)
-                ringStoppedAt = Date()
                 // the phone's backup alarm for this ring goes with it (ChumbyBackupAlarm)
                 ChumbyBackupAlarm.shared.handled(name: was.components(separatedBy: "\t").dropFirst().first)
                 // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
@@ -705,7 +703,6 @@ final class ChumbyModel: ObservableObject {
                 withAnimation(Self.ringSpring) {
                     ringWorking = nil
                     if let r = sys.ringing { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() }
-                    ringSnoozedAt = Date()
                 }
                 Task { await ChumbyRingCard.handled() }
                 let end = until ?? snoozeEnds?.timeIntervalSince1970

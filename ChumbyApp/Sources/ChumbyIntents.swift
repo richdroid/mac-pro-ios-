@@ -464,7 +464,26 @@ actor RingDesk {
         running = (kind, Date(), id, task)
         let out = await task.value
         if running?.id == id { running = nil }
+        Self.note(kind, out)
         return out
+    }
+    // When the Chumby last confirmed a Stop (or said nothing was ringing) and a Snooze, from any door. The app reads
+    // these against each reading of the Chumby: a copy of its status taken before the confirmation (the Mac's can be
+    // ten seconds old) still says "ringing", and believed, it put the ringing card and page back up over an alarm
+    // just stopped on the Lock Screen, or "Ringing" back over a snooze. Kept in defaults, so the app's model has it
+    // whichever door the press came through.
+    static let stoppedKey = "ringStoppedAt", snoozedKey = "ringSnoozedAt"
+    static func note(_ kind: Kind, _ out: RingOutcome) {
+        let now = Date().timeIntervalSince1970
+        switch (kind, out) {
+        case (.stop, .confirmed), (_, .nothingRinging): UserDefaults.standard.set(now, forKey: stoppedKey)
+        case (.snooze, .confirmed): UserDefaults.standard.set(now, forKey: snoozedKey)
+        default: break
+        }
+    }
+    static func confirmed(_ key: String) -> Date? {
+        let t = UserDefaults.standard.double(forKey: key)
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
     }
     private static func run(_ kind: Kind, send: @Sendable (String) async throws -> Void, read: @Sendable () async throws -> (data: Data, age: Double)) async -> RingOutcome {
         let sent = Date()

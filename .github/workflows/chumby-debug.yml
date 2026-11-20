@@ -1,0 +1,195 @@
+name: Chumby debug pass (branch)
+# The chumby-debug-1120 branch's own run (never main): every tab in every posture (folded, open flat, open upright), the
+# alarm states (ringing, snoozed, skipped, a nap, the editors, the calendar's pages), films of the alarm flows on a live
+# stand-in Chumby (ring → Snooze → Stop on Home's card and on the ringing page, the same through an old copy of sys, a
+# skip and its undo, a new alarm saved, a nap set and called off), the channel flows (Edit, Add widgets), the volume, and
+# every tab flung to its end and pulled past it with real touches. Published to the chumby-debug-1120 release.
+# Temporary: goes when the branch merges.
+on:
+  push:
+    branches: [chumby-debug-1120]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chumby-debug-1120
+  cancel-in-progress: true
+jobs:
+  debug:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Alarm logic tests
+        run: ci/chumby-tests.sh
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          for APP in Chumby GalleryChumby; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | grep -E "error:|warning: unre|BUILD" | tail -40
+          done
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 95
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
+          node ci/mock-chumby.js & MOCK=$!
+          sleep 2
+          M=http://127.0.0.1:9000
+          # The live scenes keep what a film did (a ring stopped, a list saved): a fresh stand-in before each film.
+          remock() { kill $MOCK 2>/dev/null; wait $MOCK 2>/dev/null; node ci/mock-chumby.js & MOCK=$!; sleep 2; }
+          shot() { # name, display, wait, address, args
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/dbg-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          film() { # name, display, seconds, address, args (records while the app runs; a still every 3 s)
+            local name=$1 display=$2 secs=$3 address=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/dbg-$name.mp4 > /dev/null 2>&1 &
+            local rec=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            local i=0
+            while [ $i -lt $secs ]; do sleep 1.5; i=$((i + 1)); [ $((i % 2)) = 0 ] && xcrun simctl io "$DEVICE" screenshot --display=$display dist/dbg-$name-$i.png; done
+            kill -INT $rec; wait $rec
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          gallery() { # page, display, name
+            xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $1
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$2 dist/dbg-$3.png
+            xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby || true
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # A tab flung to its end with real touches while the live scene's readings change every poll: five flings down,
+          # a slow pull past the end held and let go (a still of the page's foot at rest after it), five flings back up
+          # and a slow pull past the top. One pass per column given (both panes open flat). The app's swipe log beside it.
+          fling() { # name, display, tab, x of each column
+            local name=$1 display=$2 tab=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/dbg-$name.mp4 > /dev/null 2>&1 &
+            local rec=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/live -tab $tab -swipeLog YES
+            sleep 8
+            for X in "$@"; do
+              for i in 1 2 3 4 5; do $D "$DEVICE" drag $X 0.8 $X 0.25 0.12 || echo "fling failed"; sleep 1.2; done
+              $D "$DEVICE" drag $X 0.6 $X 0.3 2 || true; sleep 2.5
+              xcrun simctl io "$DEVICE" screenshot --display=$display dist/dbg-$name-foot-$X.png
+              for i in 1 2 3 4 5; do $D "$DEVICE" drag $X 0.3 $X 0.8 0.12 || true; sleep 1.2; done
+              $D "$DEVICE" drag $X 0.4 $X 0.7 2 || true; sleep 2.5
+            done
+            kill -INT $rec; wait $rec
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/dbg-$name-swipe.log || true
+          }
+          set_() { # display, suffix, x of each column for the flings
+            local d=$1 x=$2; shift 2
+            # Every tab at rest.
+            shot home$x $d 9 $M -tab 0
+            shot channels$x $d 10 $M -tab 1
+            shot alarms$x $d 9 $M -tab 2
+            shot sounds$x $d 9 $M -tab 3
+            shot tinker$x $d 9 $M -tab 4
+            # His days: a ring, a snooze, a skipped day, a nap, the pages a calendar alarm opens, the editors.
+            shot home-ringing$x $d 9 $M/ringing -tab 0
+            shot home-snoozed$x $d 9 $M/snoozed -tab 0
+            shot alarms-ringing$x $d 9 $M/ringing -tab 2
+            shot ringpage$x $d 9 $M/ringing -tab 0 -pose ringscreen
+            shot ringpage-snoozed$x $d 9 $M/snoozed -tab 0 -pose ringscreen
+            shot ringpage-fail$x $d 9 $M/ringing -tab 0 -pose ringfail
+            shot home-skipped$x $d 9 $M/skipped -tab 0
+            shot alarms-skipped$x $d 9 $M/skipped -tab 2
+            shot home-nap$x $d 9 $M/nap -tab 0
+            shot alarms-nap$x $d 11 $M/nap -tab 2 -pose napset
+            shot alarms-missed$x $d 9 $M/missed -tab 2
+            shot alarms-calday$x $d 10 $M -tab 2 -pose calday
+            shot alarms-calsettings$x $d 10 $M -tab 2 -pose calsettings
+            shot alarms-editor$x $d 10 $M -tab 2 -pose editor
+            shot alarms-editornew$x $d 10 $M -tab 2 -pose editornew
+            shot alarms-napeditor$x $d 11 $M/nap -tab 2 -pose napeditor
+            shot home-once$x $d 12 $M -tab 0 -pose justonce
+            shot home-playing$x $d 10 $M/playing -tab 0
+            # The lists in Edit: the delete control at each row's start (Channels, Sounds' radio streams, Tinker's two).
+            shot channels-edit$x $d 10 $M -tab 1 -pose chedit
+            shot channels-add$x $d 10 $M -tab 1 -pose chadd
+            shot sounds-edit$x $d 10 $M -tab 3 -pose tinkeredit
+            shot tinker-edit$x $d 10 $M -tab 4 -pose tinkeredit
+            # Out of reach: every tab says so the same way.
+            shot home-dead$x $d 12 $M/dead -tab 0
+            shot alarms-dead$x $d 12 $M/dead -tab 2
+            # Ring, Snooze (3.5 s in), Stop (4 s later) on Home's card, on a stand-in that answers as the Chumby does.
+            remock; film ringdemo$x $d 14 $M/liveringing -tab 0 -pose ringdemo
+            # The same through the Mac's cache: sys is the copy from before each press for 7 s. The card must hold
+            # "Snoozed until" and never go back to Ringing, and stay gone after Stop.
+            remock; film ringstale$x $d 16 $M/livestale -tab 0 -pose ringdemo
+            # The ringing page: Snooze at 5 s, slid to Stop at 10 s, the page leaving once the Chumby says it stopped.
+            remock; film ringpage$x $d 16 $M/liveringing -tab 0 -pose ringpagedemo
+            remock; film ringpagestale$x $d 16 $M/livestale -tab 0 -pose ringpagedemo
+            # A skipped day: Skip, then Undo.
+            remock; film skipdemo$x $d 14 $M/live -tab 0 -pose skipdemo
+            # Calendar settings, a calendar day and an editor in and out, then a nap set, counting down, called off.
+            remock; film alarmsdemo$x $d 27 $M/live -tab 2 -pose alarmsdemo
+            # A new alarm made and saved: the editor, "Saving turns off …", Save, the list taking it in.
+            remock; film newalarm$x $d 14 $M/live -tab 2 -pose newalarmdemo
+            # Channels: Edit, the last widget moved to the top, one taken out, Done (one save; the stand-in reloads its
+            # channel), then Add widgets: picker, one added, Done.
+            remock; film cheditdemo$x $d 18 $M/live -tab 1 -pose cheditdemo
+            remock; film chdemo$x $d 14 $M/live -tab 1 -pose chdemo
+            # The volume set from Sounds on a stand-in that applies it 2 s later, as the real one does: it must hold.
+            remock; film voldemo$x $d 9 $M/live -tab 3 -pose voldemo
+            # Every tab to its end and back, with real touches.
+            remock
+            for T in 0 1 2 3 4; do fling fling-$T$x $d $T "$@"; done
+          }
+          xcrun simctl ui "$DEVICE" appearance light
+          $D "$DEVICE" pose closed || true; sleep 5
+          set_ 1 "" 0.5
+          gallery 4 1 card
+          gallery 5 1 island
+          gallery 6 1 card-working
+          xcrun simctl ui "$DEVICE" appearance dark
+          for T in 0 1 2 3 4; do shot tab$T-dark 1 9 $M -tab $T; done
+          shot ringpage-dark 1 9 $M/ringing -tab 0 -pose ringscreen
+          xcrun simctl ui "$DEVICE" appearance light
+          $D "$DEVICE" pose open; sleep 5
+          set_ 3 "-open" 0.25 0.7
+          $D "$DEVICE" rotate 1; sleep 5
+          set_ 3 "-portrait" 0.5
+          xcrun simctl ui "$DEVICE" appearance dark
+          for T in 0 1 2 3 4; do shot tab$T-dark-portrait 3 9 $M -tab $T; done
+          shot ringpage-dark-portrait 3 9 $M/ringing -tab 0 -pose ringscreen
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../debug.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../debug.zip /dev/null)
+          (cd dist && zip -qr ../debug-shots.zip . -i '*.png' '*.log' || zip -q ../debug-shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-debug-1120 >/dev/null 2>&1 || gh release create chumby-debug-1120 --prerelease --title "Chumby debug pass" --notes "Work in progress: shots, films and logs from the chumby-debug-1120 branch."
+          for f in debug-shots.zip status.txt debug.zip dist/dbg-*.mp4; do
+            [ -f "$f" ] || continue
+            for i in 1 2 3; do gh release upload chumby-debug-1120 "$f" --clobber && break; sleep 15; done
+          done
