@@ -321,6 +321,10 @@ struct RingScreen: View {
         .padding(.horizontal, 20).padding(.vertical, 22)
         .frame(maxWidth: .infinity)
         .card()
+        // One piece: when the page makes room (the Snooze key leaving as a snooze is confirmed) the card and every
+        // line on it move together. Without it each line found its own way, and for five frames the old status stood
+        // at the old height over the new one, with the alarm's name drawn twice (film, 11-20, folded).
+        .geometryGroup()
     }
 
     @ViewBuilder var keys: some View {
@@ -384,15 +388,18 @@ struct RingScreen: View {
 struct SlideToStop: View {
     var busy = false
     let done: () -> Void
-    @State private var pull: CGFloat = 0
+    // Let go short of the end, or the touch taken away by the system, the key springs back by itself (the gesture's own
+    // reset): set back in the gesture's ending, it was at the start in one frame (film, 11-20).
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.32, dampingFraction: 0.7))) private var pull: CGFloat = 0
     @State private var landed = false
+    @State private var from: CGFloat = 0
     static let height: CGFloat = 76, key: CGFloat = 60, inset: CGFloat = 8
     var body: some View {
         GeometryReader { g in
             let run = max(g.size.width - Self.key - Self.inset * 2, 1)
             // A Stop on its way that wasn't slid here (pressed on the Lock Screen or Home's card, with this page up) takes
             // the key across all the same: the bar never says "Slide to stop" under a card that says "Stopping…".
-            let k = landed || busy ? 1 : min(max(pull / run, 0), 1)
+            let k = landed || busy ? 1 : max(min(max(pull / run, 0), 1), from)
             ZStack(alignment: .leading) {
                 ChumbyGel(colors: [0xff8f5e, 0xfc5825, 0xdc4410], rim: 0x9c2c08)
                 Text("Slide to stop").font(.custom("Trebuchet MS", size: 20).weight(.bold)).foregroundStyle(.white)
@@ -416,23 +423,24 @@ struct SlideToStop: View {
             .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .gesture(
                 DragGesture(minimumDistance: 4)
-                    .onChanged { v in if !landed && !busy { pull = v.translation.width } }
+                    .updating($pull) { v, pull, _ in if !landed && !busy { pull = v.translation.width } }
                     .onEnded { v in
                         guard !landed, !busy else { return }
                         // The whole run, or a flick already past halfway that would carry it there.
                         let far = v.translation.width / run, carried = v.predictedEndTranslation.width / run
                         if far >= 0.8 || (far >= 0.45 && carried >= 1) {
+                            // Held where the finger left it, then on to the end: not back to the start and out again.
+                            var keep = Transaction(); keep.disablesAnimations = true
+                            withTransaction(keep) { from = min(max(far, 0), 1) }
                             withAnimation(.spring(response: 0.22, dampingFraction: 0.8)) { landed = true }
                             done()
-                        } else {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { pull = 0 }
                         }
                     }
             )
         }
         .frame(height: Self.height)
         // Back from a Stop the Chumby didn't take: the key returns to its start, ready to be slid again.
-        .onChange(of: busy) { _, b in if !b { withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { landed = false; pull = 0 } } }
+        .onChange(of: busy) { _, b in if !b { withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { landed = false; from = 0 } } }
         .accessibilityElement()
         .accessibilityLabel("Stop the alarm")
         .accessibilityAddTraits(.isButton)

@@ -132,6 +132,18 @@ jobs:
           }
           set_() { # display, suffix, full or brief, x of each column for the flings
             local d=$1 x=$2 size=$3; shift 3
+            # ring: the few stills and films that changed since the last run (open flat, whose full set that run has).
+            if [ $size = ring ]; then
+              shot home$x $d 9 $M -tab 0
+              shot alarms$x $d 9 $M -tab 2
+              shot home-ringing$x $d 9 $M/ringing -tab 0
+              shot home-snoozed$x $d 9 $M/snoozed -tab 0
+              shot ringpage$x $d 9 $M/ringing -tab 0 -pose ringscreen
+              remock; warm $M/liveringing; film ringdemo$x $d 14 $M/liveringing -tab 0 -pose ringdemo
+              remock; warm $M/liveringing; film ringpage$x $d 16 $M/liveringing -tab 0 -pose ringpagedemo
+              remock; warm $M/livestale; film ringdoor$x $d 14 $M/livestale -tab 0 -pose ringdoor
+              return
+            fi
             # Every tab at rest.
             shot home$x $d 9 $M -tab 0
             shot channels$x $d 10 $M -tab 1
@@ -183,7 +195,6 @@ jobs:
             remock; warm $M/livestale; film ringdoor$x $d 14 $M/livestale -tab 0 -pose ringdoor
             # Upright, the open-flat films stand for the rest: only the ring films and two tabs flung (the first run
             # ran out of its time before this posture began).
-            if [ $size != full ]; then remock; for T in 0 2; do fling fling-$T$x $d $T "$@"; done; fi
             [ $size = brief ] && return
             # A skipped day: Skip, then Undo.
             remock; film skipdemo$x $d 14 $M/live -tab 0 -pose skipdemo
@@ -200,7 +211,7 @@ jobs:
             # Every tab to its end and back, with real touches (open flat: Home and Alarms, flung before the films above).
             [ $size = full ] || return
             remock
-            for T in 0 1 2 3 4; do fling fling-$T$x $d $T "$@"; done
+            for T in 0 2; do fling fling-$T$x $d $T "$@"; done
           }
           xcrun simctl ui "$DEVICE" appearance light
           $D "$DEVICE" pose closed || true; sleep 5
@@ -229,8 +240,7 @@ jobs:
           shot ringpage-dark 1 9 $M/ringing -tab 0 -pose ringscreen
           xcrun simctl ui "$DEVICE" appearance light
           $D "$DEVICE" pose open; sleep 5
-          set_ 3 "-open" most 0.7
-          remock; fling fling-0-open-left 3 0 0.25
+          set_ 3 "-open" ring 0.7
           slide ringslide-open 3 0.58 0.96 0.58
           $D "$DEVICE" rotate 1; sleep 5
           set_ 3 "-portrait" brief 0.5

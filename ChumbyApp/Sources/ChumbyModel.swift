@@ -659,6 +659,8 @@ final class ChumbyModel: ObservableObject {
     // Stopped: the card is gone by opacity in its first 0.12 s, and only then does what was under it move up (a frame later,
     // for a slow one), so no control ever passes under its fading words.
     static let stopFade = 0.12
+    // Home's ringing card and the next alarm's gel change hands over this long, both at once.
+    static let slotFade = 0.2
     static let stopSpring = ringSpring.delay(stopFade + 1.0 / 60)
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
     // A Stop or Snooze the Chumby has just confirmed, pressed somewhere other than this app's own keys (the Lock

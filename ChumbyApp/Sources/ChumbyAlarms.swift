@@ -399,7 +399,7 @@ struct RingingCard: View {
 extension AnyTransition {
     // Stopped: the card is gone by opacity alone within 0.12 s, before the controls under it start up (ChumbyModel.stopSpring).
     static var ringCard: AnyTransition {
-        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.22).delay(0.1)), removal: .opacity.animation(.easeOut(duration: ChumbyModel.stopFade)))
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.2)))
     }
 }
 

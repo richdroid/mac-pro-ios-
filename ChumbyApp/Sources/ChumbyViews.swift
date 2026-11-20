@@ -1341,7 +1341,14 @@ struct HomeTab: View {
         // the remote slid down across the card's keys, and the rows under the gel jumped up over it and back.
         ZStack(alignment: .top) {
             if model.sys.ringing != nil { RingingCard().card().padding(.top, Self.sectionGap).transition(.ringCard) }
+            // The gel stays in the page through a ring, unseen, and only its opacity moves, over the same fifth of a
+            // second as the ringing card's: the two fades overlap, so the slot is never bare (gate, 11-20). Put back by
+            // a transition instead, it could come back while the ringing page covered Home and stay unseen for good
+            // (film, 11-20: Home with no next alarm after a slide to stop).
             SkipCard().padding(.top, Self.sectionGap)
+                .opacity(model.sys.ringing == nil ? 1 : 0)
+                .animation(.easeOut(duration: ChumbyModel.slotFade), value: model.sys.ringing == nil)
+                .allowsHitTesting(model.sys.ringing == nil).accessibilityHidden(model.sys.ringing != nil)
         }
         // room for the cards' shadows inside the clip
         .padding(.horizontal, 16).padding(.bottom, 16).clipped().padding(.horizontal, -16).padding(.bottom, -16)
@@ -2032,9 +2039,11 @@ struct ChannelsTab: View {
                 .onMove { from, to in
                     var on = shown
                     on.move(fromOffsets: from, toOffset: to)
-                    rows = on + rows.filter { !$0.on }
+                    // The list has already carried the row to its place under the finger: the new order is taken with
+                    // no animation of its own, which redrew the dropped row (blank for a few frames, then back; film, 11-20).
+                    var plain = Transaction(); plain.disablesAnimations = true
+                    withTransaction(plain) { rows = on + rows.filter { !$0.on }; changed() }
                     model.tick()
-                    changed()
                 }
                 .deleteDisabled(true)
             if !picked.isEmpty { addRow }
@@ -3407,7 +3416,7 @@ struct SkipCard: View {
     }
     var body: some View {
         // Kept on a route failure, showing the kept next alarm with nothing to press; gone only when the Chumby is.
-        if model.stateKnown && model.state.skipKnown && !model.dead && model.sys.ringing == nil,
+        if model.stateKnown && model.state.skipKnown && !model.dead,
            let next = movedOne.flatMap({ j in j.original.map { (j.at, $0.name) } }) ?? skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
             // Moved for one ring, the card stays awake: it isn't a skip.
             let asleep = (shown ?? (skipped != nil)) && moved == nil
@@ -3482,9 +3491,8 @@ struct SkipCard: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000); send(true)
                 try? await Task.sleep(nanoseconds: 4_000_000_000); send(false)
             }
-            // It shares its slot with the ringing card (HomeView.controls): gone at once when a ring starts, back as the
-            // ringing card finishes fading when one ends, with nothing travelling through it either way.
-            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.22).delay(ChumbyModel.stopFade)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+            // It shares its slot with the ringing card, which hides it by opacity alone (HomeView.controls).
+            .transition(.opacity)
         }
     }
     // A calendar day ringing at its own time goes back to the calendar's rule for it: that day's time is let go and the
