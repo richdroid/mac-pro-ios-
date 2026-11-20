@@ -137,6 +137,8 @@ jobs:
           if git log -1 --pretty=%B | grep -q '\[quick\]'; then
             upfilm() { local x=$1 d=$2 sx=$3 ux=$4; shift 4; film upgrade-open$x $d 4 "drag $ux 0.7 $ux 0.5 0.4;tap upgrade.card;drag $sx 0.8 $sx 0.4 0.5;tap cleanup.caches" -tab 6 "$@"; }
             upfilm "" 1 0.5 0.5
+            film bar-keyboard 1 3 "touch 0.5 0.805 0.05;touch 0.5 0.2 0.05" -tab 2 -pose session
+            shot tab-dash 1 8 -tab 6
             $D "$DEVICE" rotate 1; sleep 5
             upfilm -land 1 0.5 0.5
             $D "$DEVICE" rotate 3; sleep 5

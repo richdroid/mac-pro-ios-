@@ -660,7 +660,13 @@ struct BottomBarTabs<Content: View>: View {
         // then, and its room would be a band over the keys.
         .environment(\.bottomBar, keyboardUp ? 0 : Self.height + Self.inset * 2 + 6)
         #if canImport(UIKit)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        // Up only when the keyboard really covers the foot: with a hardware keyboard "will show" comes for a bar of a
+        // few points, and the page then lost the bar's room with nothing over the bar (CI 9f706bc, bar-keyboard).
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+            let screen = UIScreen.main.bounds.height
+            keyboardUp = f.height > 120 && f.minY < screen - 120
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         #endif
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
