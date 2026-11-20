@@ -53,17 +53,17 @@ jobs:
           open -a DeviceHub; sleep 10
           shot() {
             local name=$1 display=$2 wait=$3; shift 3
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            perl -e 'alarm 90; exec @ARGV' xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
             sleep $wait
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
-            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "NOT RUNNING at the end of $name"
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || { echo "NOT RUNNING at the end of $name"; sleep 6; crashes; }
           }
           # A film with scripted touches: name, display, length, "touches" (devicehubctl lines, ; between), app args.
           film() {
             local name=$1 display=$2 length=$3 touches=$4; shift 4
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 2
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            perl -e 'alarm 90; exec @ARGV' xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
             sleep 6
             ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep 2; done )
             sleep $length
@@ -74,11 +74,11 @@ jobs:
           # A shot after touches (a page pulled up to what lies below): name, display, touches, app args.
           shotdrag() {
             local name=$1 display=$2 touches=$3; shift 3
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            perl -e 'alarm 90; exec @ARGV' xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
             sleep 8
             ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep 1.5; done )
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
-            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "NOT RUNNING at the end of $name"
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || { echo "NOT RUNNING at the end of $name"; sleep 6; crashes; }
           }
           # Why the app was gone, when it was: its newest crash reports, cut short.
           crashes() {
@@ -135,23 +135,20 @@ jobs:
           # A commit whose message has [quick] runs only this: the upgrade states that were the Home Screen open
           # flat and open upright (CI d8bbee4), with the crash reports, in minutes.
           if git log -1 --pretty=%B | grep -q '\[quick\]'; then
-            shot upgrade-freed 1 9 -tab 6 -pose upgrade-freed
-            shotdrag upgrade-freed-low 1 "drag 0.5 0.8 0.5 0.2 0.5;drag 0.5 0.8 0.5 0.2 0.5" -tab 6 -pose upgrade-freed
             shot tab-dash 1 8 -tab 6
-            film bar-keyboard 1 3 'tap "Message the session"' -tab 2 -pose session
-            film upgrade-hold 1 3 "drag 0.5 0.8 0.5 0.2 0.5;drag 0.5 0.8 0.5 0.2 0.5;longpress upgrade.hold 0.6;longpress upgrade.hold 2.2" -tab 6 -pose upgrade-freed
+            shot tab-dash-late 1 20 -tab 6
+            shot tab-status 1 8 -tab 0
+            shotdrag tab-dash-foot 1 "drag 0.5 0.85 0.5 0.15 0.08;drag 0.5 0.85 0.5 0.15 0.08;drag 0.5 0.85 0.5 0.15 0.08" -tab 6
+            film bar-keyboard 1 3 'tap "Message the session";touch 0.5 0.2 0.05' -tab 2 -pose session
             $D "$DEVICE" pose open; sleep 5
             $D "$DEVICE" rotate 1; sleep 5
             shot upgrade-freed-portrait 3 9 -tab 6 -pose upgrade-freed
-            shot tab-dash-portrait 3 8 -tab 6
+            shot upgrade-room-portrait 3 9 -tab 6 -pose upgrade-room
             $D "$DEVICE" rotate 3; sleep 5
-            shot upgrade-freed-open 3 9 -tab 6 -pose upgrade-freed
             shot upgrade-checksred-open 3 9 -tab 6 -pose upgrade-checksred
-            shot upgrade-room-open 3 9 -tab 6 -pose upgrade-room
             shot tab-dash-open 3 8 -tab 6
             shot tab-dash-his 3 8 -tab 6 -windowSize 859x604
             film tabs-open 3 2 "tap tab.Control;tap tab.Claude;tap tab.Dashboard" -tab 0
-            crashes
             ls dist
             exit 0
           fi

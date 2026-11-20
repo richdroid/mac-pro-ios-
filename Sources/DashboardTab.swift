@@ -265,7 +265,7 @@ struct DashboardTab: View {
             t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, alts: [ep ?? song].compactMap { $0 }, page: "tv", open: tvOpen))
         } else if !tv.unsupported { t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", page: "tv", open: tvOpen)) }
         if let f = fans.value?.fans.first {
-            t.append(TileData(id: "fan", title: "Fan", symbol: "fan", figure: "\(Int(f.rpm.rounded()))", line: "rpm · \(Int((f.level * 100).rounded()))% of its range", alts: ["rpm"], page: "temps") { model.macPage = .fans })
+            t.append(TileData(id: "fan", title: "Fan", symbol: "fan", figure: "\(Int(f.rpm.rounded()))", line: "rpm · \(Int((f.level * 100).rounded()))% of its range", alts: ["rpm"], page: nil) { model.macPage = .fans })
         } else if !fans.unsupported { t.append(TileData(id: "fan", title: "Fan", symbol: "fan", page: "temps") { model.macPage = .fans }) }
         let n = s.claude.sessions.count
         t.append(TileData(id: "sessions", title: "Sessions", symbol: "terminal", figure: "\(n)", line: n == 0 ? "None running" : s.claude.sessions.prefix(3).map(\.name).joined(separator: ", "), alts: [n == 1 ? "session" : "sessions"], page: "activity") { model.tab = 2 })

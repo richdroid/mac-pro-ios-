@@ -531,17 +531,20 @@ private struct SideRailKey: EnvironmentKey { static let defaultValue: CGFloat = 
 extension EnvironmentValues { var sideRail: CGFloat { get { self[SideRailKey.self] } set { self[SideRailKey.self] = newValue } } }
 // A page clear of the drawn rail: its trailing safe area made up to the rail's column, on top of whatever the system
 // already keeps there (a pushed page's Back strip), never twice.
+// Likewise clear of the bar BottomBarTabs draws along the foot: room given from outside the navigation stack never
+// reached its pages (a list's last row and the session's keys lay under the bar, designer gate 1, 2026-11-20), so each
+// page takes it here, as it does the rail's.
+private struct BottomBarKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues { var bottomBar: CGFloat { get { self[BottomBarKey.self] } set { self[BottomBarKey.self] = newValue } } }
 struct RailRoom: ViewModifier {
     @Environment(\.sideRail) private var rail
+    @Environment(\.bottomBar) private var bar
     @State private var has: CGFloat = 0
     func body(content: Content) -> some View {
-        if rail > 0 {
-            content
-                .safeAreaPadding(.trailing, max(0, rail - has))
-                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
-        } else {
-            content
-        }
+        content
+            .safeAreaPadding(.trailing, rail > 0 ? max(0, rail - has) : 0)
+            .safeAreaPadding(.bottom, bar)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
     }
 }
 extension View { func railRoom() -> some View { modifier(RailRoom()) } }
@@ -653,10 +656,9 @@ struct BottomBarTabs<Content: View>: View {
                 }
             }
         }
-        // Room for the bar as a real inset: safeAreaPadding never reached a page inside the navigation stack, so a
-        // list's last row and the session's keys and message box lay under the bar (designer gate 1, 2026-11-20).
-        // None with the keyboard up: the bar is behind the keyboard then, and its room would be a band over the keys.
-        .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: keyboardUp ? 0 : Self.height + Self.inset * 2 + 6).allowsHitTesting(false) }
+        // Room for the bar, taken by each page (railRoom). None with the keyboard up: the bar is behind the keyboard
+        // then, and its room would be a band over the keys.
+        .environment(\.bottomBar, keyboardUp ? 0 : Self.height + Self.inset * 2 + 6)
         #if canImport(UIKit)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
