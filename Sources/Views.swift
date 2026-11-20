@@ -507,6 +507,10 @@ struct RootView: View {
     // Folded on its side: wider than tall and short (466 pt; open flat is 669 pt, whose system rail holds all six).
     @State private var sideways = false
     static func isSideways(_ s: CGSize) -> Bool { s.width > s.height && s.height < 600 }
+    // Where the system's bar holds five tabs and puts the rest under "More": wherever the width is compact (UIKit's own
+    // rule for a tab bar), not by a guessed size.
+    @Environment(\.horizontalSizeClass) private var widthClass
+    private var narrow: Bool { widthClass == .compact }
     // The tabs, in order, for the system's bar and for the rail drawn on its side alike.
     // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
     // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went behind the
@@ -563,9 +567,13 @@ struct RootView: View {
                 // "More" (Dashboard and Control went there). He wants every tab one tap away in every posture (Richard,
                 // 2026-11-19: "never more tabs thing"), so on its side the app draws the rail itself, the system's look
                 // (a glass capsule of icons, the tab in front in the accent colour), all six in it. Every other posture
-                // keeps the system's own bar, which fits all six.
+                // keeps the system's own bar, which fits all six only where it's wide (open); upright and narrow the app draws a bar too.
                 if sideways {
                     SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { $0 == 1 ? updateCount : 0 }) { screen($0) }
+                } else if narrow {
+                    // Upright and narrow (folded), the system's bar holds five and put Dashboard under "More": the app
+                    // draws the bar itself there too, all six in it (Richard, 2026-11-20: "i said more never").
+                    BottomBarTabs(selection: tabBinding, items: Self.railItems, badge: { $0 == 1 ? updateCount : 0 }) { screen($0) }
                 } else {
                     TabView(selection: tabBinding) {
                         // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot

@@ -613,6 +613,75 @@ struct SideRailTabs<Content: View>: View {
     }
 }
 
+// Tabs with the bar drawn along the foot, for an upright phone too narrow for the system's: iOS's own bar there holds
+// five and puts the sixth and the rest under "More" (Richard, 2026-11-20: "i said more never"). All six, one tap away:
+// the system's look, a floating glass capsule of icons over their names, the tab in front in the accent colour on a
+// soft capsule. Pages keep clear of it as they do of the system's bar. Tabs once shown are kept, as TabView keeps them.
+struct BottomBarTabs<Content: View>: View {
+    @Binding var selection: Int
+    let items: [RailItem]
+    let badge: (Int) -> Int
+    @ViewBuilder let content: (Int) -> Content
+    @State private var shown: Set<Int> = []
+    @Environment(\.colorScheme) private var scheme
+    static var height: CGFloat { 54 }
+    static var inset: CGFloat { 4 }
+    var body: some View {
+        ZStack {
+            ForEach(items) { it in
+                let front = it.value == selection
+                if front || shown.contains(it.value) {
+                    content(it.value)
+                        .opacity(front ? 1 : 0)
+                        .allowsHitTesting(front)
+                        .accessibilityHidden(!front)
+                        .zIndex(front ? 1 : 0)
+                }
+            }
+        }
+        .safeAreaPadding(.bottom, Self.height + Self.inset * 2 + 6)
+        .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        .overlay(alignment: .bottom) {
+            bar.padding(.horizontal, 12).padding(.bottom, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea(.keyboard)
+        }
+    }
+    private var bar: some View {
+        HStack(spacing: 0) {
+            ForEach(items) { it in
+                let front = it.value == selection
+                Button { selection = it.value } label: {
+                    VStack(spacing: 2) {
+                        it.icon.resizable().scaledToFit().frame(width: 24, height: 22)
+                        Text(it.title).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                    .frame(maxWidth: .infinity, minHeight: Self.height)
+                    .background { if front { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)) } }
+                    .overlay(alignment: .top) {
+                        let n = badge(it.value)
+                        if n > 0 {
+                            Text("\(n)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+                                .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
+                                .background(Color.red, in: Capsule())
+                                .offset(x: 14, y: 3)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(it.title)
+                .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
+                .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        .padding(Self.inset)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .animation(.snappy(duration: 0.25), value: selection)
+    }
+}
+
 // Reading a value off a chart that sits in a scrolling page: rest a finger on it for a moment, then slide. It's the
 // system's own long press, which never holds up the page: a finger that moves before the moment is up was scrolling,
 // and the page has it at once. Once it's held, the page stays still while the finger slides.
