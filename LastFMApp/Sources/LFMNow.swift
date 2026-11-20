@@ -391,9 +391,8 @@ struct DaySection: View {
     private func column(_ list: [Scrobble], slot hour: Int, now: Int, unit: CGFloat, width: CGFloat, height: CGFloat) -> some View {
         VStack(spacing: 1.5) {
             if hour == now, let p = Store.shared.nowPlaying {
-                // The song on now, a bright bead on top, breathing.
+                // The song on now, a bright bead on top. Still: a forever animation is main-thread work every frame (run 40).
                 Capsule().fill(colour(p)).frame(width: width, height: max(unit - 1.5, 3)).opacity(0.9)
-                    .phaseAnimator([0.45, 1]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 1.2) }
             }
             ForEach(Array(list.reversed().enumerated()), id: \.element.id) { i, s in
                 RoundedRectangle(cornerRadius: min(2.5, unit / 3), style: .continuous)

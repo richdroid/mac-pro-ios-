@@ -21,7 +21,6 @@ struct MixName: View {
     var size: CGFloat = 120
     var moving: Bool
     @Environment(\.accessibilityReduceMotion) private var still
-    @State private var swayed = false
     var body: some View {
         let name = text.lowercased()
         GeometryReader { g in
@@ -37,19 +36,80 @@ struct MixName: View {
                 // A slow sway across the room it has, about 10 pt a second: a layer behind, not a ticker. One repeating
                 // animation of an offset, not a 30-a-second timeline that worked the view out again every tick.
                 let on = moving && !still && slack >= 2
-                Text(name).font(.system(size: fit, weight: .thin)).tracking(-2 * fit / size).lineLimit(1).fixedSize()
-                    .foregroundStyle(.white.opacity(0.13))
-                    .offset(x: S.margin - 4 + (on && swayed ? slack : 0))
-                    .animation(on ? .easeInOut(duration: max(Double(slack) / 10, 1)).repeatForever(autoreverses: true) : .smooth, value: swayed)
-                    .frame(width: g.size.width, height: g.size.height, alignment: .leading)
-                    .onAppear { swayed = true }
+                // The drift is the render server's (a layer animation), not a SwiftUI one: a forever animation here was
+                // worked out on the main thread every frame, on every page of the tab, for as long as a song was on
+                // (run 40's hitch log: today, his page and his story all lost frames while playing; idle they didn't).
+                #if canImport(UIKit)
+                if on {
+                    DriftName(text: name, size: fit, tracking: -2 * fit / size, lead: S.margin - 4, slack: slack)
+                        .frame(width: g.size.width, height: g.size.height)
+                } else { still(name, fit) .frame(width: g.size.width, height: g.size.height, alignment: .leading) }
+                #else
+                still(name, fit).frame(width: g.size.width, height: g.size.height, alignment: .leading)
+                #endif
             }
         }
         .frame(height: ceil(size * 1.2))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
+    private func still(_ name: String, _ fit: CGFloat) -> some View {
+        Text(name).font(.system(size: fit, weight: .thin)).tracking(-2 * fit / size).lineLimit(1).fixedSize()
+            .foregroundStyle(.white.opacity(0.13))
+            .offset(x: S.margin - 4)
+    }
 }
+
+#if canImport(UIKit)
+// The name as a label whose layer sways from side to side: Core Animation moves it, so no frame of it costs the app
+// anything. The animation is put back whenever the view returns to a window or the app comes forward (the system
+// drops layer animations then).
+private struct DriftName: UIViewRepresentable {
+    let text: String, size: CGFloat, tracking: CGFloat, lead: CGFloat, slack: CGFloat
+    func makeUIView(context: Context) -> Drifter { Drifter() }
+    func updateUIView(_ v: Drifter, context: Context) { v.set(text, size, tracking, lead, slack) }
+    final class Drifter: UIView {
+        private let label = UILabel()
+        private var lead: CGFloat = 0, slack: CGFloat = 0
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false; isAccessibilityElement = false
+            label.textColor = UIColor.white.withAlphaComponent(0.13)
+            label.lineBreakMode = .byClipping
+            addSubview(label)
+            NotificationCenter.default.addObserver(self, selector: #selector(sway), name: UIApplication.didBecomeActiveNotification, object: nil)
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        func set(_ text: String, _ size: CGFloat, _ tracking: CGFloat, _ lead: CGFloat, _ slack: CGFloat) {
+            label.attributedText = NSAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: size, weight: .thin), .kern: tracking])
+            label.sizeToFit()
+            let moved = abs(slack - self.slack) > 0.5 || lead != self.lead
+            self.lead = lead; self.slack = slack
+            setNeedsLayout()
+            if moved { sway() }
+        }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            let s = label.bounds.size
+            label.layer.removeAnimation(forKey: "sway")
+            label.frame = CGRect(x: lead, y: ((bounds.height - s.height) / 2).rounded(), width: s.width, height: s.height)
+            sway()
+        }
+        override func didMoveToWindow() { super.didMoveToWindow(); sway() }
+        // About 10 pt a second across the room it has, there and back, for ever.
+        @objc private func sway() {
+            guard window != nil, slack >= 2, label.layer.animation(forKey: "sway") == nil else { return }
+            let a = CABasicAnimation(keyPath: "transform.translation.x")
+            a.fromValue = 0; a.toValue = slack
+            a.duration = max(Double(slack) / 10, 1)
+            a.autoreverses = true; a.repeatCount = .infinity
+            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            a.isRemovedOnCompletion = false
+            label.layer.add(a, forKey: "sway")
+        }
+    }
+}
+#endif
 
 // MARK: - Quickplay: heavy rotation
 
