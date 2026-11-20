@@ -146,6 +146,11 @@ jobs:
             # The ringing page: Snooze at 5 s, slid to Stop at 10 s, the page leaving once the Chumby says it stopped.
             remock; film ringpage$x $d 16 $M/liveringing -tab 0 -pose ringpagedemo
             remock; film ringpagestale$x $d 16 $M/livestale -tab 0 -pose ringpagedemo
+            # The Chumby's own answer (chalarm, 11-20). done:false, its line changing 1.5 s later: "Snoozing…" and
+            # "Stopping…" hold until the line says so. Then a Stop the Chumby first calls "still ringing": asked once
+            # more, and it stops, with no failure shown.
+            remock; film ringlate$x $d 16 $M/livelate -tab 0 -pose ringdemo
+            remock; film ringstill$x $d 16 $M/livestill -tab 0 -pose ringpagedemo
             # A skipped day: Skip, then Undo.
             remock; film skipdemo$x $d 14 $M/live -tab 0 -pose skipdemo
             # Calendar settings, a calendar day and an editor in and out, then a nap set, counting down, called off.

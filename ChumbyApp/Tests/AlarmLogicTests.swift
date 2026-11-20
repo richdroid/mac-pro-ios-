@@ -504,5 +504,23 @@ do {
     expect(RingReading.believed(ringing, shown: snoozed, takenAt: sec(-3), stoppedAt: sec(-86400), snoozedAt: t0) == snoozed, "yesterday's Stop says nothing about today's ring")
 }
 
+// The Chumby's answer to a Stop or Snooze (chalarm, 11-20): only done, with a line that agrees, is a confirmation.
+do {
+    let ringing = "r\tWork\tBeep", snoozed = "s\tWork\tBeep\t1790000000"
+    expect(RingAnswer(["ok": true]).read(stop: true) == .wait, "an older Chumby's bare ok confirms nothing")
+    expect(RingAnswer(["ok": true]).wait == 14 && RingAnswer(["ok": true, "done": false]).wait == 10 && RingAnswer(["ok": true, "done": false]).step == 1, "done:false: its line each second for 10 s")
+    expect(RingAnswer(["ok": true, "done": false, "how": "tap sent", "ring": ringing]).read(stop: true) == .wait, "done:false is waited on")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": ""]).read(stop: true) == .confirmed(until: nil), "a Stop done, nothing on its line: stopped")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": snoozed]).read(stop: false) == .confirmed(until: 1790000000), "a Snooze done: until the Chumby's own time")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": "s\tWork\tBeep"]).read(stop: false) == .confirmed(until: nil), "a Snooze done with no time on its line")
+    expect(RingAnswer(["ok": true, "done": true, "how": "nothing ringing", "ring": ""]).read(stop: false) == .nothingRinging, "nothing was ringing")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": ""]).read(stop: false) == .nothingRinging, "a Snooze that leaves nothing on the line snoozed nothing")
+    expect(RingAnswer(["ok": true, "done": true, "how": "tap", "ring": ringing]).read(stop: true) == .wait, "a Stop called done while its line still rings is not believed yet")
+    expect(RingAnswer(["ok": true, "done": true, "how": "tap", "ring": ringing]).read(stop: false) == .wait, "nor a Snooze whose line still says ringing")
+    expect(RingAnswer(["ok": true, "done": true, "how": "tap", "ring": snoozed]).read(stop: true) == .wait, "nor a Stop that left it snoozing")
+    expect(RingAnswer(["ok": true, "done": true]).read(stop: true) == .confirmed(until: nil), "done with no line is taken at its word")
+    expect(RingAnswer.stillRinging(ChumbyError.message("still ringing")) && !RingAnswer.stillRinging(ChumbyError.message("bad token")) && !RingAnswer.stillRinging(ChumbyError.deviceDown), "only \"still ringing\" is asked again")
+}
+
 print(failures == 0 ? "ok: \(checks) checks" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

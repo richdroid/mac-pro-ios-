@@ -640,12 +640,14 @@ final class ChumbyModel: ObservableObject {
         Haptics.medium.impactOccurred(); Haptics.medium.prepare()
         #endif
         let was = sys.ring
-        hold(RingDesk.patience + 2)
+        hold(RingDesk.longest + 2)
         let tapped = Date().timeIntervalSince1970
         withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Stopping…" }
         guard let api else { ringWorking = nil; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
+            let out = await RingDesk.shared.press(.stop, send: { c in try await api.ring(c) }, read: { try await RingDesk.ringLine(api) })
+            // To the Mac's log with the Chumby's own word for how it went, as every other door's press is.
+            Task.detached { await ChumbyRingActions.report("app", "stop", out, since: Date(timeIntervalSince1970: tapped), backup: "the app’s own") }
             hold(0)
             withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
             switch out {
@@ -679,10 +681,12 @@ final class ChumbyModel: ObservableObject {
         let was = sys.ring
         // "Snoozing…" until the Chumby says so, then its own time: never a guessed "Snoozed until" (gate, 11-18).
         withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Snoozing…" }
-        hold(RingDesk.patience + 2)
+        let began = Date()
+        hold(RingDesk.longest + 2)
         guard let api else { ringWorking = nil; withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
+            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.ring(c) }, read: { try await RingDesk.ringLine(api) })
+            Task.detached { await ChumbyRingActions.report("app", "snooze", out, since: began, backup: "the app’s own") }
             // A Stop pressed while this Snooze was on its way has the card now ("Stopping…", its own hold on readings):
             // whatever the Snooze came to, the Stop's answer is the one shown.
             if ringStopping {

@@ -444,26 +444,32 @@ actor RingDesk {
         return try await api.raw("sys")
     }
     enum Kind: String { case stop = "ringoff", snooze = "ringsnooze" }
-    private var running: (kind: Kind, at: Date, id: UUID, task: Task<RingOutcome, Never>)?
-    // How long the Chumby is given to show the change: its hook notes a stop or snooze within 2 s, and a=ring answers in
-    // well under a second on either route (measured 11-18: 0.2 s at home, 0.5 s through the Mac).
+    typealias Result = (out: RingOutcome, how: String)
+    private var running: (kind: Kind, at: Date, id: UUID, task: Task<Result, Never>)?
+    // How the Chumby said the last press went (its answer's `how`, or how this phone came to know), for the Mac's log.
+    private(set) var lastHow = ""
+    // How long the Chumby's line is read for after an answer that doesn't settle it (RingAnswer.wait).
     static let patience: TimeInterval = 14
+    // The longest a press can take from thumb to answer: the Chumby's own wait (7 s), asked once more on "still
+    // ringing", or its line read for 10 s after a done:false. The app holds its readings off for this long at most.
+    static let longest: TimeInterval = 30
     // `send` and `read` default to the routes every intent uses; the app's own page passes its own connection.
-    func press(_ kind: Kind, send: (@Sendable (String) async throws -> Void)? = nil, read: (@Sendable () async throws -> (data: Data, age: Double))? = nil) async -> RingOutcome {
-        if let r = running, Date().timeIntervalSince(r.at) < Self.patience + 6 {
+    func press(_ kind: Kind, send: (@Sendable (String) async throws -> RingAnswer)? = nil, read: (@Sendable () async throws -> (data: Data, age: Double))? = nil) async -> RingOutcome {
+        if let r = running, Date().timeIntervalSince(r.at) < Self.longest {
             // The same press already on its way: its answer is this one's.
-            if r.kind == kind { return await r.task.value }
+            if r.kind == kind { return await r.task.value.out }
             // A Snooze behind a Stop: once the Stop is through, nothing is left to snooze.
-            if kind == .snooze { let o = await r.task.value; return o == .confirmed(until: nil) ? .nothingRinging : o }
+            if kind == .snooze { let o = await r.task.value.out; return o == .confirmed(until: nil) ? .nothingRinging : o }
             // A Stop behind a Snooze goes at once (gate, 11-18: it waited up to 14 s): the Chumby takes it whether the
             // snooze has landed (it ends the snooze for good) or not (it stops the ring).
         }
-        let send = send ?? { c in try await chumbyTry { try await $0.cmd(c) } }
+        let send = send ?? { c in try await chumbyTry { try await $0.ring(c) } }
         let read = read ?? { try await chumbyTry { try await RingDesk.ringLine($0) } }
         let id = UUID(), task = Task { await Self.run(kind, send: send, read: read) }
         running = (kind, Date(), id, task)
-        let out = await task.value
+        let (out, how) = await task.value
         if running?.id == id { running = nil }
+        lastHow = how
         Self.note(kind, out)
         return out
     }
@@ -485,26 +491,40 @@ actor RingDesk {
         let t = UserDefaults.standard.double(forKey: key)
         return t > 0 ? Date(timeIntervalSince1970: t) : nil
     }
-    private static func run(_ kind: Kind, send: @Sendable (String) async throws -> Void, read: @Sendable () async throws -> (data: Data, age: Double)) async -> RingOutcome {
+    // One press, to its end. The Chumby's answer is read first: done, with its line agreeing, is the confirmation, and
+    // the snooze's time comes from that line. "still ringing" is asked once more. A done:false (or an older Chumby's
+    // bare ok) is followed by reading its line until it shows the change; only that, or done, is ever called confirmed.
+    private static func run(_ kind: Kind, send: @Sendable (String) async throws -> RingAnswer, read: @Sendable () async throws -> (data: Data, age: Double)) async -> Result {
         let sent = Date()
-        do { try await send(kind.rawValue) }
-        catch ChumbyError.message("not delivered") { return .nothingRinging }
-        catch { return .failed(AlarmWriter.explain(error)) }
-        while Date().timeIntervalSince(sent) < patience {
-            try? await Task.sleep(nanoseconds: 600_000_000)
+        var answer = RingAnswer(), again = false
+        while true {
+            do { answer = try await send(kind.rawValue); break }
+            catch ChumbyError.message("not delivered") { return (.nothingRinging, "not delivered") }
+            catch where RingAnswer.stillRinging(error) && !again { again = true }
+            catch { return (.failed(AlarmWriter.explain(error)), (again ? "asked twice, " : "") + (RingAnswer.stillRinging(error) ? "still ringing" : "no answer")) }
+        }
+        let how = (again ? "asked twice, " : "") + (answer.how ?? (answer.done == nil ? "bare ok" : "done \(answer.done == true)"))
+        switch answer.read(stop: kind == .stop) {
+        case .confirmed(let until): return (.confirmed(until: until), how)
+        case .nothingRinging: return (.nothingRinging, how)
+        case .wait: break
+        }
+        let from = Date()
+        while Date().timeIntervalSince(from) < answer.wait {
+            try? await Task.sleep(nanoseconds: UInt64(answer.step * 1_000_000_000))
             guard let r = try? await read(), let line = try? JSONDecoder().decode(RingLine.self, from: r.data) else { continue }
             var sys = Sys(); sys.ring = line.ring
             // Only a reading taken after the press says anything about it.
             guard r.age < Date().timeIntervalSince(sent) - 0.5 else { continue }
             switch (kind, sys.ringing) {
-            case (_, nil): return kind == .stop ? .confirmed(until: nil) : .nothingRinging
+            case (_, nil): return (kind == .stop ? .confirmed(until: nil) : .nothingRinging, how + ", then its line")
             case (.snooze, let n?) where n.snoozed:
                 let f = sys.ring.components(separatedBy: "\t")
-                return .confirmed(until: f.count > 3 ? Double(f[3]).flatMap { $0 > 0 ? $0 : nil } : nil)
+                return (.confirmed(until: f.count > 3 ? Double(f[3]).flatMap { $0 > 0 ? $0 : nil } : nil), how + ", then its line")
             default: continue
             }
         }
-        return .unconfirmed
+        return (.unconfirmed, how + ", line unchanged")
     }
 }
 
@@ -518,7 +538,8 @@ enum ChumbyRingActions {
     static func report(_ from: String, _ kind: String, _ out: RingOutcome, since: Date, backup: String) async {
         let how: String
         switch out { case .confirmed: how = "confirmed"; case .nothingRinging: how = "nothing ringing"; case .unconfirmed: how = "unconfirmed"; case .failed(let w): how = "failed: " + w }
-        await ChumbyRingCard.diag(["from": from, "press": kind, "outcome": how + ", " + backup, "ms": Int(Date().timeIntervalSince(since) * 1000)])
+        // `how`: the Chumby's own word for the way it went (its hook's stop, the tap, nothing ringing), or this phone's.
+        await ChumbyRingCard.diag(["from": from, "press": kind, "outcome": how + ", " + backup, "how": await RingDesk.shared.lastHow, "ms": Int(Date().timeIntervalSince(since) * 1000)])
     }
     // What a press does to the phone's backup alarm, the same from every door. Stop: confirmed or nothing ringing, he is
     // awake and it goes (as on the app's page); unconfirmed, it goes once the Mac reports the ring over. Snooze: confirmed,

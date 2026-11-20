@@ -452,7 +452,9 @@ const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(J
   // The same ring read through the Mac's cache: for seven seconds after a Snooze or Stop, a=sys is the copy taken just
   // before it (still "ringing", its age in X-Chumby-Age), while a=ring answers at once. The card must hold what the
   // Chumby confirmed and never go back to Ringing on the old copy.
-  livestale: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
+  livestale: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) },
+  livelate: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) },
+  livestill: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
 // Sounds as Richard's looks (build 281, 11-13): long Pandora station names on every alarm and on calendar alarms, and
 // "Woke up to" with three one-song rings whose artists run to two lines (soundsreal), or the five rings of the sample
 // history, several songs each (soundsmany). Both are live, so a sound picked in a film is kept as the Chumby keeps it.
@@ -547,7 +549,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
@@ -575,8 +577,23 @@ function chumbyScene(q, s) {
       q.on('end', () => {
         const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
         if (scene === 'livestale' && a === 'cmd' && /^ring/.test(qs.get('c') || '')) live.stale = { at: Date.now(), body: { ...live.sys } };
-        if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's') + '\t' + (Math.floor(Date.now() / 1000) + 540);   // the hook's line: rings again at EPOCH
-        if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
+        // Stop and Snooze, answered as the Chumby's chalarm does since 11-20: it waits for its panel's line to change and
+        // says {ok, done, how, ring}. livestale is the older Chumby (a bare ok at once); livelate answers done:false and
+        // its line changes 1.5 s after that (the app must read a=ring until it does); livestill says "still ringing"
+        // to the first Stop and takes the second.
+        if (a === 'cmd' && /^ring(off|snooze)$/.test(qs.get('c') || '')) {
+          const c = qs.get('c'), idle = live.sys.ring === '';
+          const apply = () => {
+            if (c === 'ringoff') live.sys.ring = '';
+            else if (/^r/.test(live.sys.ring)) live.sys.ring = live.sys.ring.replace(/^r/, 's') + '\t' + (Math.floor(Date.now() / 1000) + 540);   // the hook's line: rings again at EPOCH
+          };
+          if (scene === 'livestale') { apply(); return json({ ok: true }); }
+          if (idle) return json({ ok: true, done: true, how: 'nothing ringing', ring: '' });
+          if (scene === 'livelate') { setTimeout(apply, 2500); setTimeout(() => json({ ok: true, done: false, how: 'tap sent', ring: live.sys.ring }), 1000); return; }
+          if (scene === 'livestill' && c === 'ringoff' && !live.refused) { live.refused = true; setTimeout(() => json({ ok: false, error: 'still ringing' }), 1500); return; }
+          setTimeout(() => { apply(); json({ ok: true, done: true, how: 'hook', ring: live.sys.ring }); }, 700);
+          return;
+        }
         // The panel's own skip, as the Chumby answers it: pinned by name (and the ring at or after `at`, epoch minutes)
         // since chumby 2c90cc9, an unknown name leaving no skip; without a name, the next Work. One pin only: a new skip
         // replaces it. (The hook's same-minute rule, a second copy due that minute skipped too, applies only to a copy
