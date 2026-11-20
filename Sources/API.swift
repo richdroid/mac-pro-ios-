@@ -12,9 +12,10 @@ struct Status: Decodable {
     struct Process: Decodable, Identifiable { let pid: Int; let cpu: Double; let mem: Double; let name: String; var id: Int { pid } }
     struct Peer: Decodable, Identifiable { let name: String; let os: String; let online: Bool; var id: String { name } }
     struct Tailscale: Decodable { let state: String; let name: String?; let peers: [Peer] }
-    struct Session: Decodable, Identifiable {
+    struct Session: Decodable, Identifiable, Hashable {
         let name: String; let status: String; let cwd: String; let remote: Bool
-        var id: String { name + cwd }
+        var updated: Double?; var key: String?; var restartable: Bool?; var stuck: Bool?; var waiting: Bool?
+        var id: String { key ?? (name + cwd) }
     }
     struct Claude: Decodable {
         let remoteControl: Bool; let desktop: Bool; let version: String; let keepAlive: Bool; let service: String?; let sessions: [Session]
@@ -28,13 +29,148 @@ struct Status: Decodable {
     struct Upgrade: Decodable { let installed: Bool; let status: String; let state: [String: String]; let log: String }
     struct OCLP: Decodable { let version: String; let patchedFor: String; let patchedAt: String; let kdk: String }
     struct Sharing: Decodable { let ssh: Bool; let vnc: Bool }
+    struct Temp: Decodable, Identifiable { let name: String; let c: Double; var id: String { name } }
+    struct SeedApp: Decodable, Identifiable {
+        let file: String; let name: String; let version: String; let build: String; let phoneBuild: String
+        let installedAt: Double; let expires: Double; let state: String; let message: String; let own: Bool
+        // The itms-services link of a copy signed for this iPhone, which installs over the air from anywhere on Tailscale.
+        // Empty or missing (an older Mac) when there's none.
+        var ota: String?
+        // What's new in the waiting build (the app's own changes since the one on the phone), when it was built (ms), and
+        // where the Mac serves its icon. Missing from an older Mac.
+        var notes: [String]?
+        var builtAt: Double?
+        var icon: String?
+        // His three apps come from TestFlight now (state "testflight"): the build waiting there, when there is one.
+        var tfBuild: String? = nil
+        var id: String { file.isEmpty ? name : file }
+        var testFlight: Bool { state == "testflight" }
+        // A TestFlight build newer than the one on the phone, if any.
+        var tfNewer: String? {
+            guard testFlight, let tf = tfBuild, !tf.isEmpty else { return nil }
+            let here = phoneBuild.isEmpty ? build : phoneBuild
+            if let a = Int(tf), let b = Int(here) { return a > b ? tf : nil }
+            return tf != here ? tf : nil
+        }
+    }
+    struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
+    struct Fetch: Decodable { let state: String; let message: String }
+    struct Service: Decodable, Identifiable { let label: String; let name: String; let running: Bool; var id: String { label } }
+    // A temperature alert also carries its reading in °C, so it's shown in the unit chosen in Settings.
+    struct Alert: Decodable, Identifiable { let id: String; let level: String; let kind: String; var metric: String?; let title: String; let detail: String; let since: Double; var c: Double?
+        // Whether the Mac's own notification for it reached Apple, so the background check never repeats it.
+        var pushed: Bool? }
+    // What the Anthropic API has cost, read on the Mac with its Admin key. Read leniently: a field it can't make sense of
+    // is simply missing, rather than losing the whole status.
+    struct APIUsage: Decodable {
+        struct Spend: Decodable { let cost: Double; let tokens: Int }
+        var configured = false
+        var error: String?
+        var at: Double?
+        var today: Spend?, week: Spend?, month: Spend?
+        // The billing period, in ms: his credit renews on the 19th, not the 1st.
+        var periodStart: Double?, renewsAt: Double?
+        // "estimate" when the Mac counted it from its own sessions, without an Admin key; nil for the Admin API's figures.
+        var source: String?
+        var estimated: Bool { source == "estimate" }
+        // Anthropic has said the credit is spent ("Credit balance is too low"): the key stops working until it renews.
+        var outOfCredit = false
+        enum K: String, CodingKey { case configured, error, at, today, week, month, periodStart, renewsAt, source, outOfCredit }
+        init(from d: Decoder) throws {
+            guard let c = try? d.container(keyedBy: K.self) else { return }
+            source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? nil
+            configured = (try? c.decodeIfPresent(Bool.self, forKey: .configured)) ?? false
+            outOfCredit = (try? c.decodeIfPresent(Bool.self, forKey: .outOfCredit)) ?? false
+            error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
+            at = (try? c.decodeIfPresent(Double.self, forKey: .at)) ?? nil
+            today = (try? c.decodeIfPresent(Spend.self, forKey: .today)) ?? nil
+            week = (try? c.decodeIfPresent(Spend.self, forKey: .week)) ?? nil
+            month = (try? c.decodeIfPresent(Spend.self, forKey: .month)) ?? nil
+            periodStart = (try? c.decodeIfPresent(Double.self, forKey: .periodStart)) ?? nil
+            renewsAt = (try? c.decodeIfPresent(Double.self, forKey: .renewsAt)) ?? nil
+        }
+        init(configured: Bool, error: String? = nil) { self.configured = configured; self.error = error }
+    }
+    struct IOSJob: Decodable { let state: String; let message: String }
+    struct IOSStatus: Decodable {
+        let hasPhone: Bool; let signedIn: Bool; let ready: Bool; let installedAt: Double; let nextDue: Double
+        let lastResult: String; let resigning: Bool; let job: IOSJob
+    }
 
-    let model: String; let macos: String; let build: String; let uptime: Double; let load: [Double]; let cpuModel: String
-    let cpu: CPU; let mem: Memory; let disk: Disk; let net: Network; let hist: History
+    let model: String; let macos: String; let build: String; var uptime: Double; var load: [Double]; let cpuModel: String
+    var cpu: CPU; var mem: Memory; var disk: Disk; var net: Network; var hist: History
     let apps: [App]; let installed: [String]; let procs: [Process]; let tailscale: Tailscale
-    let claude: Claude; let usage: Usage; let upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
+    let claude: Claude; let usage: Usage; var upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
+    let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
+    var displayOn: Bool?
+    var temps: [Temp]?
+    // The bridge's heat verdict (each sensor against its own limits); nil from a bridge older than 2026-11-12.
+    var heat: HeatVerdict?
+    let services: [Service]?
+    var iosApps: SeedStatus?
+    var alerts: [Alert]?
+    // Null until the Mac's first read.
+    var apiUsage: APIUsage?
+    // Whether the tunnel behind the public link is actually running. Older Macs don't say, and then the link's address
+    // existing is all there is to go on.
+    var publicUp: Bool?
+    var publicLinkActive: Bool { !publicUrl.isEmpty && (publicUp ?? true) }
+    // How many parts of the Mac need a look, as its Health page counts them, and when that was read (ms). From a bridge
+    // that says; nil from an older one.
+    var healthBad: Int?
+    var healthAt: Double?
+
+    // Read leniently: the parts no tab can do without are required, and everything else falls back to an empty value
+    // when the Mac leaves it out or changes its shape. The bridge changes daily, and one field renamed there froze
+    // sessions, apps and alerts here, since a status that doesn't decode is dropped whole (audit, 2026-11-10).
+    enum CodingKeys: String, CodingKey {
+        case model, macos, build, uptime, load, cpuModel, cpu, mem, disk, net, hist, apps, installed, procs, tailscale, claude, usage, upgrade, oclp, sharing
+        case publicUrl, typing, iphone, iloader, macLogin, screen, agentStale, ios, displayOn, temps, heat, services, iosApps, alerts, apiUsage, publicUp, healthBad, healthAt
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        func opt<T: Decodable>(_ k: CodingKeys) -> T? { (try? c.decodeIfPresent(T.self, forKey: k)) ?? nil }
+        model = try c.decode(String.self, forKey: .model); macos = try c.decode(String.self, forKey: .macos)
+        build = opt(.build) ?? ""; uptime = try c.decode(Double.self, forKey: .uptime); load = opt(.load) ?? []; cpuModel = opt(.cpuModel) ?? ""
+        cpu = try c.decode(CPU.self, forKey: .cpu); mem = try c.decode(Memory.self, forKey: .mem); disk = try c.decode(Disk.self, forKey: .disk)
+        net = try c.decode(Network.self, forKey: .net); hist = try c.decode(History.self, forKey: .hist)
+        apps = try c.decode([App].self, forKey: .apps); tailscale = try c.decode(Tailscale.self, forKey: .tailscale)
+        claude = try c.decode(Claude.self, forKey: .claude)
+        installed = opt(.installed) ?? []; procs = opt(.procs) ?? []
+        let none = Tally(input: 0, output: 0, cache: 0, messages: 0, models: [:])
+        usage = opt(.usage) ?? Usage(plan: nil, fiveHours: none, day: none, week: none, hours: [], scanning: false)
+        upgrade = opt(.upgrade) ?? Upgrade(installed: false, status: "", state: [:], log: "")
+        oclp = opt(.oclp) ?? OCLP(version: "", patchedFor: "", patchedAt: "", kdk: "")
+        sharing = opt(.sharing) ?? Sharing(ssh: false, vnc: false)
+        publicUrl = opt(.publicUrl) ?? ""; typing = opt(.typing) ?? ""; iphone = opt(.iphone) ?? false; iloader = opt(.iloader) ?? false
+        macLogin = opt(.macLogin) ?? false; screen = opt(.screen) ?? ""; agentStale = opt(.agentStale) ?? false
+        ios = opt(.ios) ?? IOSStatus(hasPhone: false, signedIn: true, ready: false, installedAt: 0, nextDue: 0, lastResult: "", resigning: false, job: IOSJob(state: "", message: ""))
+        displayOn = opt(.displayOn); temps = opt(.temps); heat = opt(.heat); services = opt(.services); iosApps = opt(.iosApps); alerts = opt(.alerts)
+        apiUsage = opt(.apiUsage); publicUp = opt(.publicUp); healthBad = opt(.healthBad); healthAt = opt(.healthAt)
+    }
 }
+
+// The numbers that change every second.
+struct LiveStatus: Decodable, Equatable {
+    let uptime: Double; let load: [Double]; let cpu: Status.CPU; let mem: Status.Memory; let net: Status.Network; let hist: Status.History; let temps: [Status.Temp]?
+    // The display's real state each second, so the Display key follows the Mac by itself (Richard, 2026-11-07: "should
+    // self update not requiring refresh").
+    var displayOn: Bool?
+    var heat: HeatVerdict?
+}
+// How the Mac is doing for heat, in the bridge's one rule: "Normal", "Warm" or "Hot", and the sensor nearest its limit.
+struct HeatVerdict: Decodable, Equatable { let verdict: String; let hottest: Status.Temp? }
+// Compared, so a reading that's the same as the last one doesn't redraw the live tiles.
+extension Status.CPU: Equatable {}
+extension Status.Memory: Equatable {}
+extension Status.Network: Equatable {}
+extension Status.History: Equatable {}
+extension Status.Temp: Equatable {}
+// Compared, so a pushed page that shows one app or one session redraws only when that changes, never for a reading.
+extension Status.SeedApp: Equatable {}
+extension Status.SeedStatus: Equatable {}
+extension Status.Fetch: Equatable {}
 
 enum APIError: LocalizedError {
     case signInNeeded, message(String), badResponse
@@ -60,15 +196,75 @@ struct API {
         return r
     }
 
-    func status() async throws -> Status {
+    func clipboard() async throws -> String {
+        struct Clip: Decodable { let text: String }
+        var r = request("/api/clipboard"); r.timeoutInterval = 8
+        let (d, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Clip.self, from: d).text
+    }
+    // The Mac's clipboard and its change count, which rises on every copy, the same text or not. Nil from a bridge that
+    // doesn't send it yet.
+    func clipboardState() async throws -> (text: String, count: Int?) {
+        struct Clip: Decodable { let text: String; let count: Int? }
+        var r = request("/api/clipboard"); r.timeoutInterval = 8
+        let (d, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        let c = try JSONDecoder().decode(Clip.self, from: d)
+        return (c.text, c.count)
+    }
+    func setClipboard(_ text: String) async throws {
+        var r = request("/api/clipboard", method: "POST")
+        r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
+        r.setValue("1", forHTTPHeaderField: "x-dash")
+        r.httpBody = Data(text.utf8)
+        let (_, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+    }
+
+    func live() async throws -> LiveStatus {
+        var r = request("/api/live"); r.timeoutInterval = 6
+        let (data, response) = try await session.data(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(LiveStatus.self, from: data)
+    }
+
+    func trend(_ key: String) async throws -> [TrendPoint] {
+        struct Answer: Decodable { let points: [TrendPoint] }
+        let term = key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key
+        let (data, response) = try await session.data(for: request("/api/trend?m=\(term)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Answer.self, from: data).points
+    }
+
+    // One of his apps' finished builds, newest first, with what changed in each: the Apps tab's Version History.
+    func history(_ file: String) async throws -> [BuildNotes] {
+        struct Answer: Decodable { let builds: [BuildNotes] }
+        let term = file.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? file
+        let (data, response) = try await session.data(for: request("/api/ios-history?file=\(term)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Answer.self, from: data).builds
+    }
+
+    // An app he added: what its package says, and any history the Mac found in public. An older Mac doesn't know the
+    // request and answers 404 (badResponse), and the page keeps what the Apps tab already knows.
+    func ipaInfo(_ file: String) async throws -> IPAAnswer {
+        let term = file.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? file
+        let (data, response) = try await session.data(for: request("/api/ios-info?file=\(term)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(IPAAnswer.self, from: data)
+    }
+
+    func statusData() async throws -> Data {
         let (data, response) = try await session.data(for: request("/api/status"))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 || code == 403 { throw APIError.signInNeeded }
         guard code == 200 else { throw APIError.badResponse }
-        return try JSONDecoder().decode(Status.self, from: data)
+        return data
     }
 
-    private func post(_ path: String, body: [String: Any]) async throws {
+    @discardableResult
+    private func post(_ path: String, body: [String: Any]) async throws -> Data {
         var r = request(path, method: "POST")
         // The server rejects requests from other sites, so say which site this is, as a browser would.
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
@@ -77,14 +273,75 @@ struct API {
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await session.data(for: r)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 200 { return }
+        if code == 200 { return data }
         let err = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
         if code == 401 { throw APIError.signInNeeded }
         throw APIError.message(err ?? "That did not work.")
     }
 
+    // Hands an app package to the Mac's library, ready to seed.
+    func upload(_ file: URL) async throws {
+        let name = file.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? file.lastPathComponent
+        var r = request("/api/ios-upload?name=\(name)", method: "POST")
+        r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
+        r.setValue("1", forHTTPHeaderField: "x-dash")
+        r.timeoutInterval = 600
+        let (data, response) = try await session.upload(for: r, fromFile: file)
+        if (response as? HTTPURLResponse)?.statusCode == 200 { return }
+        throw APIError.message((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String ?? "The Mac refused that file.")
+    }
+
+    // A small file from the Mac, such as an app's icon.
+    func data(_ path: String) async throws -> Data {
+        var r = request(path); r.timeoutInterval = 15
+        let (d, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return d
+    }
+
+    func processes() async throws -> ProcessReport {
+        let (data, response) = try await session.data(for: request("/api/procs"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(ProcessReport.self, from: data)
+    }
+    // True once it has gone. The Mac waits a few seconds to find out.
+    func quitProcess(_ p: MacProcess, force: Bool) async throws -> Bool {
+        struct Answer: Decodable { let gone: Bool }
+        return try JSONDecoder().decode(Answer.self, from: try await post("/api/procs/quit", body: ["pid": p.pid, "start": p.start, "force": force])).gone
+    }
+    // True once it's back in tmux.
+    func restartSession(_ key: String) async throws -> Bool {
+        struct Answer: Decodable { let running: Bool }
+        return try JSONDecoder().decode(Answer.self, from: try await post("/api/claude-sessions/restart", body: ["name": key])).running
+    }
+    // A kept session's screen as text, and keys or a message typed into it. Only through Tailscale.
+    struct Term: Decodable { var running: Bool?; var text: String? }
+    func termScreen(_ key: String) async throws -> Term {
+        var r = request("/api/term?name=\(key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key)"); r.timeoutInterval = 10
+        let (data, response) = try await session.data(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Term.self, from: data)
+    }
+    func termSend(_ key: String, _ body: [String: Any]) async throws -> Term {
+        var b = body; b["name"] = key
+        return try JSONDecoder().decode(Term.self, from: try await post("/api/term", body: b))
+    }
+    func alerts() async throws -> [Status.Alert] {
+        struct Answer: Decodable { let alerts: [Status.Alert] }
+        var r = request("/api/alerts"); r.timeoutInterval = 15
+        let (data, response) = try await session.data(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Answer.self, from: data).alerts
+    }
+
     func login(code: String) async throws { try await post("/login", body: ["code": code]) }
     func action(_ name: String, _ body: [String: Any] = [:]) async throws { try await post("/api/action/\(name)", body: body) }
+    // Where the Mac sends this iPhone's notifications, or `off` to have it forget.
+    func pushToken(_ token: String, bundle: String, celsius: Bool, off: Bool) async throws {
+        try await post("/api/push/token", body: ["app": "macpro", "bundle": bundle, "token": token, "celsius": celsius, "off": off])
+    }
+    // An alert put away on the phone: no "back to normal" follows it.
+    func pushSeen(_ id: String) async throws { try await post("/api/push/seen", body: ["id": id]) }
 
     // Secrets are encrypted here, to a one-time offer from the Mac, before they leave the phone.
     func sendSealed(_ name: String, secret: String, extra: [String: Any] = [:]) async throws {

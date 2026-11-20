@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Mac Pro's portrait on its glow, pinned where Status draws its hero folded, so the first frame of the app lines up
+     with it and nothing jumps. 148 pt high, centred 157 pt from the top and 29.5 pt left of centre, clear of the side bar. -->
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="23504" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="LMP-vc-001">
+    <dependencies>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="23506"/>
+        <capability name="Named colors" minToolsVersion="9.0"/>
+        <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <scenes>
+        <scene sceneID="LMP-sc-001">
+            <objects>
+                <viewController id="LMP-vc-001" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="LMP-vw-001">
+                        <rect key="frame" x="0.0" y="0.0" width="465" height="677"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleToFill" image="LaunchHero" translatesAutoresizingMaskIntoConstraints="NO" id="LMP-gl-001">
+                                <rect key="frame" x="108" y="62" width="190" height="190"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="190" id="LMP-c1-001"/>
+                                    <constraint firstAttribute="height" constant="190" id="LMP-c1-002"/>
+                                </constraints>
+                            </imageView>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="LaunchMacPro" translatesAutoresizingMaskIntoConstraints="NO" id="LMP-im-001">
+                                <rect key="frame" x="129" y="83" width="148" height="148"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="148" id="LMP-c2-001"/>
+                                    <constraint firstAttribute="height" constant="148" id="LMP-c2-002"/>
+                                </constraints>
+                            </imageView>
+                        </subviews>
+                        <color key="backgroundColor" name="LaunchColor"/>
+                        <constraints>
+                            <constraint firstItem="LMP-im-001" firstAttribute="centerX" secondItem="LMP-vw-001" secondAttribute="centerX" constant="-29.5" id="LMP-c3-001"/>
+                            <constraint firstItem="LMP-im-001" firstAttribute="centerY" secondItem="LMP-vw-001" secondAttribute="top" constant="157" id="LMP-c3-002"/>
+                            <constraint firstItem="LMP-gl-001" firstAttribute="centerX" secondItem="LMP-im-001" secondAttribute="centerX" id="LMP-c3-003"/>
+                            <constraint firstItem="LMP-gl-001" firstAttribute="centerY" secondItem="LMP-im-001" secondAttribute="centerY" id="LMP-c3-004"/>
+                        </constraints>
+                    </view>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="LMP-fr-001" userLabel="First Responder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="0.0" y="0.0"/>
+        </scene>
+    </scenes>
+    <resources>
+        <image name="LaunchHero" width="190" height="190"/>
+        <image name="LaunchMacPro" width="148" height="148"/>
+        <namedColor name="LaunchColor">
+            <color red="0.0" green="0.0" blue="0.0" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+        </namedColor>
+    </resources>
+</document>
