@@ -60,6 +60,7 @@ final class ChumbyModel: ObservableObject {
     @Published private(set) var ringReadings = 0
     private var ringSwept = false
     private var ringStoppedAt: Date?
+    private var ringSnoozedAt: Date?
     // A Stop or Snooze on its way and not yet confirmed by the Chumby: Home's ringing card and the ringing page say
     // "Stopping…" or "Snoozing…" with their keys dimmed, as the Lock Screen card does. Nil when nothing is pending.
     @Published private(set) var ringWorking: String?
@@ -270,6 +271,9 @@ final class ChumbyModel: ObservableObject {
             // A copy taken before a Stop the Chumby has since taken still says "ringing": it isn't believed (the Mac's
             // copy can be ten seconds old, twice the hold a Stop puts on readings).
             if s.ringing != nil, let stopped = ringStoppedAt, Date().addingTimeInterval(-r.age) < stopped.addingTimeInterval(2) { s.ring = "" }
+            // The same for a Snooze the Chumby has confirmed: a copy taken before it still says "ringing", and believed, it
+            // put "Ringing" and the Snooze key back for a reading and brought the ringing page up again, mid-snooze.
+            if let n = s.ringing, !n.snoozed, sys.ringing?.snoozed == true, let z = ringSnoozedAt, Date().addingTimeInterval(-r.age) < z.addingTimeInterval(2) { s.ring = sys.ring }
             readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
@@ -681,6 +685,17 @@ final class ChumbyModel: ObservableObject {
         guard let api else { ringWorking = nil; withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
             let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
+            // A Stop pressed while this Snooze was on its way has the card now ("Stopping…", its own hold on readings):
+            // whatever the Snooze came to, the Stop's answer is the one shown.
+            if ringStopping {
+                if case .confirmed(let until) = out {
+                    let end = until ?? snoozeEnds?.timeIntervalSince1970
+                    ChumbyBackupAlarm.shared.snoozed(name: was.components(separatedBy: "\t").dropFirst().first,
+                                                     until: end.map { Date(timeIntervalSince1970: $0) } ?? Date().addingTimeInterval(9 * 60))
+                    return true
+                }
+                return out == .nothingRinging
+            }
             hold(0)
             // "Snoozing…" giving way and the card turning snoozed are one change in the card's one spring, so Stop widens
             // into Snooze's room with it rather than in a frame (gate, 11-18).
@@ -690,6 +705,7 @@ final class ChumbyModel: ObservableObject {
                 withAnimation(Self.ringSpring) {
                     ringWorking = nil
                     if let r = sys.ringing { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() }
+                    ringSnoozedAt = Date()
                 }
                 Task { await ChumbyRingCard.handled() }
                 let end = until ?? snoozeEnds?.timeIntervalSince1970

@@ -448,7 +448,11 @@ http.createServer(tvRoute).listen(9002, "127.0.0.1");
 }
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
 const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)) },
-  liveringing: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
+  liveringing: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) },
+  // The same ring read through the Mac's cache: for seven seconds after a Snooze or Stop, a=sys is the copy taken just
+  // before it (still "ringing", its age in X-Chumby-Age), while a=ring answers at once. The card must hold what the
+  // Chumby confirmed and never go back to Ringing on the old copy.
+  livestale: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
 // Sounds as Richard's looks (build 281, 11-13): long Pandora station names on every alarm and on calendar alarms, and
 // "Woke up to" with three one-song rings whose artists run to two lines (soundsreal), or the five rings of the sample
 // history, several songs each (soundsmany). Both are live, so a sound picked in a film is kept as the Chumby keeps it.
@@ -543,7 +547,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
@@ -570,6 +574,7 @@ function chumbyScene(q, s) {
       q.on('data', c => body += c);
       q.on('end', () => {
         const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
+        if (scene === 'livestale' && a === 'cmd' && /^ring/.test(qs.get('c') || '')) live.stale = { at: Date.now(), body: { ...live.sys } };
         if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's') + '\t' + (Math.floor(Date.now() / 1000) + 540);   // the hook's line: rings again at EPOCH
         if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
         // The panel's own skip, as the Chumby answers it: pinned by name (and the ring at or after `at`, epoch minutes)
@@ -637,6 +642,7 @@ function chumbyScene(q, s) {
     // The live scene's readings move as the real Chumby's do (its uptime, load, free memory and Wi-Fi), so a reading
     // changes Home's status rows every poll, as on his phone: the film of Home pulled past its end (chumby-homepull-
     // portrait) must show every one of them held while the page is past its end, not landing under the pull.
+    if (a === 'sys' && live.stale && Date.now() - live.stale.at < 7000) { s.setHeader('X-Chumby-Age', String((Date.now() - live.stale.at) / 1000)); return json(live.stale.body); }
     if (a === 'sys') { const n = Math.floor(Date.now() / 1000); return json(scene === 'live' ? { ...live.sys, up: live.sys.up + n % 100000, load: 0.3 + (n % 7) / 10, memFree: live.sys.memFree - (n % 5) * 400, wifi: 60 + (n * 7) % 31 } : live.sys); }
     if (a === 'state') return json(stateNow(live.state));
     if (a === 'chlist' && live.chlist) return json(live.chlist);

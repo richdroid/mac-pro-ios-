@@ -624,7 +624,7 @@ struct RootView: View {
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
         .onAppear {
-            if ChumbyModel.pose == "ringscreen" || ChumbyModel.pose == "ringfail" { model.ringScreen = true }
+            if ["ringscreen", "ringfail", "ringpagedemo"].contains(ChumbyModel.pose) { model.ringScreen = true }
             if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
         }
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
@@ -1225,7 +1225,7 @@ struct HomeTab: View {
             Section("Channel") {
                 ForEach(model.state.channelNames, id: \.self) { name in
                     Button { model.playChannel(name, id: "homeChannel") } label: {
-                        if name == channelName { Label(name, systemImage: "checkmark") } else { Text(name) }
+                        if name.trimmingCharacters(in: .whitespacesAndNewlines) == channelName.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
                     }
                 }
             }
@@ -1650,6 +1650,7 @@ struct ChannelsTab: View {
     @Environment(\.horizontalSizeClass) private var size
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.scenePhase) private var phase
 
     var channels: [ChannelList.Channel] { model.channelData?.channels ?? [] }
     func title(_ c: ChannelList.Channel) -> String { c.list.first.flatMap { $0.count > 1 ? $0[1] : nil } ?? "Channel" }
@@ -1710,7 +1711,8 @@ struct ChannelsTab: View {
         }
     }
     func openAdd() {
-        flush()
+        // Nothing is sent on the way in: an edit still waiting goes with what's added, in one save, at Done.
+        saveTask?.cancel()
         // Kept as it was on opening, so a row he adds stays under his finger, ticked, rather than leaving the list.
         offered = notHere.map { MoreItem(id: $0[0], name: $0[1], own: $0.count > 2 ? Int($0[2]) ?? 0 : 0) }
         model.tick()
@@ -1719,6 +1721,8 @@ struct ChannelsTab: View {
     func closeAdd(_ scroll: ScrollViewProxy) {
         withAnimation(.snappy) { adding = false }
         reveal(scroll)
+        // Done sends what was added at once (as Edit's Done does), unless the list is still in Edit.
+        if !reordering { flush() }
     }
 
     func pick() {
@@ -1742,12 +1746,15 @@ struct ChannelsTab: View {
         rows = out
     }
     // Each save restarts the channel for about 30 seconds, so edits gather until 5 quiet seconds have passed, or until
-    // the editor is left, whichever comes first.
+    // the editor is left, whichever comes first. In Edit and in the Add widgets picker they gather until Done: five
+    // quiet seconds are nothing while he reads a list, and each save sent under him restarted the channel again, once
+    // per pause (the brief: "batched and never repeated"). Leaving the tab or the app sends them too.
     func changed() {
         guard !switching else { return }
         saveTask?.cancel()
         unsent = (rows, picked)
         edited[picked] = rows
+        guard !reordering, !adding else { return }
         saveTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
@@ -1788,7 +1795,12 @@ struct ChannelsTab: View {
                 // are left as they are (they already show it), so nothing redraws.
                 await model.loadChannels()
                 if unsent == nil || unsent?.id != u.id { edited[u.id] = nil }
-            } catch { model.fail("chedit", "Couldn’t save that. \(AlarmWriter.explain(error))"); edited[u.id] = nil }
+            } catch {
+                model.fail("chedit", "Couldn’t save that. \(AlarmWriter.explain(error))"); edited[u.id] = nil
+                // Not saved: the list goes back to what the Chumby holds, with the note saying why, rather than showing
+                // an order the Chumby doesn't have (unless something newer of his is still waiting to go).
+                if unsent == nil, picked == u.id, !reordering, !adding { withAnimation(.snappy) { pick() } }
+            }
         }
     }
     func decode(_ s: String) -> String {
@@ -2088,7 +2100,9 @@ struct ChannelsTab: View {
             .environment(\.colorScheme, scheme)
         }
         .onChange(of: picked) { _, _ in if adding { withAnimation(.snappy) { adding = false } } }
-        .onChange(of: wide) { _, _ in adding = false }
+        .onChange(of: wide) { _, _ in if adding { adding = false; if !reordering { flush() } } }
+        // Leaving the app with an edit still waiting (Edit or the picker left open): it goes now, never lost.
+        .onChange(of: phase) { _, p in if p == .background { flush() } }
         .onAppear {
             startFromCache()
             guard !posed, ["chsync", "chdemo", "chadd", "chedit", "cheditdemo", "jumpdemo", "jumprow"].contains(ChumbyModel.pose) else { return }
@@ -2141,7 +2155,9 @@ struct ChannelsTab: View {
         .onChange(of: model.state.channel) { _, _ in followPlaying(showing) }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
         .onDisappear { flush() }
-        .refreshable { flush(); edited = [:]; await model.loadChannels(); await model.loadState(); pick() }
+        // A save on its way is waited for first: read before it landed, the Chumby's old list came back over the edit
+        // for a moment and then the edit again.
+        .refreshable { flush(); await saveQueue?.value; if unsent == nil { edited = [:] }; await model.loadChannels(); await model.loadState(); if unsent == nil { withAnimation(.snappy) { pick() } } }
     }
 }
 
@@ -2219,7 +2235,9 @@ struct NowPlaying: View {
                 if starting != nil {
                     // No Stop until there's something to stop: the Mac is still getting it to the Chumby.
                     ProgressView().frame(width: 44, height: 44)
-                } else if playing {
+                } else if playing && (mac != nil || model.sys.ringing == nil) {
+                    // Not under an alarm: what plays then is the alarm, and its Stop is the ringing card's. A second Stop
+                    // here only cut the music off and left the alarm going, silent.
                     Button { if mac != nil { model.stopMacMusic() } else { model.cmd("stopmusic", id: failID) } } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
                         .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Stop")
                 }
@@ -2345,6 +2363,7 @@ struct SoundsTab: View {
     @State private var streamURL = ""
     @State private var streamName = ""
     @State private var pendingRemoval: Stream?
+    @State private var editingStreams = false
     var dark: Bool { scheme == .dark }
 
     var scanNote: String? {
@@ -2566,16 +2585,25 @@ struct SoundsTab: View {
             .animation(.snappy, value: mine.map(\.key))
             Section {
                 ForEach(model.state.streams, id: \.key) { s in
+                    // Taken out as every list's rows are (11-18: "the right side minus sign for delete ... makes no sense"):
+                    // Edit in the heading, the red disc at the row's start. It was the last ⊖ at a row's end.
                     HStack(spacing: 12) {
+                        LeadingRemove(editing: editingStreams, label: "Remove \(s.name.isEmpty ? "this stream" : s.name)") { pendingRemoval = s }
+                            .padding(.trailing, editingStreams ? -19 : -12)
                         Label(s.name.isEmpty ? s.url : s.name, systemImage: "dot.radiowaves.left.and.right").lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        RowRemove(label: "Remove \(s.name.isEmpty ? "this stream" : s.name)") { pendingRemoval = s }
                     }
+                        .frame(minHeight: 30)
                         .padding(.vertical, 4)
+                        .animation(.snappy, value: editingStreams)
                         // The question hangs off the row it came from, so it points at what's going.
                         .confirmationDialog("Remove \(s.name.isEmpty ? "this stream" : s.name)?", isPresented: .init(get: { pendingRemoval?.key == s.key }, set: { if !$0 { pendingRemoval = nil } }), titleVisibility: .visible) {
                             Button("Remove", role: .destructive) {
-                                model.state.streams.removeAll { $0.key == s.key }; Task { await model.saveStreams() }
+                                withAnimation(.snappy) {
+                                    model.state.streams.removeAll { $0.key == s.key }
+                                    if model.state.streams.isEmpty { editingStreams = false }
+                                }
+                                Task { await model.saveStreams() }
                             }
                         }
                 }
@@ -2612,7 +2640,7 @@ struct SoundsTab: View {
                 }) { stationLink = ""; addStation = true }
                     .disabled(model.addingStation || model.unreachable)
                 if let f = model.failed("pandora") { FailNote(text: f, dismiss: model.dismissal("pandora")) }
-            } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { SectionFoot(scanNote) } }
+            } header: { EditHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark), editing: $editingStreams, shown: !model.state.streams.isEmpty) } footer: { if let scanNote { SectionFoot(scanNote) } }
         }
         .seaList()
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }

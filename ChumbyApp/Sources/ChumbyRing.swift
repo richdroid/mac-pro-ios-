@@ -240,6 +240,12 @@ struct RingScreen: View {
                 if model.sys.ringing == nil { close() }
             }
         }
+        // For the build's film: the ringing page itself, snoozed and then stopped, on a stand-in that answers as the Chumby does.
+        .task {
+            guard ChumbyModel.pose == "ringpagedemo" else { return }
+            try? await Task.sleep(nanoseconds: 5_000_000_000); snooze()
+            try? await Task.sleep(nanoseconds: 5_000_000_000); stop()
+        }
         .task(id: model.sys.ringing != nil) {
             // Still going twenty seconds on with no card on the Lock Screen: the app puts one there.
             try? await Task.sleep(nanoseconds: 20_000_000_000)

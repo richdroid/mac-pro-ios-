@@ -373,7 +373,7 @@ struct RingingCard: View {
                     .buttonStyle(.plain)
                     .frame(minWidth: snoozed ? 0 : snoozeMin, maxWidth: snoozed ? 0 : .infinity)
                     .padding(.trailing, snoozed ? 0 : 14)
-                    .allowsHitTesting(!snoozed).accessibilityHidden(snoozed)
+                    .allowsHitTesting(!snoozed && model.ringWorking == nil).accessibilityHidden(snoozed)
                     // The same capsule as Snooze's, in the app's orange: the system's prominent style padded it taller.
                     Button { model.ringOff() } label: {
                         Label("Stop", systemImage: "stop.fill").lineLimit(1).foregroundStyle(.white)
@@ -385,7 +385,9 @@ struct RingingCard: View {
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                 // Pressed and not yet confirmed: both keys dim and rest, so the press is seen to have landed (as on the card).
-                .opacity(model.ringWorking != nil ? 0.45 : 1).allowsHitTesting(model.ringWorking == nil)
+                // Stop still takes a press while a Snooze is on its way (a Snooze hit by mistake half asleep must never
+                // lock Stop out for the fourteen seconds the Chumby is given); the desk sends it at once.
+                .opacity(model.ringWorking != nil ? 0.45 : 1).allowsHitTesting(!model.ringStopping)
                 if let f = model.failed("ring") { FailNote(text: f) }
             }
             .padding(16)
@@ -1102,6 +1104,8 @@ struct AlarmsTab: View {
             case "calonce": if let w = wake.plan.first { wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(25 * 60).timeIntervalSince1970) }
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
+            // For the build's film: a new alarm made and saved (the editor saves it itself), the list taking it in.
+            case "newalarmdemo": Task { try? await Task.sleep(nanoseconds: 2_500_000_000); edit(nil) }
             // His own alarms and the nap brought on screen, folded, for their shot.
             case "alarmsmine", "napset": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap" }
             // The nap set (the mock's nap scene) opened in its editor.
@@ -2019,7 +2023,8 @@ struct AlarmEditor: View {
             if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { alarm = t }
         } else if let original { alarm = original }
         // The build's shot of a new alarm being set for a new time, so "Saving turns off …" can be seen.
-        if original == nil && !calendarTemplate && ChumbyModel.pose == "editornew" { alarm.time = "330"; alarm.when = "weekday" }
+        if original == nil && !calendarTemplate && ["editornew", "newalarmdemo"].contains(ChumbyModel.pose) { alarm.time = "330"; alarm.when = "weekday" }
+        if original == nil && !calendarTemplate && !nap && ChumbyModel.pose == "newalarmdemo" { Task { try? await Task.sleep(nanoseconds: 3_500_000_000); save() } }
         let m = alarm.localMinutes
         time = Calendar.current.date(bySettingHour: m / 60 % 24, minute: m % 60, second: 0, of: Date()) ?? Date()
         if let d = Alarm.dayKeys.firstIndex(of: alarm.when) { day = d; repeatMode = "day" } else { repeatMode = alarm.when }
