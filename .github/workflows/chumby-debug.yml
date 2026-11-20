@@ -17,7 +17,7 @@ concurrency:
 jobs:
   debug:
     runs-on: xcode-27
-    timeout-minutes: 190
+    timeout-minutes: 230
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,7 +40,7 @@ jobs:
           done
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 140
+        timeout-minutes: 180
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -73,6 +73,10 @@ jobs:
             kill -INT $rec; wait $rec
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
+          # The app opened once on a scene before its film, so the film starts from that Chumby's own last readings (as
+          # the app does on his phone) and not from the film before's: without it each ring film opened on the last
+          # scene's Home for a moment, then threw it out.
+          warm() { xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $1 -tab 0; sleep 10; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; sleep 1; }
           gallery() { # page, display, name
             xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $1
             sleep 8
@@ -119,8 +123,8 @@ jobs:
           # The ringing page's slide to stop under a finger: a short slide let go (the key springs back), a slow slide
           # most of the way and back by the finger, then the whole run (the Chumby stops, the page leaves).
           slide() { # name, display, x of the key at rest, x at the run's end, y of the bar
-            remock; rec $1 $2 $M/liveringing -tab 0 -pose ringscreen
-            sleep 9
+            remock; warm $M/liveringing; rec $1 $2 $M/liveringing -tab 0 -pose ringscreen
+            sleep 16
             local mid=$(echo "$3 + ($4 - $3) * 0.35" | bc -l)
             $D "$DEVICE" drag $3 $5 $mid $5 0.8 || echo "slide failed"; sleep 2
             $D "$DEVICE" drag $3 $5 $4 $5 0.6 || echo "slide failed"; sleep 5
@@ -162,24 +166,25 @@ jobs:
             shot home-dead$x $d 12 $M/dead -tab 0
             shot alarms-dead$x $d 12 $M/dead -tab 2
             # Ring, Snooze (3.5 s in), Stop (4 s later) on Home's card, on a stand-in that answers as the Chumby does.
-            remock; film ringdemo$x $d 14 $M/liveringing -tab 0 -pose ringdemo
+            remock; warm $M/liveringing; film ringdemo$x $d 14 $M/liveringing -tab 0 -pose ringdemo
             # The same through the Mac's cache: sys is the copy from before each press for 7 s. The card must hold
             # "Snoozed until" and never go back to Ringing, and stay gone after Stop.
-            remock; film ringstale$x $d 16 $M/livestale -tab 0 -pose ringdemo
+            remock; warm $M/livestale; film ringstale$x $d 16 $M/livestale -tab 0 -pose ringdemo
             # The ringing page: Snooze at 5 s, slid to Stop at 10 s, the page leaving once the Chumby says it stopped.
-            remock; film ringpage$x $d 16 $M/liveringing -tab 0 -pose ringpagedemo
-            remock; film ringpagestale$x $d 16 $M/livestale -tab 0 -pose ringpagedemo
+            remock; warm $M/liveringing; film ringpage$x $d 16 $M/liveringing -tab 0 -pose ringpagedemo
+            remock; warm $M/livestale; film ringpagestale$x $d 16 $M/livestale -tab 0 -pose ringpagedemo
             # The Chumby's own answer (chalarm, 11-20). done:false, its line changing 1.5 s later: "Snoozing…" and
             # "Stopping…" hold until the line says so. Then a Stop the Chumby first calls "still ringing": asked once
             # more, and it stops, with no failure shown.
-            remock; film ringlate$x $d 16 $M/livelate -tab 0 -pose ringdemo
-            remock; film ringstill$x $d 16 $M/livestill -tab 0 -pose ringpagedemo
+            remock; warm $M/livelate; film ringlate$x $d 16 $M/livelate -tab 0 -pose ringdemo
+            remock; warm $M/livestill; film ringstill$x $d 16 $M/livestill -tab 0 -pose ringpagedemo
             # Snooze, then Stop, pressed as the Lock Screen's card, the notification and Siri press them (not the app's
             # own keys), with the app open, through an old copy of sys: Home follows at once and holds.
-            remock; film ringdoor$x $d 14 $M/livestale -tab 0 -pose ringdoor
+            remock; warm $M/livestale; film ringdoor$x $d 14 $M/livestale -tab 0 -pose ringdoor
             # Upright, the open-flat films stand for the rest: only the ring films and two tabs flung (the first run
             # ran out of its time before this posture began).
-            if [ $size = brief ]; then remock; for T in 0 2; do fling fling-$T$x $d $T "$@"; done; return; fi
+            if [ $size != full ]; then remock; for T in 0 2; do fling fling-$T$x $d $T "$@"; done; fi
+            [ $size = brief ] && return
             # A skipped day: Skip, then Undo.
             remock; film skipdemo$x $d 14 $M/live -tab 0 -pose skipdemo
             # Calendar settings, a calendar day and an editor in and out, then a nap set, counting down, called off.
@@ -192,7 +197,8 @@ jobs:
             remock; film chdemo$x $d 14 $M/live -tab 1 -pose chdemo
             # The volume set from Sounds on a stand-in that applies it 2 s later, as the real one does: it must hold.
             remock; film voldemo$x $d 9 $M/live -tab 3 -pose voldemo
-            # Every tab to its end and back, with real touches.
+            # Every tab to its end and back, with real touches (open flat: Home and Alarms, flung before the films above).
+            [ $size = full ] || return
             remock
             for T in 0 1 2 3 4; do fling fling-$T$x $d $T "$@"; done
           }
@@ -202,16 +208,16 @@ jobs:
           slide ringslide 1 0.12 0.93 0.864
           # A channel of six, in Edit: the last widget dragged to the top by its grip, slowly, then the second down two.
           remock; rec chdrag 1 $M/livemany -tab 1 -pose chedit
-          sleep 9
+          sleep 18
           $D "$DEVICE" drag 0.75 0.728 0.75 0.20 2.5 || echo "drag failed"; sleep 2
           $D "$DEVICE" drag 0.75 0.324 0.75 0.55 1.5 || echo "drag failed"; sleep 3
           cut chdrag 1
           # Sounds' radio stations in Edit (the delete control at the row's start), then Done: the page flung to them first.
           remock; rec streamsedit 1 $M/live -tab 3 -pose streamsedit
-          sleep 7
+          sleep 10
           for i in 1 2 3; do $D "$DEVICE" drag 0.5 0.8 0.5 0.25 0.12 || true; sleep 0.8; done
-          sleep 4; xcrun simctl io "$DEVICE" screenshot --display=1 dist/dbg-streamsedit-editing.png
-          sleep 4
+          sleep 5; xcrun simctl io "$DEVICE" screenshot --display=1 dist/dbg-streamsedit-editing.png
+          sleep 7
           cut streamsedit 1
           # Alarms with the calendar's alarms on (the long page), flung to its end and back.
           remock; FLINGARGS="-pose calendar" fling fling-2-calendar 1 2 0.5
@@ -223,7 +229,7 @@ jobs:
           shot ringpage-dark 1 9 $M/ringing -tab 0 -pose ringscreen
           xcrun simctl ui "$DEVICE" appearance light
           $D "$DEVICE" pose open; sleep 5
-          set_ 3 "-open" full 0.7
+          set_ 3 "-open" most 0.7
           remock; fling fling-0-open-left 3 0 0.25
           slide ringslide-open 3 0.58 0.96 0.58
           $D "$DEVICE" rotate 1; sleep 5

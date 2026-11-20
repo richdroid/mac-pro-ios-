@@ -2665,8 +2665,8 @@ struct SoundsTab: View {
                 // For the build's film: the stations in Edit (CI scrolls the page to them), then Done.
                 .task {
                     guard ChumbyModel.pose == "streamsedit" else { return }
-                    try? await Task.sleep(nanoseconds: 9_000_000_000); withAnimation(.snappy) { editingStreams = true }
-                    try? await Task.sleep(nanoseconds: 4_000_000_000); withAnimation(.snappy) { editingStreams = false }
+                    try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation(.snappy) { editingStreams = true }
+                    try? await Task.sleep(nanoseconds: 6_000_000_000); withAnimation(.snappy) { editingStreams = false }
                 } } footer: { if let scanNote { SectionFoot(scanNote) } }
         }
         .seaList()
