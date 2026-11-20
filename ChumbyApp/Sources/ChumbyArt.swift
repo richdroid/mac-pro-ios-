@@ -80,6 +80,8 @@ enum ChumbyPalette {
     static func hex(_ h: UInt32) -> Color { Color(red: Double(h >> 16 & 255) / 255, green: Double(h >> 8 & 255) / 255, blue: Double(h & 255) / 255) }
     static func sea(_ dark: Bool) -> [Color] { dark ? [0x061a3f, 0x0a4a9c, 0x7a3a2a, 0x0b5f58, 0x3b2470].map(hex) : [0xdbe9fb, 0xa9cdf8, 0xffc477, 0x7be8bd, 0xfc8a63].map(hex) }
     static let orange = hex(0xfc5825), on = hex(0x29c77e)
+    // The ringing alarm's colour on the Lock Screen, the Island and the ring page: the octopus's blue (Richard, 11-20: "blue for chumby").
+    static let ring = hex(0x5aa9ff)
     static func ink(_ dark: Bool) -> Color { dark ? hex(0xeef4ff) : hex(0x0b2a5c) }
     static func sub(_ dark: Bool) -> Color { dark ? hex(0xa4b7d6) : hex(0x54688c) }
     static func acc(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x0051bd) }

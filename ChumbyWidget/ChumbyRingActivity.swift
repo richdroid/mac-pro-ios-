@@ -87,7 +87,7 @@ struct RingKeys: View {
             key(ChumbyRingStopIntent()) {
                 Label("Stop", systemImage: "stop.fill").font(RingCardLook.face(17)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: height)
-                    .background(ChumbyPalette.orange, in: Capsule())
+                    .background(ChumbyPalette.ring, in: Capsule())
             }
             .buttonStyle(.plain)
         }
@@ -161,18 +161,18 @@ struct ChumbyRingActivityWidget: Widget {
                     .padding(.top, 4)
                 }
             } compactLeading: {
-                RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.orange).frame(width: 24, height: 22)
+                RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.ring).frame(width: 24, height: 22)
             } compactTrailing: {
                 if s.snoozed, !context.isStale, let again = s.again {
                     RingCountdown(until: again).font(RingCardLook.face(14)).foregroundStyle(.white).frame(maxWidth: 44)
                 } else {
                     Image(systemName: "alarm.waves.left.and.right.fill").font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(quiet ? RingCardLook.soft : ChumbyPalette.orange)
+                        .foregroundStyle(quiet ? RingCardLook.soft : ChumbyPalette.ring)
                 }
             } minimal: {
-                RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.orange).frame(width: 22, height: 20)
+                RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.ring).frame(width: 22, height: 20)
             }
-            .keylineTint(ChumbyPalette.orange)
+            .keylineTint(ChumbyPalette.ring)
             .widgetURL(Self.opens)
         }
     }

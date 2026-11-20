@@ -38,7 +38,7 @@ private enum Kit {
             alert = AlarmPresentation.Alert(title: LocalizedStringResource(stringLiteral: title),
                                             stopButton: AlarmButton(text: "Stop", textColor: .white, systemImageName: "stop.fill"))
         }
-        let attributes = AlarmAttributes<ChumbyBackupMeta>(presentation: AlarmPresentation(alert: alert), metadata: nil, tintColor: .orange)
+        let attributes = AlarmAttributes<ChumbyBackupMeta>(presentation: AlarmPresentation(alert: alert), metadata: nil, tintColor: ChumbyPalette.ring)
         _ = try await AlarmManager.shared.schedule(id: e.id, configuration: .alarm(schedule: .fixed(e.fireAt), attributes: attributes))
     }
     #else
