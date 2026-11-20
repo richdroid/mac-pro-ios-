@@ -14,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 175
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +33,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 100
+        timeout-minutes: 155
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -62,10 +62,10 @@ jobs:
           film() {
             local name=$1 display=$2 length=$3 touches=$4; shift 4
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
-            sleep 3
+            sleep 2
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
-            sleep 7
-            ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep 2.5; done )
+            sleep 6
+            ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep 2; done )
             sleep $length
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
             kill -INT $REC; wait $REC
@@ -100,31 +100,35 @@ jobs:
           # three up), in each pane where there are two; a page pushed and swiped back, twice; the Dashboard scrolled
           # slowly; the upgrade opened from its card and a clean-up asked for. "$3" is the tab taps for this posture.
           films() {
-            local x=$1 d=$2 taps=$3 sx=$4 sx2=$5; shift 5
+            local x=$1 d=$2 taps=$3 sx=$4 sx2=$5 mode=$6; shift 6
+            local ux=${sx2:-$sx}
             film tabs$x $d 2 "$taps" -tab 0 "$@"
             for t in $TABS; do
-              film flingend-${t%%:*}$x $d 3 "drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.2 $sx 0.9 0.08;drag $sx 0.2 $sx 0.9 0.08;drag $sx 0.2 $sx 0.9 0.08" -tab ${t##*:} "$@"
-              [ -n "$sx2" ] && film flingend-${t%%:*}-right$x $d 3 "drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.2 $sx2 0.9 0.08;drag $sx2 0.2 $sx2 0.9 0.08;drag $sx2 0.2 $sx2 0.9 0.08" -tab ${t##*:} "$@"
+              [ "$mode" = brief ] && [ "${t%%:*}" != dash ] && [ "${t%%:*}" != status ] && continue
+              film flingend-${t%%:*}$x $d 3 "drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.85 $sx 0.15 0.08;drag $sx 0.2 $sx 0.9 0.08;drag $sx 0.2 $sx 0.9 0.08" -tab ${t##*:} "$@"
+              [ -n "$sx2" ] && film flingend-${t%%:*}-right$x $d 3 "drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.85 $sx2 0.15 0.08;drag $sx2 0.2 $sx2 0.9 0.08;drag $sx2 0.2 $sx2 0.9 0.08" -tab ${t##*:} "$@"
             done
-            film pushback$x $d 3 "tap tile.Storage;drag 0.01 0.5 0.75 0.5 0.35;tap tile.CPU;drag 0.01 0.5 0.75 0.5 0.35;tap \"tile.Fans & heat\";drag 0.01 0.5 0.75 0.5 0.35" -tab 6 "$@"
+            # The tiles are brought clear of the bar first (a short pull), then tapped by their names.
+            film pushback$x $d 3 "drag $ux 0.7 $ux 0.5 0.5;tap CPU;drag 0.01 0.5 0.75 0.5 0.35;tap Memory;drag 0.01 0.5 0.75 0.5 0.35;tap Processes;drag 0.01 0.5 0.75 0.5 0.35" -tab 6 "$@"
+            # The card sits under the tiles (the right pane's, where there are two): scrolled to, then opened, the
+            # page pulled up to its clean-ups and one asked for.
+            film upgrade-open$x $d 4 "drag $ux 0.85 $ux 0.15 0.08;drag $ux 0.85 $ux 0.15 0.08;drag $ux 0.85 $ux 0.15 0.08;tap upgrade.card;drag $sx 0.8 $sx 0.4 0.5;tap cleanup.caches" -tab 6 "$@"
+            [ "$mode" = brief ] && return
             film dash-scroll$x $d 4 "drag $sx 0.8 $sx 0.3 0.6;drag $sx 0.8 $sx 0.3 0.6;drag $sx 0.8 $sx 0.3 0.6;drag $sx 0.3 $sx 0.8 0.6" -tab 6 "$@"
             film dash-strip$x $d 3 "tap chip.page.home;tap chip.board.machine;tap chip.board.machine;tap chip.page.storage;tap dash.screen" -tab 6 "$@"
-            # The card sits under the tiles (the right pane's, where there are two): scrolled to, then opened.
-            local ux=${sx2:-$sx}
-            film upgrade-open$x $d 4 "drag $ux 0.85 $ux 0.15 0.5;drag $ux 0.85 $ux 0.15 0.5;tap upgrade.card;tap cleanup.caches" -tab 6 "$@"
           }
-          RAIL="tap Dashboard;tap Control;tap macOS;tap Claude;tap Apps;tap Status;tap Dashboard;tap tile.CPU;tap Dashboard"
+          RAIL="tap Dashboard;tap Control;tap macOS;tap Claude;tap Apps;tap Status;tap Dashboard;tap CPU;tap Dashboard"
           # Open upright the system's bar holds all six; its buttons aren't separate on the accessibility tree, so they are
           # tapped by place.
-          BAR="touch 0.73 0.945 0.05;touch 0.638 0.945 0.05;touch 0.546 0.945 0.05;touch 0.454 0.945 0.05;touch 0.362 0.945 0.05;touch 0.27 0.945 0.05;touch 0.73 0.945 0.05;tap tile.CPU;touch 0.73 0.945 0.05"
+          BAR="touch 0.73 0.945 0.05;touch 0.638 0.945 0.05;touch 0.546 0.945 0.05;touch 0.454 0.945 0.05;touch 0.362 0.945 0.05;touch 0.27 0.945 0.05;touch 0.73 0.945 0.05;tap CPU;touch 0.73 0.945 0.05"
 
           # 1. Folded upright (the outer display): the drawn bar along the foot.
           tabs "" 1
           dashstates "" 1
           upgrades "" 1 "$UPGRADES"
-          films "" 1 "$RAIL" 0.5 ""
-          f=ci/qol-touches-1.txt
-          while IFS='|' read -r -u 3 n t a; do film "$n" 1 4 "$t" $a < /dev/null; done 3< $f
+          films "" 1 "$RAIL" 0.5 "" full
+          film dash-keys 1 4 "tap key.Show;tap key.Glance;tap key.Glance;tap key.Sleep;tap key.Wake" -tab 6 -pose consolebehind
+          film dash-fail 1 4 "tap key.Hide" -tab 6 -pose consolefail
           film bar-keyboard 1 3 'tap "Message the session";tap "Message the session"' -tab 2 -pose session
           shot settings 1 8 -tab 9
           film settings-gear 1 3 "tap Settings" -tab 6
@@ -132,9 +136,10 @@ jobs:
           # 2. Folded on its side: the drawn rail.
           $D "$DEVICE" rotate 1; sleep 5
           tabs -land 1
-          dashstates -land 1
-          upgrades -land 1 "room freed"
-          films -land 1 "$RAIL" 0.3 0.7
+          shot dash-asleep-land 1 8 -tab 6 -pose consoleasleep
+          shot dash-unreachable-land 1 8 -tab 6 -pose unreachable
+          upgrades -land 1 "room"
+          films -land 1 "$RAIL" 0.5 "" brief
           film rail-turn 1 3 "rotate 3;rotate 1" -tab 6
           $D "$DEVICE" rotate 3; sleep 5
 
@@ -144,7 +149,7 @@ jobs:
           tabs -portrait 3
           dashstates -portrait 3
           upgrades -portrait 3 "room freed checksred"
-          films -portrait 3 "$BAR" 0.5 ""
+          films -portrait 3 "$BAR" 0.5 "" full
 
           # 4. Open flat, the simulator's own size (951 x 669 pt): the drawn rail, two panes.
           $D "$DEVICE" rotate 3; sleep 5
@@ -154,8 +159,6 @@ jobs:
           tabs -open 3
           dashstates -open 3
           upgrades -open 3 "$UPGRADES"
-          films -open 3 "$RAIL" 0.25 0.7
-          film dash-posture-open 3 4 "tap tile.Storage;rotate 1;rotate 3" -tab 6
 
           # 5. Open flat at HIS size: his screenshot of 2026-11-20 is 2576 x 1812 px, 859 x 604 pt at 3x, shorter than the
           # simulator's. The app's window is made that size (-windowSize). First the system's own rail at that size
@@ -164,10 +167,14 @@ jobs:
           shot before-status-his 3 8 -tab 0 -windowSize 859x604 -systemTabs YES
           shot before-dash-his 3 8 -tab 6 -windowSize 859x604 -systemTabs YES
           tabs -his 3 -windowSize 859x604
-          dashstates -his 3 -windowSize 859x604
-          upgrades -his 3 "room freed" -windowSize 859x604
+          shot dash-asleep-his 3 8 -tab 6 -pose consoleasleep -windowSize 859x604
+          shot dash-unreachable-his 3 8 -tab 6 -pose unreachable -windowSize 859x604
+          upgrades -his 3 "room freed checksred" -windowSize 859x604
           # Touches by place are in the display's fractions; the window is the top-left 0.9 of it.
-          films -his 3 "$RAIL" 0.22 0.63 -windowSize 859x604
+          films -his 3 "$RAIL" 0.22 0.63 full -windowSize 859x604
+          # Then the simulator's own size, briefly: the tab changes, Status and the Dashboard flung in each pane, push and Back.
+          films -open 3 "$RAIL" 0.25 0.7 brief
+          film dash-posture-open 3 4 "tap Memory;rotate 1;rotate 3" -tab 6
           # What the tab probe saw in every posture (one line per change of size).
           cp "$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data)/Library/Caches/tabs-log.txt" dist/tabs.log 2>/dev/null || echo "no tab log" > dist/tabs.log
           ls dist

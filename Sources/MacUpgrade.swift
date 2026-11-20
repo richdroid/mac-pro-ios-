@@ -170,7 +170,7 @@ struct RoomBar: View {
                 }
             }
             .frame(height: 8)
-            Text("\(UpgradeFeed.gb(free)) free of the \(UpgradeFeed.gb(want)) it needs").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            Text(free >= want ? "\(UpgradeFeed.gb(free)) free · it needs \(UpgradeFeed.gb(want))" : "\(UpgradeFeed.gb(free)) free of the \(UpgradeFeed.gb(want)) it needs").font(.caption).foregroundStyle(.secondary).monospacedDigit()
         }
         .accessibilityElement(children: .combine)
     }
@@ -372,13 +372,13 @@ struct UpgradeView: View {
     @ViewBuilder func room(_ f: UpgradeFeed, _ s: [StepState]) -> some View {
         Section {
             step(1, s[0], s[0] == .done ? "\(UpgradeFeed.gb(f.free)) free; the update needs about \(UpgradeFeed.gb(f.want))." : "\(f.name) needs about \(UpgradeFeed.gb(f.want)). \(UpgradeFeed.gb(f.free)) free: \(UpgradeFeed.gb(f.short)) short.")
-            if s[0] != .done || f.phase == "ready" || f.phase == "held" {
+            if s[0] != .done {
                 RoomBar(free: f.free, want: f.want).padding(.vertical, 4)
             }
             if s[0] != .done {
                 ForEach(f.cleanups ?? []) { c in CleanupRow(model: model, item: c) { Task { await feed.read(model.api, query: "?fresh=1") } } }
             }
-        } header: { Text("Room") } footer: {
+        } header: { Text("Make room") } footer: {
             if s[0] != .done {
                 // Plainly: the safe clean-ups alone may not be enough, and then how much more.
                 let left = f.short - f.safe

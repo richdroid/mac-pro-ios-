@@ -59,6 +59,9 @@ struct DashboardTab: View {
         // A key's refusal is said here, in the status line's own place, for a few seconds: a line of its own under the
         // keys grew the card and moved every tile below it down and back (CI 68b580c).
         if let f = remote.fail, ["show", "hide", "display", "glance"].contains(where: { f.key.hasPrefix($0) }) { return (f.text, .red) }
+        // Out of reach, the card says what it last saw as the past, greyed: a green "on the Mac's screen" under "Can't
+        // reach the Mac" claimed what nobody could know (CI 5fb9358).
+        if model.stale, remote.read, let st, running { return ("Out of reach · last showing \(ConsolePlace.name(st).0)", Color(white: 0.45)) }
         if remote.unsupported { return ("Not on this Mac yet", .secondary) }
         if !remote.read { return ("Looking at the Mac…", .secondary) }
         if !running { return remote.busy == "show" ? ("Starting on the Mac…", macBlue) : ("Not running", Color(white: 0.45)) }
@@ -96,7 +99,7 @@ struct DashboardTab: View {
                 HStack(spacing: 14) {
                     let asleep = st?.display == "asleep"
                     let (name, symbol): (String?, String?) = !remote.read ? (nil, nil) : !running ? ("Not running", "macwindow") : asleep ? ("Display asleep", "moon.zzz") : (ConsolePlace.name(st!).0, ConsolePlace.name(st!).1)
-                    Button { model.openScreen() } label: { MiniScreen(symbol: symbol, name: name, lit: running && !asleep, ring: false) }
+                    Button { model.openScreen() } label: { MiniScreen(symbol: symbol, name: name, lit: running && !asleep && !model.stale, ring: false) }
                         .buttonStyle(PressStyle())
                         .accessibilityLabel("The Mac’s screen").accessibilityHint("Opens Screen")
                         .accessibilityIdentifier("dash.screen")
@@ -324,7 +327,7 @@ struct DashboardTab: View {
                 if let f = remote.fail, ["board", "page"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text).padding(.leading, 20) }
             }
             .disabled(!running)
-            .opacity(running ? 1 : 0.4)
+            .opacity(running ? (model.stale ? staleDim : 1) : 0.4)
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         } header: { Text("Showing on the Mac") }
     }
@@ -376,6 +379,7 @@ struct ChipRow<C: View>: View {
     @State private var content: CGFloat = 0
     @State private var viewport: CGFloat = 0
     @State private var placed = false
+    @State private var scrolled = false
     static var margin: CGFloat { 20 }
     // The offset that puts a chip's centre (measured in the row, its 20 pt margins included) mid-view, clamped to the row.
     static func offset(mid: CGFloat, viewport: CGFloat, content: CGFloat) -> CGFloat {
@@ -405,7 +409,10 @@ struct ChipRow<C: View>: View {
         // The first time, in place as soon as the chips are measured; after that only a change of page or width moves it.
         .onChange(of: mids) { if !placed { follow() } }
         .onChange(of: viewport) { follow() }
-        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+        // Scrolled, the chips leaving at the leading edge fade out as they do at the trailing one: a name cut hard there
+        // read "gle TV" (CI 5fb9358).
+        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 6 } action: { _, now in withAnimation(Motion.quick) { scrolled = now } }
+        .mask(LinearGradient(stops: [.init(color: scrolled ? .clear : .black, location: 0), .init(color: .black, location: 0.12), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
     }
 }
 
