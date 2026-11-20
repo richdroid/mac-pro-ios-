@@ -57,7 +57,8 @@ struct UpgradeStanding: Equatable {
         }
         switch f.phase {
         case "room":
-            var l = "It needs about \(UpgradeFeed.gb(f.want)) free. There are \(UpgradeFeed.gb(f.free)). Free \(UpgradeFeed.gb(f.short)) more, then install."
+            // What is wrong and what to do; the figures are step 1's, said once there (designer gate 1, 2026-11-20).
+            var l = "Make room on the Mac’s disk first, then install."
             if f.agent?.blocked == true { l += " The nightly install has stopped trying after \(f.agent?.max ?? 4) failures; it starts again when you start it here." }
             else if f.agent?.shortRoom == true, let a = f.agent?.attempts, a > 0 { l += " The 3:30 AM install failed for this, \(a) of \(f.agent?.max ?? 4) tries." }
             return UpgradeStanding(symbol: "externaldrive.badge.exclamationmark", color: .orange, title: "Not enough room for \(n)", line: l)
@@ -140,7 +141,7 @@ struct UpgradeCard: View {
                             Spacer(minLength: 4)
                             RowChevron().padding(.top, 4)
                         }
-                        if f.phase == "room" { RoomBar(free: f.free, want: f.want) }
+                        if f.phase == "room" { RoomBar(free: f.free, want: f.want, caption: true) }
                         else if f.phase == "downloading", let d = f.download { ProgressView(value: min(100, max(0, d.percent)), total: 100).tint(macBlue) }
                         UpgradeDots(feed: f)
                     }
@@ -161,6 +162,8 @@ struct UpgradeCard: View {
 // Free against what the update wants: the bar fills to the mark as room is made.
 struct RoomBar: View {
     let free: Double, want: Double
+    // The figures under the bar, where nothing beside it says them (the Dashboard's card).
+    var caption = false
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             GeometryReader { g in
@@ -170,14 +173,14 @@ struct RoomBar: View {
                 }
             }
             .frame(height: 8)
-            Text(free >= want ? "\(UpgradeFeed.gb(free)) free · it needs \(UpgradeFeed.gb(want))" : "\(UpgradeFeed.gb(free)) free of the \(UpgradeFeed.gb(want)) it needs").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            if caption { Text("\(UpgradeFeed.gb(free)) free of the \(UpgradeFeed.gb(want)) it needs · \(UpgradeFeed.gb(max(0, want - free))) short").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
         }
         .accessibilityElement(children: .combine)
     }
 }
 
 enum StepState { case done, now, waiting, refused
-    var symbol: String { switch self { case .done: "checkmark.circle.fill"; case .now: "circle.inset.filled"; case .waiting: "circle"; case .refused: "xmark.octagon.fill" } }
+    var symbol: String { switch self { case .done: "checkmark.circle.fill"; case .now: "arrow.right.circle.fill"; case .waiting: "circle"; case .refused: "xmark.octagon.fill" } }
     var color: Color { switch self { case .done: .green; case .now: macBlue; case .waiting: Color(white: 0.4); case .refused: .red } }
 }
 
@@ -371,12 +374,13 @@ struct UpgradeView: View {
 
     @ViewBuilder func room(_ f: UpgradeFeed, _ s: [StepState]) -> some View {
         Section {
-            step(1, s[0], s[0] == .done ? "\(UpgradeFeed.gb(f.free)) free; the update needs about \(UpgradeFeed.gb(f.want))." : "\(f.name) needs about \(UpgradeFeed.gb(f.want)). \(UpgradeFeed.gb(f.free)) free: \(UpgradeFeed.gb(f.short)) short.")
+            step(1, s[0], s[0] == .done ? "\(UpgradeFeed.gb(f.free)) free; the update needs about \(UpgradeFeed.gb(f.want))." : "It needs about \(UpgradeFeed.gb(f.want)) free. There are \(UpgradeFeed.gb(f.free)): \(UpgradeFeed.gb(f.short)) short.")
             if s[0] != .done {
                 RoomBar(free: f.free, want: f.want).padding(.vertical, 4)
             }
             if s[0] != .done {
-                ForEach(f.cleanups ?? []) { c in CleanupRow(model: model, item: c) { Task { await feed.read(model.api, query: "?fresh=1") } } }
+                // A clean-up with nothing worth taking (under 50 MB) is left out: "0.0 GB" beside a live Remove key.
+                ForEach((f.cleanups ?? []).filter { ($0.bytes ?? 0) >= 50e6 }) { c in CleanupRow(model: model, item: c) { Task { await feed.read(model.api, query: "?fresh=1") } } }
             }
         } header: { Text("Make room") } footer: {
             if s[0] != .done {
@@ -410,7 +414,7 @@ struct UpgradeView: View {
     @ViewBuilder func rest(_ f: UpgradeFeed, _ s: [StepState]) -> some View {
         Section {
             step(2, s[1], patcherLine(f))
-            step(3, s[2], f.phase == "downloading" ? (f.download.map { "\(Int($0.percent.rounded())) % downloaded." } ?? "Downloading.") : s[2] == .done ? "Downloaded." : "Starts with the install; the Mac fetches it itself.")
+            step(3, s[2], f.phase == "downloading" ? (f.download.map { "\(Int($0.percent.rounded()))% downloaded." } ?? "Downloading.") : s[2] == .done ? "Downloaded." : "Starts with the install; the Mac fetches it itself.")
             if f.phase == "downloading", let d = f.download { ProgressView(value: min(100, max(0, d.percent)), total: 100).tint(macBlue) }
             step(4, s[3], checkLine(s[3]))
             if s[3] != .waiting, let c = checks {

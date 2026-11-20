@@ -1006,9 +1006,9 @@ extension View {
     func settingsItem(_ open: @escaping () -> Void) -> some View {
         toolbar {
             #if os(iOS)
-            ToolbarItem(placement: .topBarTrailing) { Button(action: open) { Label("Settings", systemImage: "gearshape") } }
+            ToolbarItem(placement: .topBarTrailing) { Button(action: open) { Label("Settings", systemImage: "gearshape") }.accessibilityIdentifier("gear") }
             #else
-            ToolbarItem { Button(action: open) { Label("Settings", systemImage: "gearshape") } }
+            ToolbarItem { Button(action: open) { Label("Settings", systemImage: "gearshape") }.accessibilityIdentifier("gear") }
             #endif
         }
     }
@@ -1145,7 +1145,6 @@ struct WebTile: View {
                 Spacer(minLength: 0)
                 // The page on the Mac's screen now: the Console light's green dot beside its name (one glyph, one job; the
                 // window glyph is the Show key's and Screen's). The chevron stays: the tile still opens.
-                if onMac { Circle().fill(Color.green).frame(width: 7, height: 7).accessibilityLabel("On the Mac’s screen") }
                 Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
             // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
@@ -1180,6 +1179,8 @@ struct WebTile: View {
         // Sized to its three lines with even padding: nothing in a tile shrinks or wraps, so every tile in a row is one
         // height without a fixed one (a fixed 98 left a band under the text, designer gate 2026-11-18).
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        // The page on the Mac's screen has the strip's ring: green is "running" everywhere else (designer gate 1).
+        .overlay { if onMac { RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(macBlue, lineWidth: 2) } }
         .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
 
     }
@@ -1188,6 +1189,7 @@ struct WebTile: View {
         .buttonStyle(PressStyle())
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("tile." + title)
+        .accessibilityValue(onMac ? "On the Mac’s screen" : "")
         .accessibilityAction(named: "Show the past 24 hours", open)
     }
 }

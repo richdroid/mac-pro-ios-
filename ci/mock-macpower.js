@@ -83,7 +83,7 @@ module.exports = (q, s) => {
     if (q.method === 'GET') { s.statusCode = 404; s.end(JSON.stringify({ ok: false, command: u.searchParams.get('action') || '', say: 'Not an action the Mac takes from here.' })); return true; }
     let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
       let b = {}; try { b = JSON.parse(body); } catch {}
-      if (b.dryRun) { s.setHeader('X-MP-Nonce', 'c0ffee00c0ffee00c0ffee00c0ffee00'); return s.end(JSON.stringify({ ok: true, command: b.action, dryRun: true, say: 'Dry run: would remove 3.4 GB. Nothing was removed.' })); }
+      if (b.dryRun) { s.setHeader('X-MP-Nonce', 'c0ffee00c0ffee00c0ffee00c0ffee00'); return s.end(JSON.stringify({ ok: true, command: b.action, dryRun: true, say: 'Dry run: would remove 3.5 GB. Nothing was removed.' })); }
       s.end(JSON.stringify({ ok: true, command: b.action, say: b.action === 'fix' ? 'All running; nothing needed fixing.' : 'Done.', rows: [{ part: 'tv', label: 'TV link', state: 'ok', say: 'Connected' }] }));
     });
     return true;

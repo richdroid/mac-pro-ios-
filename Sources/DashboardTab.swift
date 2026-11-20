@@ -28,15 +28,20 @@ struct DashboardTab: View {
     var st: ConsoleState? { remote.state }
     var running: Bool { st?.running == true }
     // The Mac's page on screen now, when it's a page and not a board.
-    var onMac: String? { running && st?.board == nil ? st?.page : nil }
+    // Not under Glance: the Mac shows its Glance face then, no page, so nothing here is marked as on its screen (the
+    // card said "Glance" while the strip ringed a page, designer gate 1, 2026-11-20).
+    var paged: Bool { running && st?.glance != true }
+    var onMac: String? { paged && st?.board == nil ? st?.page : nil }
+    // Short of room or held for the patcher: the upgrade needs him, so its card comes second, not under the tiles.
+    var upgradeStuck: Bool { upgrade.value.map { $0.pending && ($0.phase == "room" || $0.phase == "held") } ?? false }
 
     var body: some View {
         Group {
             switch side {
-            case .all: screenCard; strip; tiles; UpgradeCard(); drive
+            case .all: screenCard; if upgradeStuck { UpgradeCard() }; strip; tiles; if !upgradeStuck { UpgradeCard() }; drive
             // Open flat: the screen, its strip and the driving on the left; the tiles and the upgrade on the right.
             case .left: screenCard; strip; drive
-            case .right: tiles; UpgradeCard()
+            case .right: if upgradeStuck { UpgradeCard() }; tiles; if !upgradeStuck { UpgradeCard() }
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
@@ -61,7 +66,7 @@ struct DashboardTab: View {
         if let f = remote.fail, ["show", "hide", "display", "glance"].contains(where: { f.key.hasPrefix($0) }) { return (f.text, .red) }
         // Out of reach, the card says what it last saw as the past, greyed: a green "on the Mac's screen" under "Can't
         // reach the Mac" claimed what nobody could know (CI 5fb9358).
-        if model.stale, remote.read, let st, running { return ("Out of reach · last showing \(ConsolePlace.name(st).0)", Color(white: 0.45)) }
+        if model.stale, remote.read, let st, running { return ("\(ConsolePlace.name(st).0) · when last seen; out of reach now", Color(white: 0.45)) }
         if remote.unsupported { return ("Not on this Mac yet", .secondary) }
         if !remote.read { return ("Looking at the Mac…", .secondary) }
         if !running { return remote.busy == "show" ? ("Starting on the Mac…", macBlue) : ("Not running", Color(white: 0.45)) }
@@ -96,23 +101,30 @@ struct DashboardTab: View {
     var screenCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 14) {
-                    let asleep = st?.display == "asleep"
-                    let (name, symbol): (String?, String?) = !remote.read ? (nil, nil) : !running ? ("Not running", "macwindow") : asleep ? ("Display asleep", "moon.zzz") : (ConsolePlace.name(st!).0, ConsolePlace.name(st!).1)
-                    Button { model.openScreen() } label: { MiniScreen(symbol: symbol, name: name, lit: running && !asleep && !model.stale, ring: false) }
-                        .buttonStyle(PressStyle())
-                        .accessibilityLabel("The Mac’s screen").accessibilityHint("Opens Screen")
-                        .accessibilityIdentifier("dash.screen")
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Console").font(.headline).lineLimit(1)
+                // The state in words leads (what the Mac's screen shows, then where), with the light; Screen, the Mac's
+                // real display, is the key beside it. No drawn stand-in for a picture: a symbol in a box said the page's
+                // name a second time and was not the Mac's screen (designer gate 1, 2026-11-20).
+                HStack(alignment: .center, spacing: 12) {
+                    let parts = light.say.components(separatedBy: " · ")
+                    let split = parts.count > 1 && light.color != .red
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(split ? parts[0] : "Console").font(.title3.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Circle().fill(light.color).frame(width: 8, height: 8).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-                            Text(light.say).font(.footnote).foregroundStyle(light.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
-                                .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                            Text(split ? parts.dropFirst().joined(separator: " · ") : light.say).font(.subheadline).foregroundStyle(light.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         }
-                        .accessibilityElement(children: .combine)
                     }
+                    .accessibilityElement(children: .combine)
                     Spacer(minLength: 0)
+                    Button { model.openScreen() } label: {
+                        Label("Screen", systemImage: "macwindow").font(.subheadline.weight(.semibold)).foregroundStyle(macBlue)
+                            .padding(.horizontal, 14).frame(minHeight: 44)
+                            .background(Color(white: 0.17), in: Capsule())
+                    }
+                    .buttonStyle(PressStyle())
+                    .accessibilityLabel("Open Screen").accessibilityHint("The Mac’s real display")
+                    .accessibilityIdentifier("dash.screen")
                 }
                 .animation(Motion.quick, value: light.say)
                 HStack(spacing: 10) {
@@ -316,9 +328,9 @@ struct DashboardTab: View {
             VStack(alignment: .leading, spacing: 8) {
                 // Tap one and the Mac goes there; the Mac changing page at the desk moves the ring here (the row watches
                 // the Console itself).
-                ChipRow(ids: Self.stripIds, lit: { running ? (st?.board.map { "board." + $0 } ?? onMac.map { "page." + $0 }) : nil }) { id in
+                ChipRow(ids: Self.stripIds, lit: { paged ? (st?.board.map { "board." + $0 } ?? onMac.map { "page." + $0 }) : nil }) { id in
                     if let b = ConsolePlace.boards.first(where: { "board." + $0.id == id }) {
-                        let on = running && st?.board == b.id
+                        let on = paged && st?.board == b.id
                         thumb(b.name, b.symbol, on: on, busy: remote.busy == "board:" + b.id, id: id) { remote.send(model, "board:" + (on ? "off" : b.id), "board", on ? "off" : b.id) }
                     } else if let p = ConsolePlace.pages.first(where: { "page." + $0.id == id }) {
                         thumb(p.name, p.symbol, on: onMac == p.id, busy: remote.busy == "page:" + p.id, id: id) { remote.send(model, "page:" + p.id, "page", p.id) }
@@ -353,7 +365,7 @@ struct DashboardTab: View {
             // Sending lives on Control, with the files on their way; one tap there.
             driveRow("Send to Mac", "square.and.arrow.up", "Photos, files") { model.tab = 5 }
             if summary.mp { driveRow("Run an action", "bolt", "Clean, ship, tests") { model.macPage = .actions } }
-            driveRow("Bring everything up", "checklist", "Every part, by name") { model.macPage = .health }
+            driveRow("Bring everything up", "checklist", "By name") { model.macPage = .health }
             driveRow("Startup items", "power", "On and off") { model.macPage = .startup }
             driveRow("Restart the Mac…", "arrow.clockwise", "Checks first", destructive: true) { model.macPage = .restart }
         } header: { Text("Drive the Mac") }

@@ -559,9 +559,13 @@ struct SideRailTabs<Content: View>: View {
     @State private var shown: Set<Int> = []
     @State private var edge: CGFloat = 0
     @Environment(\.colorScheme) private var scheme
-    static var cell: CGFloat { 44 }
-    static var inset: CGFloat { 5 }
+    // The system's own rail, measured on the build's "before" shot at 859 x 604 pt (CI d8bbee4): 45 pt wide, an icon
+    // every 49 pt, 26 pt clear of the foot, the tab in front on a dark inset capsule (designer gate 1, 2026-11-20).
+    static var cell: CGFloat { 39 }
+    static var cellHeight: CGFloat { 49 }
+    static var inset: CGFloat { 3 }
     static var margin: CGFloat { 10 }
+    static var foot: CGFloat { 26 }
     static var width: CGFloat { cell + inset * 2 }
     private var column: CGFloat { max(edge, Self.margin * 2 + Self.width) }
     var body: some View {
@@ -584,20 +588,21 @@ struct SideRailTabs<Content: View>: View {
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
         .overlay(alignment: .bottomTrailing) {
             // Centred in the strip, measured from the display's edge.
-            rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.margin + 2)
+            rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.foot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .ignoresSafeArea(.container, edges: .trailing)
         }
     }
     private var rail: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 0) {
             ForEach(items) { it in
                 let front = it.value == selection
                 Button { selection = it.value } label: {
                     it.icon
                         .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                        .frame(width: Self.cell, height: Self.cell)
-                        .background { if front { Circle().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)) } }
+                        .frame(width: Self.cell, height: Self.cellHeight)
+                        // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
+                        .background { Capsule().fill(scheme == .dark ? Color.black.opacity(0.38) : Color.primary.opacity(0.08)).opacity(front ? 1 : 0) }
                         .overlay(alignment: .topTrailing) {
                             let n = badge(it.value)
                             if n > 0 {
@@ -607,17 +612,17 @@ struct SideRailTabs<Content: View>: View {
                                     .offset(x: 2, y: 1)
                             }
                         }
-                        .contentShape(Circle())
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(it.title)
+                .accessibilityIdentifier("tab." + it.title)
                 .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
                 .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
             }
         }
         .padding(Self.inset)
         .glassEffect(.regular.interactive(), in: Capsule())
-        .animation(.snappy(duration: 0.25), value: selection)
     }
 }
 
@@ -631,6 +636,7 @@ struct BottomBarTabs<Content: View>: View {
     let badge: (Int) -> Int
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
+    @State private var keyboardUp = false
     @Environment(\.colorScheme) private var scheme
     static var height: CGFloat { 54 }
     static var inset: CGFloat { 4 }
@@ -647,11 +653,18 @@ struct BottomBarTabs<Content: View>: View {
                 }
             }
         }
-        .safeAreaPadding(.bottom, Self.height + Self.inset * 2 + 6)
+        // Room for the bar as a real inset: safeAreaPadding never reached a page inside the navigation stack, so a
+        // list's last row and the session's keys and message box lay under the bar (designer gate 1, 2026-11-20).
+        // None with the keyboard up: the bar is behind the keyboard then, and its room would be a band over the keys.
+        .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: keyboardUp ? 0 : Self.height + Self.inset * 2 + 6).allowsHitTesting(false) }
+        #if canImport(UIKit)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        #endif
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
         .overlay(alignment: .bottom) {
             // No wider than the system's own bar is where there's room (open upright): centred, not stretched.
-            bar.frame(maxWidth: 470).padding(.horizontal, 12).padding(.bottom, 2)
+            bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea(.keyboard)
         }
@@ -663,11 +676,15 @@ struct BottomBarTabs<Content: View>: View {
                 Button { selection = it.value } label: {
                     VStack(spacing: 2) {
                         it.icon.resizable().scaledToFit().frame(width: 24, height: 22)
-                        Text(it.title).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(it.title).font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
                     }
                     .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                    // Each cell at least its name and 8 pt of air either side, the rest shared: equal cells left
+                    // "Dashboard" touching its capsule's ends (designer gate 1, 2026-11-20).
+                    .padding(.horizontal, 8)
                     .frame(maxWidth: .infinity, minHeight: Self.height)
-                    .background { if front { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)) } }
+                    // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
+                    .background { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)).opacity(front ? 1 : 0) }
                     .overlay(alignment: .top) {
                         let n = badge(it.value)
                         if n > 0 {
@@ -681,13 +698,13 @@ struct BottomBarTabs<Content: View>: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(it.title)
+                .accessibilityIdentifier("tab." + it.title)
                 .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
                 .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
             }
         }
         .padding(Self.inset)
         .glassEffect(.regular.interactive(), in: Capsule())
-        .animation(.snappy(duration: 0.25), value: selection)
     }
 }
 
