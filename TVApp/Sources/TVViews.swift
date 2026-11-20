@@ -1773,7 +1773,6 @@ struct RemoteTab: View {
             // The pick's picture flying in the render server: the flick's page went under the still at the pick, so there
             // is nothing of it to sit on the keys, and the keys come up with the rest of the Remote as the still fades off
             // it (gated, they came 0.3 s after the picture had landed: the review of d5d94f4).
-            guard !RenderFlight.flying else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { keysGate.shown = false }
             // Once the flick's title, poster and controls are nearly gone (they fade in 0.12 s from the move's start), so the
