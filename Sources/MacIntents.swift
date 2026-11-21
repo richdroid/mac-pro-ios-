@@ -116,6 +116,11 @@ struct MacSendIntent: AppIntent {
 // same way (b7ee5f4). Here, not in the app's sources alone, because shortcuts and the widget read it too.
 enum SavedAddress {
     private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
+    // This app's own item, since 2026-11-20. The old unscoped one ("local.macpro.address") is shared by every app of the
+    // team, because the App Store signing gives each the team's whole Keychain (the profile's "TEAM.*"): the Chumby app
+    // read this app's bridge address from it as its own, and its saves replaced this app's. The shared group above is
+    // this app's alone and keeps its old name, which the share sheet reads.
+    private static let own: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.macpro.address", kSecAttrAccount as String: "address"]
     // Settings first, then the Keychain, then the address baked into this build.
     static var value: String {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
@@ -162,15 +167,15 @@ enum SavedAddress {
         UserDefaults.standard.set(s, forKey: "address")
         share(s)
         guard keychain() != s else { return }
-        SecItemDelete(base as CFDictionary)
+        SecItemDelete(own as CFDictionary)
         guard !s.isEmpty else { return }
-        var add = base
+        var add = own
         add[kSecValueData as String] = Data(s.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
     }
     static func keychain() -> String? {
-        var q = base
+        var q = own
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?

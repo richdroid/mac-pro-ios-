@@ -306,6 +306,9 @@ enum ChumbyWords {
 
 enum ChumbyError: LocalizedError {
     case message(String), deviceDown, waiting(String)
+    // Something answered at the address, but not the Chumby or its cache (a 404 for the Chumby's own path): the address
+    // is wrong, not the network. ChumbyModel puts the build's own address back rather than calling the Chumby unreachable.
+    case wrongPlace
     // A save AlarmWriter turned down because it would have cost an alarm that's about to ring. Never retried on its own.
     case refused(String)
     var errorDescription: String? {
@@ -313,6 +316,7 @@ enum ChumbyError: LocalizedError {
         case .message(let m), .refused(let m): return m
         case .waiting(let why): return "Waiting: \(why)."
         case .deviceDown: return ChumbyWords.notAnswering + "."
+        case .wrongPlace: return "No answer"
         }
     }
 }
@@ -332,6 +336,7 @@ actor ChumbyAPI {
         guard let h = resp as? HTTPURLResponse else { throw ChumbyError.message("No answer") }
         // The Mac answered, but says the Chumby itself isn't responding.
         if h.statusCode == 502 { throw ChumbyError.deviceDown }
+        if h.statusCode == 404 { throw ChumbyError.wrongPlace }
         guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
         return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)
     }
@@ -831,15 +836,30 @@ extension ChumbyState {
 // install of the same app (a TestFlight build replacing a Mac-signed one, or the app deleted and put back) starts with
 // empty settings, but the Keychain keeps its items for the same team and bundle, so the address comes back on its own
 // (Richard, 2026-11-10: "make sure that doesnt happen in the future").
+//
+// Its own Keychain item since 2026-11-20. The old one ("local.macpro.address", account "address") is the same item the
+// Mac Pro and TV apps keep their address in, and the App Store signing gives every app the team's whole Keychain (the
+// profile's "TEAM.*" group, store-sign.sh), so the apps read and replaced each other's. The Chumby app took the Mac Pro
+// app's bridge address as its own and sent every reading there (the bridge's log: GET /cgi-bin/custom/app 404, in bursts
+// whenever the app was open). At home its Wi-Fi route straight to the Chumby hid it; on cellular it said "Can't reach the
+// Mac" while the Chumby's cache was answering (Richard, 11-20: "proxy reliability is like the most important thing").
+// The old item is never read, written or deleted from here again, and the Mac's bridge is never taken for the Chumby's.
 enum SavedAddress {
-    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
-    // Settings first, then the Keychain, then the address baked into this build.
+    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.chumby.address", kSecAttrAccount as String: "address"]
+    static var builtIn: String { Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "" }
+    // Settings first, then the Keychain, then the address baked into this build; never one that is the Mac's bridge.
     static var value: String {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
-        if !stored.isEmpty { return stored }
-        if let k = sharedValue(), !k.isEmpty { return k }
-        if let k = keychain(), !k.isEmpty { return k }
-        return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
+        for a in [stored, sharedValue() ?? "", keychain() ?? ""] where usable(a) { return a }
+        return builtIn
+    }
+    static func usable(_ a: String) -> Bool { !a.trimmingCharacters(in: .whitespaces).isEmpty && !isMacBridge(a) }
+    // The Mac's own bridge (MacAddress, baked at signing): it has no Chumby path, so an address naming it is a mix-up.
+    static func isMacBridge(_ a: String) -> Bool {
+        guard let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String, let m = URL(string: mac), let mh = m.host,
+              let u = URL(string: a.trimmingCharacters(in: .whitespaces)), let uh = u.host else { return false }
+        func port(_ x: URL) -> Int { x.port ?? (x.scheme == "https" ? 443 : 80) }
+        return mh.lowercased() == uh.lowercased() && port(m) == port(u)
     }
     // The address shared with this app's widgets, controls and share sheet: a Keychain item in the app's shared access
     // group ("<team>.local.macpro.Chumby.shared"), which the TestFlight signing (store-sign.sh) gives the app and each of
