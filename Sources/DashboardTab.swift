@@ -82,7 +82,8 @@ struct DashboardTab: View {
     }
     // The mode, in his two names for it, and what is taking turns. Only said while the dashboard runs.
     var mode: (name: String, symbol: String, say: String)? {
-        guard running, let st else { return nil }
+        // Nothing is said of the mode while the Mac can't be asked.
+        guard ready, running, let st else { return nil }
         let bed = ConsolePlace.fromBed(st, pose: model.pose)
         let name = bed ? "From bed" : "At the desk", symbol = bed ? "bed.double" : "desktopcomputer"
         if st.glance == true { return (name, symbol, "Glance covers the boards until you turn it off") }
@@ -256,14 +257,14 @@ struct DashboardTab: View {
                 guard remote.busy == nil else { return }
                 asked["show"] = want
                 remote.send(model, "show", want ? "show" : "hide")
-            })) { row("On screen", "The dashboard, full screen", "rectangle.inset.filled") }
+            })) { row("On screen", "Full screen", "rectangle.inset.filled") }
                 .accessibilityIdentifier("switch.show")
-            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Until you turn it off", "sun.max") }
+            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Until turned off", "sun.max") }
                 .accessibilityIdentifier("switch.display")
             Group {
-                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "A new board every \(st?.rotateSecs.map { $0 > 0 ? "\(Int($0))" : "45" } ?? "45") s", "arrow.triangle.2.circlepath") }
+                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "Every \(st?.rotateSecs.map { $0 > 0 ? "\(Int($0))" : "45" } ?? "45") s", "arrow.triangle.2.circlepath") }
                     .accessibilityIdentifier("switch.rotate")
-                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "For across the room", "textformat.size") }
+                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "Across the room", "textformat.size") }
                     .accessibilityIdentifier("switch.text")
                 // Glance in plain words, one switch (Richard, 2026-11-21: "glance is so confusing").
                 Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "A few huge numbers", "eye") }
@@ -301,9 +302,9 @@ struct UpkeepSection: View {
     func row(_ title: String, _ symbol: String, _ value: String?, bad: Bool = false, page: MacPage) -> some View {
         Button { model.macPage = page } label: {
             HStack(spacing: 10) {
-                Label { Text(title).foregroundStyle(Color.primary) } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
+                Label { Text(title).foregroundStyle(Color.primary).lineLimit(1).fixedSize() } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
                 Spacer(minLength: 8)
-                Text(value ?? "–").font(.subheadline).foregroundStyle(bad ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary)).monospacedDigit().lineLimit(1)
+                Text(value ?? "–").font(.subheadline).foregroundStyle(bad ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                 RowChevron()
             }
             .contentShape(Rectangle())
