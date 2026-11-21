@@ -1589,8 +1589,9 @@ struct StatusTab: View {
                 TempDials(s: s).opacity(dim).place("temps")
                 // The fans are driven where their heat is read.
                 Button { model.macPage = .fans } label: {
-                    HStack { Text("Fans & heat").foregroundStyle(.primary); Spacer(); RowChevron() }.contentShape(Rectangle())
+                    HStack { Text("Fans & heat").foregroundStyle(Color.primary); Spacer(); RowChevron() }.contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .place("temps-fans")
             } header: { TempsHeader(s: s) }
         }
@@ -1614,8 +1615,9 @@ struct StatusTab: View {
                 .place("disk")
                 // What fills it, and the clean-up, where the disk is read.
                 Button { model.macPage = .storage } label: {
-                    HStack { Text("Storage").foregroundStyle(.primary); Spacer(); RowChevron() }.contentShape(Rectangle())
+                    HStack { Text("Storage").foregroundStyle(Color.primary); Spacer(); RowChevron() }.contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .place("disk-storage")
             }
         }

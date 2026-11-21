@@ -152,7 +152,10 @@ final class AppModel: ObservableObject {
     @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab == 9 ? 0 : AppModel.firstTab {
         didSet {
             if tab == 9 { tab = 0; nav.settingsTab = 0; nav.settingsOpen = true }
-            if tab != oldValue { tabSince = Date(); Self.arrivedAt = Date() }
+            if tab != oldValue {
+                tabSince = Date(); Self.arrivedAt = Date()
+                UserDefaults.standard.set(tab, forKey: "lastTab"); UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.leftAtKey)
+            }
         }
     }
     // When a tab last came to the front: figures don't roll for the moment after (they're simply there as he arrives).
@@ -169,8 +172,13 @@ final class AppModel: ObservableObject {
         let d = UserDefaults.standard, start = d.object(forKey: "startTab") == nil ? -1 : d.integer(forKey: "startTab")
         // The build's shots name their tab (-tab N).
         if d.volatileDomain(forName: UserDefaults.argumentDomain)["tab"] != nil { return d.integer(forKey: "tab") }
+        // Where he was is kept under its own key, written by the model as the tab changes ("tab" can be shadowed by a
+        // launch argument, and was written from a view).
         let justLeft = Date().timeIntervalSince1970 - d.double(forKey: leftAtKey) < 30 * 60
-        return start >= 0 && !justLeft ? start : d.integer(forKey: "tab")
+        let last = d.object(forKey: "lastTab") == nil ? d.integer(forKey: "tab") : d.integer(forKey: "lastTab")
+        let first = start >= 0 && !justLeft ? start : last
+        try? "start \(start) leftAt \(d.double(forKey: leftAtKey)) now \(Date().timeIntervalSince1970) lastTab \(String(describing: d.object(forKey: "lastTab"))) tab \(d.integer(forKey: "tab")) -> \(first)\n".write(to: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("launch-log.txt"), atomically: true, encoding: .utf8)
+        return first
     }()
     // A tab by number, from a link or the widget. 3 was the Usage tab, which is now part of Claude.
     func show(tab t: Int) {

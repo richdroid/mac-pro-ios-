@@ -675,8 +675,8 @@ struct BottomBarTabs<Content: View>: View {
         .overlay(alignment: .bottom) {
             if !keyboardUp {
                 let ground = scheme == .dark ? Color.black : Color.white
-                LinearGradient(stops: [.init(color: ground.opacity(0), location: 0), .init(color: ground.opacity(0.92), location: 0.45), .init(color: ground, location: 1)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: Self.height + Self.inset * 2 + 34)
+                LinearGradient(stops: [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: 0.4), .init(color: ground, location: 1)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Self.height + Self.inset * 2 + 52)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                     .ignoresSafeArea(.container, edges: .bottom)
                     .allowsHitTesting(false)

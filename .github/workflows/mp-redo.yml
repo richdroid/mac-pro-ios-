@@ -100,6 +100,7 @@ jobs:
             xcrun simctl terminate "$DEVICE" $APP; sleep 2
             xcrun simctl launch "$DEVICE" $APP -address http://127.0.0.1:9001 -startTab 0; sleep 7
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/macpro-return$x-3-relaunched.png
+            cp "$(xcrun simctl get_app_container "$DEVICE" $APP data)/Library/Caches/launch-log.txt" dist/return$x-launch.log 2>/dev/null || echo "no launch log"
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" $APP || true
             xcrun simctl terminate "$DEVICE" com.apple.Preferences || true

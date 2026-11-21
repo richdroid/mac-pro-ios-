@@ -110,7 +110,7 @@ struct DashboardTab: View {
                         .frame(width: 52, height: 52).background(Color(white: 0.17), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(title.name).font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.75)
+                        Text(title.name).font(.title2.weight(.bold)).lineLimit(1).truncationMode(.tail).layoutPriority(1)
                         HStack(alignment: .center, spacing: 6) {
                             if status.busy { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
                             else if remote.said != nil && remote.fail == nil { Image(systemName: "checkmark.circle.fill").font(.footnote).foregroundStyle(.green).frame(width: 12, height: 12) }
@@ -242,8 +242,8 @@ struct DashboardTab: View {
     func row(_ title: String, _ note: String, _ symbol: String) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text(note).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(title).lineLimit(1).minimumScaleFactor(0.85)
+                Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
             }
         } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
     }
@@ -253,17 +253,17 @@ struct DashboardTab: View {
                 guard remote.busy == nil else { return }
                 asked["show"] = want
                 remote.send(model, "show", want ? "show" : "hide")
-            })) { row("Dashboard on the Mac", "Full screen, in front of everything", "rectangle.inset.filled") }
+            })) { row("Show the dashboard", "Full screen on the Mac", "rectangle.inset.filled") }
                 .accessibilityIdentifier("switch.show")
-            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Keep the display on", "It stays lit until you turn this off", "sun.max") }
+            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Keep display on", "Until you turn this off", "sun.max") }
                 .accessibilityIdentifier("switch.display")
             Group {
-                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Boards take turns", "A new board every \(st?.rotateSecs.map { $0 > 0 ? "\(Int($0))" : "45" } ?? "45") seconds", "arrow.triangle.2.circlepath") }
+                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "A new board every \(st?.rotateSecs.map { $0 > 0 ? "\(Int($0))" : "45" } ?? "45") s", "arrow.triangle.2.circlepath") }
                     .accessibilityIdentifier("switch.rotate")
-                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "To read from across the room", "textformat.size") }
+                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "For across the room", "textformat.size") }
                     .accessibilityIdentifier("switch.text")
                 // Glance in plain words, one switch (Richard, 2026-11-21: "glance is so confusing").
-                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "Only the time and a few huge numbers", "bed.double") }
+                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "Just a few huge numbers", "bed.double") }
                     .accessibilityIdentifier("switch.glance")
             }
             .disabled(!running)
@@ -311,7 +311,7 @@ struct UpkeepSection: View {
     var body: some View {
         Section {
             let bad = s.healthBad
-            row("Everything on the Mac", "checklist", bad.map { $0 == 0 ? "All running" : $0 == 1 ? "1 needs a look" : "\($0) need a look" }, bad: (bad ?? 0) > 0, page: .health)
+            row("Everything", "checklist", bad.map { $0 == 0 ? "All running" : $0 == 1 ? "1 needs a look" : "\($0) need a look" }, bad: (bad ?? 0) > 0, page: .health)
             row("Fans & heat", "fan", fans.value?.fans.first.map { "\(Int($0.rpm.rounded())) rpm" }, page: .fans)
             row("Storage", "internaldrive", "\(Format.bytes(s.disk.free)) free", page: .storage)
             if let items = startup.value?.items {
