@@ -419,28 +419,37 @@ struct QueueSheetHost: ViewModifier {
 struct PlayModes: View {
     @ObservedObject private var queue = QueueStore.shared
     @ObservedObject private var showing = QueueStore.shared.showing
+    // Music's player sets them apart (2026-11-21): shuffle and repeat at the ends of the transport, Up next by the song's
+    // name; each place shows only its own key, at its own size.
+    enum Key { case shuffle, upNext, repeatMode }
+    var keys: Set<Key> = [.shuffle, .upNext, .repeatMode]
+    var size: CGFloat = 56
     var body: some View {
         HStack(spacing: 28) {
+            if keys.contains(.shuffle) {
             mode(icon: "shuffle", on: queue.shuffle, label: "Shuffle", value: queue.shuffle ? "On" : "Off") { queue.setShuffle(!queue.shuffle) }
                 // Until Mint has said, the keys are there but quiet: they would be setting what isn't known.
                 .opacity(queue.loaded ? 1 : 0.45).disabled(!queue.loaded)
+            }
             // Up next only when there is something next: never a key that opens an empty sheet (2026-11-20).
-            if queue.total > 0 || showing.on {
+            if keys.contains(.upNext), queue.total > 0 || showing.on {
                 mode(icon: "list.bullet", on: showing.on, label: "Up next", value: "\(queue.total) songs") {
                     Haptic.fire(.tick); withAnimation(.easeOut(duration: 0.25)) { showing.on.toggle() }
                 }
                 .transition(.opacity)
             }
+            if keys.contains(.repeatMode) {
             mode(icon: queue.repeatMode == 1 ? "repeat.1" : "repeat", on: queue.repeatMode != 0, label: "Repeat",
                  value: queue.repeatMode == 0 ? "Off" : queue.repeatMode == 1 ? "One song" : "All") { queue.cycleRepeat() }
                 .opacity(queue.loaded ? 1 : 0.45).disabled(!queue.loaded)
+            }
         }
         .animation(.easeOut(duration: 0.2), value: queue.loaded)
     }
     private func mode(icon: String, on: Bool, label: String, value: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             // Full strength, showing their state: lit and filled when on, white when off; never grey on grey.
-            Image(systemName: icon).font(.system(size: 20, weight: .semibold)).frame(width: 56, height: 56).contentShape(Circle())
+            Image(systemName: icon).font(.system(size: size * 0.36, weight: .semibold)).frame(width: size, height: size).contentShape(Circle())
                 .foregroundStyle(on ? Color.black : Color.white)
                 .background { if on { Circle().fill(TVLook.accent) } }
         }

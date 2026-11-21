@@ -2965,15 +2965,25 @@ struct FlickCard: View {
         .accessibilityAddTraits(.isButton).accessibilityHint("Sends it to the TV")
     }
 }
-// A song's three keys: previous, play, next, at the Remote's own key size, close together under the thumb. No ten-second
-// jumps on a song (2026-11-20).
+// A song's keys on one row, as Apple Music's player has them: previous, play, next together in the middle, shuffle and
+// repeat small at the row's two ends. No ten-second jumps on a song (2026-11-20). Richard, 2026-11-21, open upright:
+// "terrible" (the three keys 72-80 pt wide against the rail, shuffle and repeat on a row of their own cut off at the foot).
 struct MusicTransport: View {
     let playing: Bool?
+    // Shuffle and repeat at the ends: Mint's alone, so the phone's own song has the three keys only.
+    var modes = true
+    static let key: CGFloat = 58, play: CGFloat = 68, mode: CGFloat = 44
     var body: some View {
-        HStack(spacing: 28) {
-            GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 72)
-            PlayKey(playing: playing, size: 80)
-            GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 72)
+        HStack(spacing: 0) {
+            if modes { PlayModes(keys: [.shuffle], size: Self.mode) }
+            Spacer(minLength: 6)
+            HStack(spacing: 16) {
+                GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: Self.key)
+                PlayKey(playing: playing, size: Self.play)
+                GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: Self.key)
+            }
+            Spacer(minLength: 6)
+            if modes { PlayModes(keys: [.repeatMode], size: Self.mode) }
         }
         .frame(maxWidth: .infinity)
     }
@@ -3006,9 +3016,8 @@ struct NowControls: View {
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             // The one transport, the same five as for a film: one way to play anything in this app (r17).
             // At the song's end with the TV still saying playing: an old word, shown stopped there, as a film's is (r18).
+            // Shuffle and repeat, as Mint has them, at its two ends.
             MusicTransport(playing: model.songEnded(music) ? false : model.songPlaying(music))
-            // Shuffle and repeat, as Mint has them.
-            PlayModes().padding(.top, 4)
         }
     }
 }
@@ -3037,10 +3046,11 @@ struct PhoneControls: View {
                 .accessibilityValue("\(NowControls.clock(now * 1000)) of \(NowControls.clock(song.duration * 1000))")
                 .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))); MusicDetailStore.shared.moved() }
             }
-            HStack(spacing: 26) {
-                GlassButton(icon: "backward.fill", label: "Previous", size: 54) { phone.previous() }
-                PlayKey(playing: phone.playing, size: 74) { phone.toggle() }
-                GlassButton(icon: "forward.fill", label: "Next", size: 54) { phone.next() }
+            // The same three keys, at the same sizes and gaps, as Mint's song has.
+            HStack(spacing: 16) {
+                GlassButton(icon: "backward.end.fill", label: "Previous", size: MusicTransport.key) { phone.previous() }
+                PlayKey(playing: phone.playing, size: MusicTransport.play) { phone.toggle() }
+                GlassButton(icon: "forward.end.fill", label: "Next", size: MusicTransport.key) { phone.next() }
             }
         }
     }
@@ -3118,6 +3128,9 @@ struct PlayingTab: View {
     @State private var pendingWait: Task<Void, Never>?
     @FocusState private var playFocused: Bool
     @State private var flickHeight: CGFloat = 0
+    // How tall the page's scroll view shows, under its heading: the cover takes what the song's names, bar and keys leave
+    // of it, so the whole player is on the first screen in every posture (2026-11-21).
+    @State private var seen: CGFloat = 0
     // Never Mint's last song while the phone plays something else of its own.
     var music: TVStatus.Music? { model.nowMusic }
     var otherAppIsActive: Bool { model.videoIsCurrent }
@@ -3136,7 +3149,7 @@ struct PlayingTab: View {
                 if otherAppIsActive, let s = model.status?.session, !s.showName.isEmpty { OnTVLine(name: s.showName) }
                 if phone.drives, let song = phone.song, !otherAppIsActive {
                     songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
-                              titles(song.title, [song.artist, song.album]), PhoneControls(song: song))
+                              titles(song.title, [song.artist, song.album], upNext: false), PhoneControls(song: song))
                 } else if let m = music {
                     songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
                               titles(m.title, [m.artist, m.album]), NowControls(music: m))
@@ -3169,19 +3182,30 @@ struct PlayingTab: View {
         VStack(spacing: 0) {
             art
             names.padding(.top, 20)
-            controls.padding(.top, 18)
+            controls.padding(.top, 12)
         }
     }
+    // What the stack needs under the cover: the names (one line each) and their 20 pt, the bar and its times with 12 pt,
+    // the 10 pt and the row of keys, and 16 pt to the page's foot.
+    static let underCover: CGFloat = 20 + 54 + 12 + 40 + 10 + MusicTransport.play + 16
     func cover(_ c: some View) -> some View {
-        // As wide as the column lets it be, up to the open pane's 300: folded, 180 left the cover a stamp in the middle of
-        // the page (r35).
-        c.aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 280)
+        // As wide as the column, and as tall as the screen leaves it, never a stamp (r35): Richard, 2026-11-21, of a 280 pt
+        // cover inset in a 336 pt column, "terrible".
+        let room = seen > 0 ? max(160, seen - Self.underCover - (panes ? Self.paneTop : 0)) : .infinity
+        return c.aspectRatio(1, contentMode: .fit).frame(maxWidth: room, maxHeight: room)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+            .frame(maxWidth: .infinity)
     }
-    func titles(_ title: String, _ more: [String]) -> some View {
-        VStack(spacing: 3) {
-            Text(title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-            Text(more.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+    // The song's name and who it's by, at the column's left under the cover, as Apple Music's player sets them; Mint's
+    // Up next beside them, where his thumb finds the queue.
+    func titles(_ title: String, _ more: [String], upNext: Bool = true) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.title2.weight(.bold)).lineLimit(2)
+                Text(more.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if upNext { PlayModes(keys: [.upNext], size: MusicTransport.mode) }
         }
         .contentTransition(.opacity)
         .settledAnimation(.easeInOut(duration: 0.25), value: title)
@@ -3359,7 +3383,7 @@ struct PlayingTab: View {
         let _ = SwipeLog.mark("body playing")
         Group {
             if panes {
-                FoldSplit { ScrollView { nowPane }.backToTop() } right: {
+                FoldSplit { ScrollView { nowPane }.modifier(SeenHeight(seen: $seen)).backToTop() } right: {
                     // The same 20 pt from the top as the picture beside it, so the picture's top and "Season" sit level
                     // (r21; gate 276: the right pane was 40 pt down, the picture's top 20 above the season chips).
                     QueueOr(content: ScrollView { Group { if watching { upNext.padding(.top, Self.paneTop) } else { send.padding(.horizontal, 20).padding(.top, Self.paneTop).padding(.bottom, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop().modifier(PaneFoot()))
@@ -3377,6 +3401,7 @@ struct PlayingTab: View {
                     }
                     .padding(.bottom, 16)
                 }
+                .modifier(SeenHeight(seen: $seen))
                 .backToTop()
             }
         }
@@ -3384,6 +3409,17 @@ struct PlayingTab: View {
         .modifier(QueueSheetHost(panes: panes))
         // Where he is in Stremio, for what's under a show while it's on.
         .task { await stremio.load() }
+    }
+}
+
+// How tall a scroll view shows between its insets (the heading above, the foot below), for a page that fits itself to it.
+// The keyboard's inset is left out (capped at a home bar's room), so the cover doesn't shrink while he types under it.
+private struct SeenHeight: ViewModifier {
+    @Binding var seen: CGFloat
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height - $0.contentInsets.top - min($0.contentInsets.bottom, 40) } action: { _, h in
+            if abs(seen - h) > 1 { seen = h }
+        }
     }
 }
 
