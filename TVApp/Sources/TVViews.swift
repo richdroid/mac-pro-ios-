@@ -7,6 +7,9 @@ import MediaPlayer
 @main
 struct TVApp: App {
     @State private var model = TVModel()
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(TVPushDelegate.self) private var pushDelegate
+    #endif
     @Environment(\.scenePhase) private var phase
     init() {
         // Neither is needed for the first frame, so neither holds it up.
@@ -34,13 +37,16 @@ struct TVApp: App {
                 // update automatically").
                 .onChange(of: phase, initial: true) { _, p in
                     switch p {
-                    case .active: model.start()
+                    case .active: model.start(); PhonePose.launch(model); TVNotify.shared.share()
                     case .background: model.background()
                     default: break
                     }
                 }
+                .phoneContinuation()
                 .onOpenURL { u in
-                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }
+                    if u.host == "phone" { PhoneOpen.open(url: u, model: model) }
+                    // What is playing has one home each: a film or show is the Remote's, a song Music's (widgets and the island ask for 2).
+                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 2 && model.videoIsCurrent ? 0 : t }  // 9: Status, Settings pushed
                     // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
                     // known (a launch from cold has to hear from the TV first; about three seconds at most, then said).
                     if u.host == "next" {
@@ -73,13 +79,40 @@ struct RootView: View {
         HitchLog.shared.start()
         #endif
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
+        if pose == "shelf" { return } // the shelf films land a finger on Watch themselves (tv-flick workflow)
         // Words typed into the Apps page's search: the keyboard up, as it is when he types them.
-        if pose == "search" { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; SendDraft.shared.text = "Heat"; return }
+        if pose == "search" { model.tab = 6; SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; SendDraft.shared.text = "Heat"; return }
+        // The search tab opened with nothing typed (recent searches and what he's in the middle of), then typed into a key at a
+        // time, as a finger does: each keystroke's first results timed in the stand-in Mac's log.
+        if pose == "searchempty" { SearchStore.shared.forgetAll(); for t in ["Sample Series", "Heat"] { SearchStore.shared.remember(t) }; SearchStore.show(model, text: ""); return }
+        // An app found and opened from the search: the keyboard goes and the Remote comes up, nothing left behind.
+        if pose == "searchapp" {
+            Task {
+                SearchStore.show(model, text: "")
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                SendDraft.shared.text = "netflix"
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if let h = SearchStore.shared.results.top { SearchStore.shared.open(h, model: model, origin: nil) }
+            }
+            return
+        }
+        if pose.hasPrefix("searchtype") {
+            let words = pose == "searchtype-show" ? "alien s1e2" : pose == "searchtype-slip" ? "haet" : "heat"
+            Task {
+                SearchStore.show(model, text: "")
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                for n in 1...words.count {
+                    SendDraft.shared.text = String(words.prefix(n))
+                    try? await Task.sleep(nanoseconds: 220_000_000)
+                }
+            }
+            return
+        }
         // The Remote's search field tapped, then words typed: the Apps page's search, keyboard up, results in.
         if pose == "remotesearch" {
             Task {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; model.tab = 1
+                SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; model.tab = 6
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
                 SendDraft.shared.text = "Heat"
             }
@@ -92,7 +125,7 @@ struct RootView: View {
             return
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
-        if ["tour", "type", "episodes", "scrub", "island"].contains(pose) { return }
+        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps", "settingsnav", "settingsscript", "stremiotile"].contains(pose) { return }
         // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
         if pose == "mirror" {
             Task {
@@ -106,7 +139,7 @@ struct RootView: View {
         // A title's details page, pushed over Stremio's page (AppBrowse opens it once the rows are in).
         if pose == "details" { model.tab = 1; model.browsing = .stremio; return }
         // A link pasted into the Remote's field: its card comes up, and the flick's own demo throws it.
-        if pose == "flick-link" {
+        if pose == "flick-link" || pose == "flick-link-art" {
             Task { try? await Task.sleep(nanoseconds: 3_000_000_000); model.send("https://www.youtube.com/watch?v=dQw4w9WgXcQ") }
             return
         }
@@ -126,13 +159,14 @@ struct RootView: View {
         if pose == "realsearch" {
             Task {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                model.tab = 1
+                model.tab = 6
                 try? await Task.sleep(nanoseconds: 800_000_000)
-                SendDraft.shared.focusRequest += 1
+                SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 SendDraft.shared.text = "Heat"
                 for _ in 0..<80 {
-                    if let r = SendDraft.shared.firstResult { try? await Task.sleep(nanoseconds: 1_200_000_000); FlickCardButton.tap(model, r.item, r.source); return }
+                    let st = SearchStore.shared
+                    if let h = st.results.top ?? st.results.groups.first?.hits.first { try? await Task.sleep(nanoseconds: 1_200_000_000); st.open(h, model: model, origin: nil); return }
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }
@@ -186,14 +220,18 @@ struct RootView: View {
             }
             return
         }
-        model.browsing = .stremio
         guard pose != "browse", pose != "stremiorow" else { return }
         Task {
-            // The page is loading the same list, so wait for it rather than asking again.
+            // Stremio's rows asked for here (no page of its own loads them now), then the first film or show opened as
+            // its page, through the card's own tap, as a finger would.
+            await BrowseStore.shared(.stremio).load()
             for _ in 0..<40 {
-                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
+                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream", "blurbopen"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
                     // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
                     // Through the card's own tap, as a finger would: what's already on goes to the Remote with nothing sent.
+                    // "-art" poses: the tile's picture is in memory first, as on his phone, so the page's arrival is judged
+                    // with its poster and ground.
+                    if pose.hasSuffix("-art"), let u = URL(string: item.art) { _ = await ImageStore.shared.load(u); _ = await ImageStore.shared.band(u); if let h = ImageStore.shared.cached(u) { _ = await ImageStore.shrunk(h, 16) } }
                     FlickCardButton.tap(model, item, .stremio, ready: pose == "flickdemo-stream" || pose.hasPrefix("flick-")); return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
@@ -205,24 +243,25 @@ struct RootView: View {
     // never redraws the whole tab view.
     @State private var playingSymbol = "play.circle"
     var body: some View {
+        let _ = SwipeLog.mark("body root")
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
                 // rebuilt, so what was loaded, and the choices made on it, stay.
-                if t == 1 { model.browsing = nil; SendDraft.shared.text = "" }
+                if t == 1 { model.browsing = nil }
+                // The search tab tapped again: the field takes the keyboard, as Apple's own apps do.
+                if t == 6 { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
                 resets[t, default: 0] += 1
             }) {
-                Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
-                Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 2) { Page(title: "Playing", retaps: resets[2, default: 0]) { PlayingTab() } } label: {
-                    // What kind of thing is on, in the side bar's own glyphs: a cover or an app's banner squeezed into it
-                    // read as a clipped "YouTub" among the symbols (Richard, 2026-11-05: "makes no sense").
-                    tabLabel("Playing", playingSymbol)
-                }
-                Tab(value: 3) { Page(title: "Watch", retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
-                Tab(value: 5) { Page(title: "Status", retaps: resets[5, default: 0]) { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
-                // Last, so it sits at the foot of the side bar, as in the other apps.
-                Tab(value: 9) { TVSettingsTab(retaps: resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                // Four tabs, and never a fifth (Richard, 2026-11-20: "never a more thing ever"): the Duo's side rail holds
+                // four before it makes a More. Watch leads. Apps is a row on the Remote; the box's figures and Settings are
+                // behind the lip's gear. The values are the old ones, so links, widgets and intents land where they did.
+                Tab(value: 3) { Page(title: "Watch", tab: 3, accessory: AnyView(WatchFilterKey()), retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
+                Tab(value: 0) { Page(title: "Remote", tab: 0, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
+                Tab(value: 2) { Page(title: "Music", tab: 2, retaps: resets[2, default: 0]) { PlayingTab() } } label: { tabLabel("Music", "music.note") }
+                // A plain tab, not the system's search role: open upright the search-role tab took the keyboard from the
+                // page's own field the moment it had it.
+                Tab(value: 6) { Page(title: "Search", tab: 6, retaps: resets[6, default: 0]) { SearchPage() } } label: { tabLabel("Search", "magnifyingglass") }
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
@@ -232,26 +271,15 @@ struct RootView: View {
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
             }
-            // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
-            // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
-            .overlay {
-                if let target = model.flicking {
-                    // On a show's or a stream's page it stops short of the side bar, so another tab is a tap away; the card
-                    // and the throw have the whole screen.
-                    // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far
-                    // wider than the bar (r19: an 88 pt strip of the page underneath showed between the two).
-                    FlickHost(target: target)
-                        // Landed on the Remote, it waits out of sight and out of touch's way to be taken down (retireFlick).
-                        .opacity(model.flickRetired ? 0 : 1)
-                        .allowsHitTesting(!model.flickRetired)
-                }
-            }
+            // A poster lifted off a shelf, over everything, where his finger has it (Liftable).
+            .overlay { HandOverlay() }
         }
+        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { Hand.shared.screen = $0 } }
         // What follows the status lives in small views of its own, so only they redraw when it changes.
         .background { StatusFollower(playingSymbol: $playingSymbol) }
         .overlay(alignment: .top) { ProblemBanner() }
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { followRequest(); poseForShots(); TabTour.run([0, 1, 2, 3, 5, 9]) { model.tab = $0 } }
+        .onAppear { followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 2, 6]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task { await BrowseStore.shared(.stremio).loadHome() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
@@ -294,23 +322,31 @@ private struct StatusFollower: View {
 private struct ProblemBanner: View {
     @Environment(TVModel.self) var model
     var problem: String? {
-        if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
+        if !model.reachable { return "Can’t reach the Mac" }
         // On the Remote it's said in the dark picture itself, under its cut-wire glyph: the pill sat on the picture's edge
         // upright, across the hinge open flat, and in the status strip folded (Remote gate 4).
         if model.status?.online == false, model.tab != 0 { return "The Mac can’t reach the TV" }
         return nil
     }
+    // Calm amber for the Mac out of reach (only ever after a sustained failure); red is kept for the TV itself down.
+    var tint: Color { shown == "Can’t reach the Mac" ? TVLook.away.opacity(0.9) : Color.red.opacity(0.85) }
+    // What's shown, set by an explicit animation as the problem changes: the Remote's own quiet transactions (its keys
+    // arriving without animation) swallowed the implicit one, and the banner left in a single frame (gate of 87d77ca).
+    @State private var shown: String?
     var body: some View {
         ZStack {
-            if let problem {
+            if let problem = shown {
                 // Snug to the top edge, so its foot stays clear of the title under it.
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(Color.red.opacity(0.85), in: Capsule())
+                    .background(tint, in: Capsule())
                     // In from the top edge and back out, never popped on and off over the title.
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: problem)
+        .onChange(of: problem, initial: true) { _, p in
+            guard p != shown else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { shown = p }
+        }
     }
 }
 private struct ToastBubble: View {
@@ -349,44 +385,40 @@ extension View {
     func topFade() -> some View { modifier(TopFade()) }
 }
 
-// The flick's screen over the tabs, stopping short of whichever bar holds Back while choosing: the side bar folded and
-// open, and open in portrait the tab bar along the foot, so its Back is the way back from the show's page and the
-// streams (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08: a "‹ Back" foot bar there
-// instead). The stage covers everything, in every posture.
-private struct FlickHost: View {
-    @Environment(TVModel.self) var model
-    @Environment(\.horizontalSizeClass) private var size
-    @Environment(\.paneLayout) private var panes
-    let target: FlickTarget
-    var body: some View {
-        let foot = size == .regular && !panes
-        FlickScreen(target: target).environment(model).id(target.id)
-            // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far wider
-            // than the bar (r19: an 88 pt strip of the page underneath showed between the two).
-            .padding(.trailing, model.flickChoosing && !foot ? TVLook.railRoom : 0)
-            .padding(.bottom, model.flickChoosing && foot ? max(model.footBarRoom, TVLook.footRoom) : 0)
-            .ignoresSafeArea(.container, edges: foot ? [.trailing, .bottom] : .trailing)
-            .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
-    }
-}
-
 // Each tab's frame: the art behind it, its title, and the gear.
 struct Page<C: View>: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     let title: String
+    // Which tab this is, so only the one showing answers an ask to push a page.
+    var tab = -1
+    // One key beside the page's name (Watch's filter).
+    var accessory: AnyView? = nil
     var alwaysInline = false
+    // The system's bar shown over the page's own heading, for a toolbar item of its own; no title in it.
+    var showsBar = false
     // Taps on this tab's button while it's already showing.
     var retaps = 0
     @ViewBuilder let content: () -> C
     @State private var path = NavigationPath()
     @State private var top = 0
     @State private var scrolled = PageScrollY()
+    // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
+    // (folded, open flat): taken back, so the heading sits where every other tab's does (gate of 96f5f42: 15 pt lower).
+    // Open upright the bar is the top bar the clock already keeps clear, and costs nothing. Measured on the gate's shots:
+    // 43 px at 3x (Status' words at 114 px against 71 px). Every attempt to measure it live (insets, an empty stack, the
+    // heading's own frame) missed by 9 pt or more by posture, or chased its own move (gates of b01454f to bc5d7cd).
+    @Environment(\.horizontalSizeClass) private var hSize
+    var barRoom: CGFloat { showsBar && !(hSize == .regular && !panes) ? 43.0 / 3 : 0 }
     var body: some View {
+        // The lip: the TV, along the top of this tab and of every page opened on it. Above the stack, not in it, so a push
+        // moves under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
+        VStack(spacing: 0) {
+        Lip(tab: tab).environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
-                .underFlick()
+                .underFlick(warms: alwaysInline)
                 .modifier(TabBarFade())
                 .modifier(TypingHidesTabBar(enabled: !alwaysInline))
                 .environment(\.backToTop, top)
@@ -396,9 +428,26 @@ struct Page<C: View>: View {
                 // "Watch" printed over "Continue watching" (Richard, 2026-11-07: "look at how the watch header interacts
                 // with the other text"): it can only follow a scroll view it finds at the page's root, and the pages'
                 // own layouts (two panes, overlays) hid it.
-                .safeAreaInset(edge: .top, spacing: 0) { if !alwaysInline { MovingTitle(title: title, scrolled: scrolled) } }
-                .toolbar(alwaysInline ? .automatic : .hidden, for: .navigationBar)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if !alwaysInline {
+                        MovingTitle(title: title, scrolled: scrolled, accessory: accessory)
+                    }
+                }
+                // Status' page, heading and all, moved up by the bar's room as one: a move, not a new layout, so nothing
+                // under it measures itself again; its foot reaches down as far.
+                .padding(.bottom, -barRoom)
+                .offset(y: -barRoom)
+                .toolbar(showsBar ? .automatic : .hidden, for: .navigationBar)
+                // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
+                .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).modifier(TypingHidesTabBar(enabled: !alwaysInline)) }
+                // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
+                // tab exactly as he left it.
+                .navigationDestination(for: TitleRoute.self) { r in
+                    if let t = TitleRoutes.target(r) { TitlePage(target: t) }
+                }
+                .modifier(SettingsPages(tab: tab))
+                .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
@@ -406,8 +455,23 @@ struct Page<C: View>: View {
                 // (Richard, 2026-11-05). Only the Remote, which has no headings and no room to spare, keeps it in the bar.
                 .navigationBarTitleDisplayMode(alwaysInline ? .inline : .large)
         }
+        }
+        .onChange(of: model.titleAsks) { _, _ in
+            guard model.tab == tab, let t = model.titleAsk else { return }
+            model.titleAsk = nil
+            path.append(TitleRoutes.add(t))
+        }
         .topShade()
-        .background { Ambience() }
+        .background {
+            ZStack {
+                Ambience()
+                if let g = model.titleGrounds.last(where: { $0.tab == tab }) { TitleGround(art: g.art).transition(.opacity) }
+            }
+            .animation(.easeInOut(duration: 0.3), value: model.titleGrounds.last(where: { $0.tab == tab })?.art)
+        }
+        // Over the art too, so the strip round the bars beside or under a flick's page is black like the page's own foot,
+        // never a lighter band of the tab's art (open upright, under the tab bar).
+        .modifier(UnderFlickGround(warms: alwaysInline))
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
@@ -418,12 +482,17 @@ struct Page<C: View>: View {
         // A page opened from a search leaves the keyboard behind.
         .onChange(of: path) { was, now in
             Keyboard.dismiss()
+            PageMoves.count += 1
             #if os(iOS)
             HitchLog.shared.note("\(title) \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)")
             #endif
         }
     }
 }
+
+// Every push and pop on any tab's stack, counted: a throw waiting on its list, or the Remote's unseen build, that sees it
+// change since it began knows he has moved on, and lets go.
+@MainActor enum PageMoves { static var count = 0 }
 
 // How far a tab's page has scrolled, from whichever of its scroll views moved last.
 @Observable final class PageScrollY { var y: CGFloat = 0 }
@@ -443,18 +512,24 @@ extension EnvironmentValues { var pageScroll: PageScrollY? { get { self[PageScro
 private struct MovingTitle: View {
     let title: String
     let scrolled: PageScrollY
+    var accessory: AnyView? = nil
     // What the display already keeps clear above the page: the clock's row open upright; nothing folded or open flat,
     // where the clock is on the side and the name sat 13 pt from the glass (Richard, 2026-11-09, Playing folded: "too
     // close to top edge"). It takes the same air from the top as from the side then, 22 pt to its cap, every tab alike.
     @State private var above: CGFloat = 0
+    // Open flat the left pane's content has the display's bare edge 14 pt more air (FoldSplit's outer): the name lines up
+    // with it, not 14 pt left of every card under it.
+    @Environment(\.paneLayout) private var panes
     var body: some View {
         let y = max(0, scrolled.y)
-        PageHeading(title)
-            .padding(.horizontal, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
+        HStack(alignment: .center, spacing: 12) {
+            PageHeading(title).allowsHitTesting(false)
+            if let accessory { accessory.allowsHitTesting(y < 20) }
+        }
+            .padding(.leading, panes ? 34 : 20).padding(.trailing, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
             .background { Color.clear.ignoresSafeArea(edges: .top).onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { above = $0 } }
             .offset(y: -y)
             .opacity(Double(max(0, 1 - y / 44)))
-            .allowsHitTesting(false)
     }
 }
 
@@ -630,92 +705,45 @@ extension View {
     func barPage() -> some View { modifier(BarPage(actions: { EmptyView() })) }
 }
 
-// The TV's own settings and this app's connection, as a tab at the foot of the side bar.
-struct TVSettingsTab: View {
-    @Environment(TVModel.self) var model
-    @Environment(\.paneLayout) private var panes
-    var retaps = 0
-    @State private var path: [ManagePage] = []
-    @StateObject private var store = ManageStore()
-    // How far the list has scrolled, for the title going up with it, as on every other tab.
-    @State private var scrolled = PageScrollY()
-    var manage: some View { TVManageSections() }
-    // The launcher's own two jobs, then how the app reaches the TV, which is set once and lives on its own page.
-    @ViewBuilder var connection: some View {
-        Section {
-            SettingsAction(title: "Refresh the TV’s recommendations", icon: "arrow.clockwise") { model.post("refresh") }
-            // What it opens, said plainly: the launcher's own settings (review of dfd490e: "Home screen on the TV").
-            SettingsAction(title: "Home screen settings", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
-        }
-        .listRowBackground(TVLook.glassRow)
-        Section {
-            NavigationLink(value: ManagePage.connection) { Label("Connection", systemImage: "network") }
-        }
-        .listRowBackground(TVLook.glassRow)
-    }
-    var body: some View {
-        NavigationStack(path: $path) {
-            ScrollViewReader { proxy in
-                Group {
-                    // Unfolded, one list each side of the fold rather than one list across it.
-                    if panes {
-                        FoldSplit { Form { manage }.scrollContentBackground(.hidden).modifier(FollowsScroll(scrolled: scrolled)) } right: {
-                            Form { connection }.scrollContentBackground(.hidden).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
-                        }
-                    } else {
-                        Form { manage; connection }.scrollContentBackground(.hidden).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
-                    }
-                }
-                .topShade().topFade()
-                // The page's own name, going up with the list, as every other tab's does (Page): the system's large title sat
-                // 23 pt lower here than on the other tabs, folded (review of dfd490e, tv-9).
-                .safeAreaInset(edge: .top, spacing: 0) { MovingTitle(title: "Settings", scrolled: scrolled) }
-                .toolbar(.hidden, for: .navigationBar)
-                // Tapping the tab again: out of a page opened from here, else back to the top.
-                .onChange(of: retaps) { _, _ in
-                    if path.isEmpty { withAnimation(.snappy) { proxy.scrollTo(ManagePage.apps, anchor: .top) } } else { path = [] }
-                }
-            }
-            .navigationDestination(for: ManagePage.self) { page in
-                switch page {
-                case .apps: ManageAppsView(store: store)
-                case .settings: ManageSettingsView(store: store)
-                case .connection: ConnectionView()
-                }
-            }
-            .background { Ambience() }
-            .navigationTitle("Settings")
-            // The same title as every other tab: large, folded or open.
-            .navigationBarTitleDisplayMode(.large)
-        }
-        #if os(iOS)
-        .onChange(of: path) { was, now in HitchLog.shared.note("Settings \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)") }
-        #endif
-    }
-}
-
 // Where the Mac is, and what it takes to reach it from away.
 struct ConnectionView: View {
     @Environment(TVModel.self) var model
+    @Environment(\.paneLayout) private var panes
     @State private var address = ""
     var body: some View {
-        Form {
-            Section { PageHeading("Connection") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
-            Section {
-                TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
-                    .submitLabel(.done)
-                    .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
-            } header: { Text("Mac Pro address") } footer: { Text("Everything here works anywhere with Tailscale on, as long as the Mac is awake and can reach the TV.") }
-        }
-        .scrollContentBackground(.hidden)
-        .topShade().topFade()
-        .summonsBar()
+        // Open flat, the page keeps to the left pane, never one card across the fold (gate 276, fifth pass).
+        Group { if panes { FoldSplit { page } right: { Color.clear } } else { page } }
+        // The wall behind the whole page, both panes, not only the one holding the card (sixth pass: the right half black).
         .background { Ambience() }
         // No title in the bar: the page draws its own large heading, and the system printed the title above it a second
         // time (c2db3e9's and bff5ee8's runs; emptied from outside, the page's own won). Back over this page reads "Back".
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         .barPage()
         .onAppear { address = model.address }
+    }
+    var page: some View {
+        // A glass section of the app's own, not a Form's one-row capsule (gate 276).
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                PageHeading("Connection").padding(.horizontal, 4)
+                // One row, so its note is its second line rather than a footer under a lone capsule (the designer's cure
+                // for one-row sections, 2026-11-11).
+                GlassSection(header: "Mac Pro address") {
+                    VStack(alignment: .leading, spacing: 3) {
+                        TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
+                            .submitLabel(.done)
+                            .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
+                        Text("Works anywhere with Tailscale on, as long as the Mac is awake and can reach the TV.")
+                            .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, GlassCard.inset).padding(.vertical, 12)
+                }
+            }
+            .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .topShade().topFade()
+        .summonsBar()
     }
 }
 
@@ -738,8 +766,9 @@ struct SendBar: View {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
             if opensSearch {
-                Button { model.tick(); draft.wantsFocus = true; draft.focusRequest += 1; model.tab = 1 } label: {
-                    Text(draft.text.isEmpty ? "Search, or send a link" : draft.text).foregroundStyle(draft.text.isEmpty ? .tertiary : .primary)
+                Button { SearchStore.show(model) } label: {
+                    // Always its own words: the last search's words belong to the Search tab, not to this page.
+                    Text("Search, or send a link").foregroundStyle(.tertiary)
                         .lineLimit(1).frame(maxWidth: .infinity, minHeight: 50, alignment: .leading).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityLabel("Search, or send a link")
@@ -774,13 +803,13 @@ struct SendBar: View {
                     draft.wantsFocus = false
                 }
             }
-            if draft.text.isEmpty {
+            if draft.text.isEmpty || opensSearch {
                 Button {
                     #if canImport(UIKit)
                     // A copied link goes to the TV; copied words are searched here, like typed ones.
                     if let s = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-                        if Self.isLink(s) { model.send(s) } else { draft.text = s; if opensSearch { model.tab = 1 } }
-                    } else if opensSearch { draft.wantsFocus = true; draft.focusRequest += 1; model.tab = 1 } else { focused = true }
+                        if Self.isLink(s) { model.send(s) } else if opensSearch { SearchStore.show(model, text: s) } else { draft.text = s }
+                    } else if opensSearch { SearchStore.show(model) } else { focused = true }
                     #endif
                 } label: { Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44) }
                 .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Use what you copied")
@@ -931,25 +960,11 @@ struct MirrorView: View {
                 if let m = store.image { Image(tv: m).resizable().scaledToFit() }
                 #endif
             } else {
-                // Turned off: what's playing, blurred, behind the one button, rather than an empty box.
-                ZStack {
-                    Color.clear.overlay { Art(url: model.nowArt.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                        .clipped().blur(radius: 26).opacity(0.55)
-                    Button { model.setMirror(true) } label: {
-                        Label("Show the TV’s screen", systemImage: "eye").font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 11)
-                    }
-                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
-                }
+                // Never an empty box and never a key asking to be shown (2026-11-20): what is on, sharp, else the TV's glyph.
+                if let art = model.nowArt.flatMap(URL.init(string:)) { PosterOnBlur(url: art).id(art) } else { NoPicture() }
             }
         }
         .aspectRatio(16.0 / 9, contentMode: .fit)
-        .overlay(alignment: .topTrailing) {
-            if closable, model.mirrorLive {
-                Button { model.setMirror(false) } label: { Image(systemName: "eye.slash").font(.system(size: 15, weight: .semibold)).frame(width: 40, height: 40).contentShape(Circle()) }
-                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).padding(10).accessibilityLabel("Hide the TV’s screen")
-                    .transition(.opacity)
-            }
-        }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         .settledAnimation(.easeOut(duration: 0.25), value: film)
         // Every other change of what the picture is (the live screen to a poster's place, hidden and shown again) fades
@@ -1007,6 +1022,8 @@ private struct ScreenPicture: View {
                     // washed-out banner with the glyph stuck on its wordmark, and only when the art beat the stall (r33).
                     ZStack {
                         if live.stalled { NoPicture() }
+                        // With no art either, the TV's glyph under the light, never an empty box (gate 3, first arrival).
+                        else if art == nil { NoPicture().overlay { LoadingRing(radius: TVLook.card) } }
                         else {
                             Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
                                 .clipped().blur(radius: 26).opacity(0.5)
@@ -1184,7 +1201,7 @@ struct GlassKey: View {
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
                 .scaleEffect(down ? 0.92 : 1).animation(TVLook.press, value: down)
         }
-        .glassEffect(.regular.interactive(), in: Circle())
+        .keyGlass()
     }
 }
 struct PlayKey: View {
@@ -1237,9 +1254,14 @@ struct RemoteTab: View {
     // Read only inside KeysArrive, so the keys coming in redraws them alone, not the whole Remote: as a plain @State it
     // re-laid out both open panes mid-move, the 147–177 ms hitch at +0.72 s (r27).
     @State private var keysGate = KeysGate()
+    @ObservedObject private var epPanel = EpisodesPanel.shared
+    // The episodes, over what they're given: a page's whole width or the left column, with a margin the pad's size.
+    @ViewBuilder func episodesPanel() -> some View {
+        if epPanel.open && (session || model.status?.session != nil) { EpisodePanel().padding(.horizontal, 12).padding(.top, 0).padding(.bottom, 12).transition(.opacity) }
+    }
     var state: String {
         // Not reaching it is said once, by the red note at the top; "Connecting…" under it contradicted it.
-        if unreachable || !model.reachable { return "" }
+        if unreachable || !model.reachable || epPanel.open { return "" }
         // A start under way, or one that failed: its title from the first frame, kept through a failure, so the line never
         // appears late and pushes the title up (r19).
         if let st = model.starting, !st.played { return ([st.title] + (st.line.map { [String($0.prefix { $0 != "·" }).trimmingCharacters(in: .whitespaces)] } ?? [])).joined(separator: " · ") }
@@ -1248,6 +1270,8 @@ struct RemoteTab: View {
         if s.screen == "asleep" { return "Asleep" }
         // The box is up but the television isn't showing it (HDMI-CEC): that is what's true, not what the box has on.
         if let a = s.away { return a.line }
+        // The television has been asked on and isn't lit yet: said, where "Asleep" was a moment ago.
+        if s.comingOn { return TVStatus.comingOnLine }
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
@@ -1349,17 +1373,18 @@ struct RemoteTab: View {
             // Laid out first, at the full width, so the bar or a player coming in under it never shrinks it, and a flick's
             // screen moving onto it lands where it stays.
             .layoutPriority(1)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
-                if abs(w - pictureWidth) > 0.5 { pictureWidth = w }
-                if !lay, abs(w - calmPictureWidth) > 0.5 { calmPictureWidth = w }
-            }
     }
     // Asleep, one big way to wake it over the pad, which wakes it too.
     @ViewBuilder var wake: some View {
         // The television off with the box still up is the same key, in the same place: it turns the television on.
         if asleep || away == .off {
             Button { model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") } } label: {
-                Label("Wake the TV", systemImage: "power").font(.title3.weight(.semibold)).padding(.horizontal, 26).frame(height: 60)
+                // All of "Wake the TV" where the pad is wide enough for it, else "Wake": never cut, never over the keys beside.
+                ViewThatFits(in: .horizontal) {
+                    Label("Wake the TV", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 20)
+                    Label("Wake", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 16)
+                }
+                .font(.title3.weight(.semibold)).frame(height: 60)
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else if let away, !unreachable {
@@ -1369,7 +1394,7 @@ struct RemoteTab: View {
     // The two rows of keys, on the Remote's one column: five equal places across exactly the column's width, the keys
     // sized to it (never five fixed keys spread wider than the picture above them, as on his folded phone, 2026-11-11:
     // "look at the controls fucked"), each key over the one below it. The outer keys' edges are the column's edges.
-    func keys(_ grid: RemoteGrid) -> some View {
+    func keys(_ grid: RemoteGrid, transport: Bool = true) -> some View {
         VStack(spacing: 12) {
             // Power joins the top row like a real remote's, rather than sitting alone under everything.
             HStack(spacing: 0) {
@@ -1381,7 +1406,7 @@ struct RemoteTab: View {
                     Image(systemName: "keyboard").font(.system(size: grid.key * 0.35, weight: .medium)).foregroundStyle(typing ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.primary))
                         .frame(width: grid.key, height: grid.key).contentShape(Circle())
                 }
-                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(typing ? "Stop typing" : "Type on TV")
+                .buttonStyle(.plain).keyGlass().accessibilityLabel(typing ? "Stop typing" : "Type on TV")
                 .slot()
                 GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu", size: grid.key).slot()
             }
@@ -1390,7 +1415,9 @@ struct RemoteTab: View {
             // Only with something on to play: idle on the home screen, five transport keys did nothing.
             // The one transport, the same as Playing's, on the top row's five places.
             // Never under Mint's own player, online or dimmed out of reach: one condition in every state (gate, 2026-11-11).
-            if session && !musicShown && !lay { Transport(glow: !lay, size: grid.key, playSize: grid.play).transition(.opacity) }
+            // Open upright it's under the scrub bar in the picture's pane instead (2026-11-14), so the pad and this one row
+            // have the whole lower pane.
+            if transport && session && !musicShown && !lay { Transport(glow: !lay, size: grid.key, playSize: grid.play).transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
         // Five places of a key and a gap each: the first and last keys' edges land on the column's.
@@ -1402,16 +1429,48 @@ struct RemoteTab: View {
         // or ended on the TV. It fades, like the lines under the picture (the 2026-11-10 motion pass).
         .settledAnimation(.easeOut(duration: 0.25), value: session)
     }
-    func keysBlock(_ grid: RemoteGrid) -> some View {
+    func keysBlock(_ grid: RemoteGrid, transport: Bool = true) -> some View {
         VStack(spacing: 12) {
             // Above the keys, and up for as long as it's wanted, so typing and moving between boxes go together.
             if typing { TypeBar(open: $typing).frame(width: grid.width).transition(.move(edge: .bottom).combined(with: .opacity)) }
-            keys(grid)
+            keys(grid, transport: transport)
         }
         .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
         // Whether something was on when the TV was last heard: kept through a drop, so its keys stay (dimmed).
         .onChange(of: model.status?.session != nil, initial: true) { _, has in if !unreachable { hadSession = has } }
         .onChange(of: model.starting?.line) { _, line in if let line { lastStartWasSeries = line.hasPrefix("S") } }
+    }
+    // The pad with volume, across the column's whole width: − and + at the column's two edges (over the first and last
+    // keys of the row below) with the pad between them and a slim level bar under it; or, where the column is tall, the
+    // pad as wide as the column with − bar + on a row under it. The pad is the ring that fits the height it's given.
+    func padRow(_ grid: RemoteGrid) -> some View {
+        let d = grid.padWidth
+        return Group {
+            if grid.volBelow {
+                VStack(spacing: 14) {
+                    pad.frame(width: d, height: grid.pad)
+                    HStack(spacing: RemoteGrid.sideGap) {
+                        VolumeKey(down: true, size: grid.key)
+                        // Room beside the track for its two speakers, clear of the keys' glass.
+                        VolumeBar().padding(.horizontal, 16)
+                        VolumeKey(down: false, size: grid.key)
+                    }
+                }
+            } else {
+                VStack(spacing: RemoteGrid.volGap) {
+                    HStack(spacing: 0) {
+                        VolumeKey(down: true, size: grid.key)
+                        Spacer(minLength: 0)
+                        pad.frame(width: d, height: grid.pad)
+                        Spacer(minLength: 0)
+                        VolumeKey(down: false, size: grid.key)
+                    }
+                    VolumeBar().frame(width: d)
+                }
+            }
+        }
+        .frame(width: grid.width)
+        .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
     }
     // The pad, dimmed while the TV can't be reached. Asleep, its keys step back and the wake button sits in the empty ring.
     var pad: some View {
@@ -1432,14 +1491,37 @@ struct RemoteTab: View {
     // The bar and the episode line under the picture, with their spacing: the picture is sized as if they're always there,
     // folded and open.
     static let underRoom = barSlot + 46 + 28
-    // The transport row and the keys' spacing above it: folded it sits in the picture's column, and only while something's on.
-    static let transportRoom: CGFloat = 68 + 12
+    // Open upright, the transport's keys in the picture's pane: 64 pt (the least a key is), ⏯ a little bigger, on the
+    // column's five places, so each sits over the key under it across the fold.
+    static let upperKey: CGFloat = 64, upperPlay: CGFloat = 72
+    func upperGrid(_ width: CGFloat) -> RemoteGrid {
+        var g = RemoteGrid.keys(width, maxKey: Self.upperKey)
+        g.play = min(g.play, Self.upperPlay)
+        return g
+    }
     func side(apps: Bool) -> some View {
-        PictureColumn(spacing: 14, under: Self.underRoom) {
+        // Open upright the lines under the picture are the keys' column (the pane's width, 520 pt at most), whatever
+        // width the pane's height leaves the picture; elsewhere they're the picture's own width.
+        let upper = stackedUpright && !lay
+        return PictureColumn(spacing: 14, under: Self.underRoom + (upper ? Self.upperPlay + 14 : 0), lines: stackedUpright ? RemoteGrid.most : nil, leading: panes && !stackedUpright) {
             picture(closable: true).columnRole(.picture)
             // Mint's player is what's on when it shows: no bar's place above it, online or out of reach (upright offline the
             // kept place shrank the picture and left 83 pt empty, Remote gate 3).
             if !musicShown { progress.columnRole(.under) }
+            // Open upright: prev, −10, ⏯, +10, next right under the scrub bar (Richard, 2026-11-14: "the buttons r so
+            // small"; this overturns the 11-11 rule that the transport is anchored from the foot with the keys). The pad
+            // and the keys' row then have the whole lower pane. Its room is kept while nothing's on, like the bar's.
+            if upper && session && !musicShown {
+                GeometryReader { g in
+                    let grid = upperGrid(g.size.width)
+                    Transport(size: grid.key, playSize: grid.play)
+                        .frame(width: grid.width + grid.gap).frame(width: g.size.width, height: Self.upperPlay)
+                }
+                .frame(height: Self.upperPlay)
+                .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                .transition(.opacity)
+                .columnRole(.under)
+            }
             // Typing, the episode line and Mint's player step aside, in every posture: open flat they sat half under the
             // keyboard, and upright the picture's pane gives its height to the bar and the keys (an episode line at the
             // shrunken picture's width read "Episo…", CI 69af3dc). Folded does the same.
@@ -1453,11 +1535,7 @@ struct RemoteTab: View {
                     QuickApps().opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
                         .settledAnimation(.easeInOut(duration: 0.3), value: unreachable).columnRole(.aligned)
                 }
-                // Right under the tiles, not pushed to the foot with dead space above it. Upright (no tiles), at the
-                // pane's foot, just above the pad: what's on hangs from the picture and the remote from the foot, with the
-                // spare room the one gap between, so the field never moves with what's playing (Remote rule, 2026-11-11).
-                if stackedUpright { Spacer(minLength: 0) }
-                SendBar(opensSearch: true).columnRole(.aligned)
+                // No search box here: Search is its own tab (Richard, 2026-11-11).
             }
             // Upright the field is the pane's foot: a second spacer split the room and floated it (Remote gate 4).
             if !stackedUpright { Spacer(minLength: 0) }
@@ -1467,7 +1545,9 @@ struct RemoteTab: View {
         // out here rather than popped (the 2026-11-10 motion pass). Their room is kept either way (PictureColumn).
         .settledAnimation(.easeOut(duration: 0.25), value: session)
         .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
-        .padding(.horizontal, 20).padding(.bottom, 16)
+        // Open upright, the keys' column's own margins (12 pt), so its edges are theirs across the fold; the fold's own
+        // band is under it there, so less at the foot.
+        .padding(.horizontal, stackedUpright ? 12 : 20).padding(.bottom, stackedUpright ? 8 : 16)
     }
     // The pad and the keys, the second column wherever the Remote has two.
     // Its width is the Remote's column: a remote's width at most (380 pt), and open upright, where the picture's pane
@@ -1476,31 +1556,103 @@ struct RemoteTab: View {
     private var keysColumn: some View {
         GeometryReader { geo in
             let stacked = stackedUpright
-            let grid = RemoteGrid.keys(min(geo.size.width, vSize == .compact ? 260 : 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
+            // The column's whole width and height, margins aside: keys and pad fill it (Richard, 2026-11-14: "the buttons
+            // are so small"), the pad taking what height the keys leave. Open upright that's one row of keys, the
+            // transport being in the picture's pane.
+            let grid = RemoteGrid.fit(width: geo.size.width, height: geo.size.height, transport: !stacked)
             if stacked {
-                // Open upright, under the picture's pane: one pad diameter in every state, hung from the top with the keys
-                // under it and the spare room at the foot (gate 2: 160 pt with a show, 216 with Mint, and moving 28 pt).
-                // Typing, it gives way so the bar and the keys stay above the keyboard.
-                // Anchored from the foot, where the thumbs are, the transport's row always counted (Remote rule,
-                // 2026-11-11). Typing, the pad steps aside and the bar and keys sit just above the keyboard.
-                let d = min((grid.width * 0.6).rounded(), 210)
-                VStack(spacing: 14) {
-                    Spacer(minLength: 0)
-                    if !lay { pad.frame(width: grid.width, height: d).transition(.opacity) }
-                    keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
+                // Open upright, the whole pane under the fold: the pad as big as fits over the one row of keys, the spare
+                // room shared above and below the pad. Typing, the pad steps aside so the bar and the keys stay above
+                // the keyboard.
+                VStack(spacing: 0) {
+                    Spacer(minLength: 14)
+                    if !lay { padRow(grid).transition(.opacity); Spacer(minLength: 14) }
+                    keysBlock(grid, transport: false).frame(height: lay ? nil : grid.key, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // Typing, the pad steps aside here too, rather than shrink to a 60 pt miniature (Remote gate 4).
                 VStack(spacing: 14) {
-                    if lay { Spacer(minLength: 0) } else { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity).transition(.opacity) }
+                    if lay { Spacer(minLength: 0) } else { padRow(grid).frame(maxHeight: .infinity).transition(.opacity) }
                     keysBlock(grid)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 20).padding(.bottom, 16)
+        // Beside the picture (open flat, folded sideways) the pane is narrow: 6 pt margins leave five 64 pt keys their
+        // 8 pt gaps (at 12 they were 62 pt, gate 2026-11-14).
+        .padding(.horizontal, stackedUpright ? 12 : 6).padding(.bottom, panes ? 16 : 8)
+        // The apps, at the foot in every posture (2026-11-20): the same row folded and open; open flat they are the tiles
+        // under the picture.
+        .stripUnder(!panes && !lay ? appStrip : nil)
+        .opacity(stackedUpright && epPanel.open ? 0 : 1).allowsHitTesting(!(stackedUpright && epPanel.open))
         .modifier(KeysArrive(gate: keysGate))
+    }
+    // Open upright, not typing: the picture beside the pad, then the bar, the transport, the episode line, the keys'
+    // row, volume, and the apps at the foot. Every place is kept whatever is on, so nothing moves as a show starts.
+    func uprightColumn(width: CGFloat, height: CGFloat, margin: CGFloat = 20) -> some View {
+        var grid = RemoteGrid.keys(width - 2 * margin, maxKey: 72)
+        // The page's own width and edges: the title, the picture, the keys and the apps start on one line (the column
+        // was 520 pt in the middle of a 669 pt screen: three left edges, gate on b97a5e7).
+        grid.width = max(grid.width, width - 2 * margin)
+        grid.play = min(grid.key + 8, 80)
+        // Folded there is less height: the same rows, 10 pt apart rather than 14.
+        let gap: CGFloat = height < 600 ? 10 : 14
+        let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
+        // Nothing on: no places are kept for the bar, the transport or the episode line (a 230 pt hole, gate on 654ff00).
+        // The picture sits over the pad and both take the room; when something starts they move beside each other in
+        // one spring and the rows come in under them. The episode line has a place only for a show.
+        let idle = !session && !musicShown
+        let lined = !idle && seriesOn
+        let rows: CGFloat = idle ? 2 : lined ? 5 : 4
+        let fixed = 2 * grid.key + (idle ? 0 : Self.barSlot + grid.play) + (lined ? 46 : 0) + strip + 8
+        let room = max(0, height - fixed - gap * rows)
+        let w = grid.width
+        // Idle: the pad a little under half the room, the picture the rest. Busy: one row, as tall as the room allows.
+        let d = idle ? max(120, min(room * 0.46, w * 0.62)).rounded(.down) : max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
+        let pw = idle ? min(w, max(0, room - gap - d) * 16 / 9) : min(w - 16 - d, d * 16 / 9)
+        let top = idle ? AnyLayout(VStackLayout(spacing: gap)) : AnyLayout(HStackLayout(spacing: max(16, w - pw - d)))
+        return VStack(spacing: 0) {
+            VStack(spacing: gap) {
+                top {
+                    picture(closable: true).frame(width: pw, height: pw * 9 / 16)
+                    pad.frame(width: d, height: d)
+                }
+                .frame(width: w)
+                if !idle {
+                ZStack { Color.clear; if !musicShown { progress } }.frame(width: grid.width, height: Self.barSlot).transition(.opacity)
+                ZStack {
+                    Color.clear
+                    if musicShown { music }
+                    else if session { Transport(size: grid.key, playSize: grid.play).frame(width: grid.width + grid.gap) }
+                }
+                .frame(width: grid.width, height: grid.play)
+                .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                .transition(.opacity)
+                }
+                if lined { ZStack { Color.clear; episodes }.frame(width: grid.width, height: 46).transition(.opacity) }
+                VStack(spacing: gap) {
+                    keysBlock(grid, transport: false)
+                    HStack(spacing: RemoteGrid.sideGap) {
+                        VolumeKey(down: true, size: grid.key)
+                        VolumeBar().padding(.horizontal, 16)
+                        VolumeKey(down: false, size: grid.key)
+                    }
+                    .frame(width: grid.width)
+                    .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
+                }
+                .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
+                .modifier(KeysArrive(gate: keysGate))
+            }
+            .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: idle)
+            .settledAnimation(.easeOut(duration: 0.25), value: lined)
+            Spacer(minLength: 8)
+            AppStrip(inset: margin).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    @ViewBuilder var appStrip: some View {
+        AppStrip().opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
     }
     // The folded column as it was before typing began, kept while typing so the keys don't move or shrink.
     @State private var foldedGrid: RemoteGrid?
@@ -1530,10 +1682,10 @@ struct RemoteTab: View {
     }
     // Where the keyboard's top is on screen (infinity while it's down).
     @State private var keyboardTop: CGFloat = .infinity
-    // How wide the picture is drawn, for the keys in the pane under it to take the same width.
-    @State private var pictureWidth: CGFloat = 0
-    @State private var calmPictureWidth: CGFloat = 0
+    // The build's check of a narrower open phone ("-narrow 375"): the upright page laid out at that width.
+    static let narrow: CGFloat? = { let v = UserDefaults.standard.double(forKey: "narrow"); return v > 0 ? CGFloat(v) : nil }()
     var body: some View {
+        let _ = SwipeLog.mark("body remote")
         Group {
             if stackedUpright {
                 // Open upright: the picture's pane above the fold and the keys' pane under it, laid out here rather than by
@@ -1545,7 +1697,7 @@ struct RemoteTab: View {
                         // Typing, the keyboard covers nearly all of the pane under the fold, so the bar and the keys' row
                         // come up above it, under the picture's pane (CI 219df47: under the fold they sat beneath the keyboard).
                         // At the column's width from before typing: the picture shrinks to give up the height, the keys don't.
-                        let tg = RemoteGrid.keys(min(g.size.width - 40, 380, calmPictureWidth > 120 ? calmPictureWidth : .infinity))
+                        let tg = RemoteGrid.keys(g.size.width - 24, maxKey: 64)
                         let rows = 50 + 12 + tg.key
                         VStack(spacing: 14) {
                             side(apps: false).frame(height: max(0, crease.minY - 14 - rows - 8))
@@ -1553,14 +1705,16 @@ struct RemoteTab: View {
                             Spacer(minLength: 0)
                         }
                     } else {
-                        VStack(spacing: 0) {
-                            side(apps: false).frame(height: max(0, crease.minY))
-                            Color.clear.frame(height: crease.height)
-                            keysColumn.frame(maxHeight: .infinity)
-                        }
+                        // One column down the open screen (2026-11-20). Split at the fold, with the lip and the title
+                        // above, the picture was a sliver (CI 53b4243) and then the pad a 100 pt miniature whose wake key
+                        // read "Wake the…" (CI b88affc). Now the picture and the pad share the top row at one height, the
+                        // bar and the transport hang from the picture, and every key is one size: 72 pt, ⏯ 80.
+                        uprightColumn(width: g.size.width, height: g.size.height)
                     }
                 }
                 .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
+                .overlay { episodesPanel() }
+                .frame(maxWidth: Self.narrow)
             } else if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
@@ -1568,12 +1722,13 @@ struct RemoteTab: View {
                         // While typing on the TV the keyboard is for the other pane, so this one keeps its size under it
                         // rather than squeezing the screen and cutting its labels. Its own search box still lifts.
                         .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
+                        .overlay { episodesPanel() }
                 } right: { keysColumn }
             } else if vSize == .compact {
                 // Folded and turned sideways: the picture beside the pad, as open. Not through FoldSplit, whose split
                 // arrangement shows only its first pane on the folded display (54832f8's shot: no pad and no keys at all).
                 HStack(spacing: 0) {
-                    side(apps: false).ignoresSafeArea(lay ? .keyboard : [], edges: .bottom).frame(maxWidth: .infinity)
+                    side(apps: false).ignoresSafeArea(lay ? .keyboard : [], edges: .bottom).overlay { episodesPanel() }.frame(maxWidth: .infinity)
                     keysColumn.frame(maxWidth: .infinity)
                 }
             } else {
@@ -1590,13 +1745,20 @@ struct RemoteTab: View {
                 // Every size is fixed per posture (gate, 2026-11-11): the room under the picture is always counted with Mint's
                 // player in it, so nothing moves as a song or a show starts; the pad is one diameter, and spare height is
                 // space either side of it, never pad. Typing keeps the column it had, so the keys stay where they were.
+                // Folded and not typing: the open phone's column at this width (2026-11-20). The old folded column put the
+                // transport under the apps row and its keys at 42 pt (gate on cbfc0b5).
+                if !lay {
+                    GeometryReader { g in uprightColumn(width: g.size.width, height: g.size.height, margin: 14) }
+                        .overlay { episodesPanel() }
+                } else {
                 GeometryReader { geo in
-                    let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.underRoom + 30)
+                    let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.barSlot + 46 + 2 * RemoteGrid.foldedGap)
                     let grid = lay ? (foldedGrid ?? fresh) : fresh
                     // Typing, the picture stays, at whatever width fits above the bar and the keys' row (gate 3: 150 pt of
                     // empty art where it had been).
                     let typingPic = min(grid.width, max(0, geo.size.height - 30 - (14 + 50 + 12 + grid.key + 14)) * 16 / 9)
-                    VStack(spacing: 14) {
+                    VStack(spacing: 0) {
+                      VStack(spacing: RemoteGrid.foldedGap) {
                         // The Remote's one rule (2026-11-11, with the designer, so it doesn't flip again): what's on hangs
                         // straight from the picture, with no place kept for what isn't there; the pad and the keys are
                         // anchored from the foot, where the thumbs are, the transport's row always counted; the spare room is
@@ -1608,13 +1770,16 @@ struct RemoteTab: View {
                         } else if typingPic >= grid.width * 0.5 {
                             picture(closable: true).frame(width: typingPic, height: typingPic * 9 / 16).transition(.opacity)
                         }
-                        Spacer(minLength: 0)
-                        Group {
+                      }
+                        Spacer(minLength: RemoteGrid.foldedGap)
+                        // The level bar under the pad sits midway to the keys: 8 pt either side of it.
+                        VStack(spacing: RemoteGrid.volGap) {
                             // Typing, the pad steps aside: the bar and the keys' row sit at the foot, above the keyboard.
-                            if !lay { pad.frame(width: grid.width, height: grid.pad).transition(.opacity) }
+                            if !lay { padRow(grid).transition(.opacity) }
                             keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
                         }
                         .modifier(KeysArrive(gate: keysGate))
+                        .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
                     }
                     // Centred in the room left of the rail: on the title's inset it left a wide empty band before the
                     // rail (CI ee66d34).
@@ -1627,7 +1792,11 @@ struct RemoteTab: View {
                 // As open: the lines under the picture fade with the TV's status rather than pop.
                 .settledAnimation(.easeOut(duration: 0.25), value: session)
                 .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
-                .padding(.horizontal, 14).padding(.bottom, 12)
+                .padding(.horizontal, 14).padding(.bottom, 8)
+                // The apps under the column, inside the page's own width: as a bottom inset the row ran on under the
+                // tab rail, which cut a tile in half (CI b88affc, folded).
+                .overlay { episodesPanel() }
+                }
             }
         }
         // Always a line under the title, blank when there's nothing to say, so "Remote" never moves as a show starts or
@@ -1679,9 +1848,9 @@ struct RemoteTab: View {
         #endif
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
-        .onAppear { model.warmMirror() }
+        .onAppear { model.remoteBuilt = true; model.warmMirror() }
         // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
-        .onDisappear { typing = false }
+        .onDisappear { typing = false; epPanel.open = false }
         // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
         .task(id: model.status?.apps?.map(\.pkg) ?? []) {
             for a in AppsTab.watching(model.status?.apps ?? []).prefix(8) where a.hasIcon {
@@ -1690,6 +1859,9 @@ struct RemoteTab: View {
         }
         .task(id: model.remoteArrival) {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
+            // The pick's picture flying in the render server: the flick's page went under the still at the pick, so there
+            // is nothing of it to sit on the keys, and the keys come up with the rest of the Remote as the still fades off
+            // it (gated, they came 0.3 s after the picture had landed: the review of d5d94f4).
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { keysGate.shown = false }
             // Once the flick's title, poster and controls are nearly gone (they fade in 0.12 s from the move's start), so the
@@ -1704,6 +1876,13 @@ struct RemoteTab: View {
 }
 
 private extension View {
+    // A row at the foot of this view, within its width (never under the tab rail beside it).
+    func stripUnder<S: View>(_ strip: S?) -> some View {
+        VStack(spacing: 0) {
+            self
+            if let strip { strip.clipped().padding(.bottom, 8) }
+        }
+    }
     // One of a key row's five equal places, the key centred in it.
     func slot() -> some View { frame(maxWidth: .infinity) }
     func columnRole(_ role: PictureColumn.Role) -> some View { layoutValue(key: PictureColumn.RoleKey.self, value: role) }
@@ -1718,27 +1897,64 @@ private extension View {
 // 54 pt keys at most (a remote's own size) and 40 at least; ⏯ is a quarter bigger, as it always was.
 struct RemoteGrid: Equatable {
     var width: CGFloat, key: CGFloat, play: CGFloat
+    // The pad's one diameter, when the posture works it out from its height; otherwise a little over half the column.
+    var padSet: CGFloat?
+    // Volume: − and + either side of the pad (a short column), or on a row of their own under it (a tall one).
+    var volBelow = false
     var gap: CGFloat { (width - 5 * key) / 4 }
-    // Folded, the pad's one diameter: a little over half the column (gate, 2026-11-11: it was 108 to 277 pt by state).
-    var pad: CGFloat { max(110, (width * 0.54).rounded()) }
-    static func keys(_ width: CGFloat) -> RemoteGrid {
-        let w = max(width, 212)
-        let k = min(54, max(40, ((w - 48) / 5).rounded(.down)))
-        return RemoteGrid(width: w, key: k, play: (k * 68 / 54).rounded())
+    var pad: CGFloat { padSet ?? max(110, (width * 0.54).rounded()) }
+    // The keys' own room with the transport under them: the two rows (the keys, a gap, the transport with ⏯ bigger).
+    var rows: CGFloat { key + 12 + play }
+    static let sideGap: CGFloat = 14, volGap: CGFloat = 8, barH: CGFloat = 6
+    static var volRoom: CGFloat { volGap + barH }
+    // The widest the column ever is, so a wide screen never spreads the keys; the least a key is where five fit.
+    static let most: CGFloat = 520, least: CGFloat = 64
+    var padWidth: CGFloat { volBelow ? min(pad, width) : max(60, min(pad, width - 2 * key - 2 * Self.sideGap)) }
+    // Five keys and four gaps make exactly the width: as big as the width allows (a gap of 8 pt at least), 96 pt at most;
+    // the column is 520 pt at most. Thumb-sized, not a remote's 54 pt (Richard, 2026-11-14). 64 pt needs 352 pt; in a
+    // narrower column they come down with it, the 8 pt gaps kept, never under 44.
+    static func keys(_ width: CGFloat, maxKey: CGFloat = 96) -> RemoteGrid {
+        let w = min(max(width, 212), most)
+        let k = min(maxKey, max(44, ((w - 32) / 5).rounded(.down)))
+        let gap = (w - 5 * k) / 4
+        // ⏯ a quarter bigger, but never so big that a gap beside it drops under 8 pt.
+        return RemoteGrid(width: w, key: k, play: min((k * 68 / 54).rounded(), k + 2 * max(0, gap - 8)).rounded(.down))
     }
-    // Folded, everything is in one column and its width is the unknown: the widest (to the room's own width, 380 pt at
-    // most) at which the picture, the room for the bar and the episode line, a pad in proportion (44 % of the width,
-    // 110 pt at least) and both rows of keys all fit the height. The transport's row is always counted, so the picture
-    // is one size whether or not something is on, and the pad has the spare height when nothing is.
+    // Given the height left for the pad and the volume, choose where the volume goes and how big the pad is: the ring
+    // as large as fits (100 pt at least, the column's width at most).
+    mutating func place(room: CGFloat) {
+        let side = min(width - 2 * key - 2 * Self.sideGap, room - Self.volRoom)
+        let below = min(width, room - 14 - key)
+        if below > side * 1.2, below >= 100 { volBelow = true; padSet = below.rounded(.down) }
+        else { volBelow = false; padSet = max(100, side.rounded(.down)) }
+    }
+    // A column with a height to fill: the keys take what the width gives but leave the pad room (about two and a half
+    // keys of it; never under 64 pt for that where the width gives 64), and the pad takes all the rest. The gaps are
+    // 14 pt: above the pad, and between the pad and the keys. With the transport, two rows of keys; without, one.
+    static func fit(width: CGFloat, height: CGFloat, transport: Bool) -> RemoteGrid {
+        var g = keys(width)
+        let kH = ((height - 28 - volRoom - (transport ? 12 : 0)) / (transport ? 4.26 : 3.4)).rounded(.down)
+        if kH < g.key { g = keys(width, maxKey: max(min(g.key, least), kH)) }
+        g.place(room: height - 28 - (transport ? g.rows : g.key))
+        return g
+    }
+    // Folded, one width for everything in the column: the picture, the bar and the episode line under it, the pad's row
+    // and both rows of keys share it and its edges (gate 2026-11-14: a 203 pt picture over a 255 pt pad row over 354 pt
+    // of keys were three columns). The height is all spoken for (the picture, the two lines under it, the pad, two rows
+    // of keys), so it's the widest that still leaves the pad a little over a third of it; never under 280 pt, the
+    // picture's width before. Fixed per posture, never by what's on. `under` is the bar and the episode line with the
+    // gaps over them; after them a gap, the pad with its level bar, the bar's gap to the keys, and the keys' two rows.
+    static let foldedGap: CGFloat = 12
     static func folded(width: CGFloat, height: CGFloat, under: CGFloat) -> RemoteGrid {
-        var w = min(width, 380)
-        while w > 220 {
+        func room(_ w: CGFloat) -> (grid: RemoteGrid, pad: CGFloat) {
             let g = keys(w)
-            let need = w * 9 / 16 + under + 14 + g.pad + 14 + g.key + 12 + g.play
-            if need <= height { break }
-            w -= 2
+            return (g, height - (g.width * 9 / 16 + under + foldedGap + volRoom + volGap + g.rows))
         }
-        return keys(w)
+        var w = min(max(width, 212), most)
+        while w > 280, room(w).pad < max(112, w * 0.36) { w -= 2 }
+        var (g, r) = room(w)
+        g.place(room: r + volRoom)
+        return g
     }
 }
 struct PictureColumn: Layout {
@@ -1747,6 +1963,11 @@ struct PictureColumn: Layout {
     var spacing: CGFloat = 14
     // The most the lines under the picture take in normal use, spacing included: kept for them while they're away.
     var under: CGFloat = 0
+    // Where given, the lines under the picture are this wide (the column's width at most) rather than the picture's
+    // width: open upright the picture is as wide as its pane's height lets it be, and the keys under it need the column.
+    var lines: CGFloat? = nil
+    // Open flat the column starts at the pane's edge, under the page's name, rather than centred 20 pt in from it.
+    var leading = false
     private func plan(_ width: CGFloat, _ height: CGFloat?, _ subviews: Subviews) -> (frames: [CGRect], height: CGFloat) {
         let roles = subviews.map { $0[RoleKey.self] }
         let lined: (Int) -> Bool = { roles[$0] == .under || roles[$0] == .aligned }
@@ -1764,7 +1985,7 @@ struct PictureColumn: Layout {
             let underNow = shown.filter { roles[$0] == .under }.reduce(0) { $0 + sizes[$1].lo + spacing }
             let full = width * 9 / 16
             pictureH = height.map { min(full, max(0, $0 - fixed() - max(0, under - underNow))) } ?? full
-            lineW = pictureH * 16 / 9
+            lineW = lines.map { min(width, $0) } ?? pictureH * 16 / 9
             for i in subviews.indices where lined(i) { sizes[i] = measure(i, lineW) }
         }
         let room = max(0, (height ?? 0) - fixed() - pictureH)
@@ -1774,8 +1995,8 @@ struct PictureColumn: Layout {
         var y: CGFloat = 0
         for i in shown {
             let h = roles[i] == .picture ? pictureH : sizes[i].lo + (growing.contains(i) ? min(share, sizes[i].hi - sizes[i].lo) : 0)
-            let w = roles[i] == .picture || lined(i) ? lineW : width
-            frames[i] = CGRect(x: (width - w) / 2, y: y, width: w, height: h)
+            let w = roles[i] == .picture ? pictureH * 16 / 9 : lined(i) ? lineW : width
+            frames[i] = CGRect(x: leading ? 0 : (width - w) / 2, y: y, width: w, height: h)
             y += h + spacing
         }
         for i in subviews.indices where !shown.contains(i) { frames[i] = CGRect(x: width / 2, y: y, width: 0, height: 0) }
@@ -1909,8 +2130,13 @@ private struct StartingPicture: View {
     let start: TVModel.Starting
     var body: some View {
         ZStack {
-            // Opaque from its first frame, whatever is or isn't loaded yet: nothing under it ever reads through (r26).
-            Color.black
+            // Opaque from its first frame, whatever is or isn't loaded yet: nothing under it ever reads through (r26). Before
+            // its picture comes, the app's purple with the title on it, never an empty box (the review of 94d0f11).
+            LinearGradient(colors: [Color(hex: 0x352B4E), Color(hex: 0x16121F)], startPoint: .top, endPoint: .bottom)
+            if start.art.isEmpty {
+                Text(start.title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center).lineLimit(2).padding(.horizontal, 24)
+            }
             // Failed: dimmed to half by black over it, not by fading it, which let the picture under it show through (r19).
             PosterOnBlur(url: URL(string: start.art))
                 .overlay { Color.black.opacity(start.failed ? 0.5 : 0) }
@@ -1950,6 +2176,47 @@ struct StartingNote: View {
                 .frame(height: 18)
             }
         }
+    }
+}
+// The apps as one row at the Remote's foot: the launcher's banners, small, sliding sideways, the row ending in the way to
+// all of them. The same row in every posture that hasn't room for the tiles.
+enum AppsRoute: Hashable { case all }
+struct AppStrip: View {
+    @Environment(TVModel.self) var model
+    @Environment(\.pagePush) private var pagePush
+    static let tile: CGFloat = 96
+    var inset: CGFloat = 14
+    var body: some View {
+        let apps = AppsTab.watching(model.status?.apps ?? [])
+        let all = apps.isEmpty ? (model.status?.apps ?? []) : apps
+        let h = Self.tile * TVLook.bannerSize.height / TVLook.bannerSize.width
+        // The banners slide; the key to all of them stays whole at the row's end (it was the last thing in the slide, cut
+        // by the screen's edge: gate on cbfc0b5).
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) { ForEach(all.prefix(8)) { Banner(app: $0, browses: false, width: Self.tile) } }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+            Button { model.tick(); pagePush.push(AppsRoute.all) } label: {
+                Image(systemName: "square.grid.2x2").font(.system(size: 18, weight: .semibold))
+                    .frame(width: max(h, 44), height: max(h, 44))
+                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).accessibilityLabel("All apps")
+        }
+        .padding(.horizontal, inset)
+        .frame(height: max(h, 44))
+    }
+}
+// Every app on the TV, opened from the Remote's row.
+struct AppsPage: View {
+    var body: some View {
+        AppsTab()
+            .summonsBar().topShade()
+            .background { Ambience() }
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .barPage()
     }
 }
 struct QuickApps: View {
@@ -2189,14 +2456,17 @@ struct Banner: View {
     var body: some View {
         Button {
             // An app with something to choose from opens that here; the rest go straight to the TV.
-            if browses, let s = MediaSource.of(pkg: app.pkg) { model.tick(); model.browsing = s }
+            // Stremio's tile is Watch, where its shelves already are (Richard, 2026-11-11).
+            if browses, app.pkg == "com.stremio.one" { model.tick(); model.tab = 3 }
+            else if browses, let s = MediaSource.of(pkg: app.pkg) { model.tick(); model.browsing = s }
             else if browses, app.pkg == "com.mint.letterboxd" { model.tick(); model.tab = 3 }
             else { open() }
         } label: {
             ZStack {
                 // Some banners are a white logo on nothing, meant for a dark tile, like YouTube Music's.
                 app.wide == true ? Color.black : TVLook.bannerTile
-                if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
+                if app.pkg == MintBanner.pkg { MintBanner() }
+                else if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
                         // A banner that came out blank, a white logo flattened onto white, is never shown as it is.
                         if ImageStore.shared.isFlat(u) { BannerFallback(app: app) }
@@ -2213,6 +2483,8 @@ struct Banner: View {
             .frame(width: width, height: width * TVLook.bannerSize.height / TVLook.bannerSize.width)
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
             .overlay { FrontRing(pkg: app.pkg) }
+            .overlay(alignment: .topTrailing) { OnTVMark(pkg: app.pkg) }
+            .shotSpot(browses && app.pkg == "com.stremio.one" ? "stremio" : "", pose: "stremiotile")
         }
         .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(model.frontApp == app.pkg ? .isSelected : [])
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
@@ -2232,6 +2504,43 @@ private struct FrontRing: View {
             // Settled: coming back to the page, the ring is simply where it is; it only moves in front of him.
             .settledAnimation(.easeOut(duration: 0.15), value: on)
             .accessibilityHidden(true)
+    }
+}
+// The ring's meaning, said on the tile: a small TV in the ring's cyan at its corner, once the TV says this app is in front
+// (gate 276: the cyan ring alone had no stated meaning). Not while a press is still waiting for the TV's word.
+private struct OnTVMark: View {
+    @Environment(TVModel.self) var model
+    let pkg: String
+    var body: some View {
+        let on = model.frontApp == pkg && model.openingApp?.pkg != pkg
+        Image(systemName: "tv.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(.black.opacity(0.85))
+            .frame(width: 20, height: 20).background(TVLook.accent, in: Circle())
+            .padding(5)
+            .opacity(on ? 1 : 0)
+            .settledAnimation(.easeOut(duration: 0.15), value: on)
+            .accessibilityHidden(true)
+    }
+}
+// Mint's banner, made from Mint's own icon and its name, as YouTube Music's is its mark and its name: the banner Mint
+// ships is a play triangle on a dark block beside thin words on mint, which read as home-made beside the real ones
+// (gate 276, law 3).
+struct MintBanner: View {
+    static let pkg = "com.codex.musicwebtv"
+    // A thumbnail beside the app's own name: the icon alone, no words too small to read.
+    var iconOnly = false
+    var body: some View {
+        GeometryReader { g in
+            let h = g.size.height
+            HStack(spacing: h * 0.13) {
+                Image("MintIcon").resizable().interpolation(.high).scaledToFit().frame(width: h * (iconOnly ? 0.66 : 0.46), height: h * (iconOnly ? 0.66 : 0.46))
+                if !iconOnly { Text("Mint Music").font(.system(size: h * 0.2, weight: .bold)).tracking(-0.2).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.6) }
+            }
+            .padding(.horizontal, iconOnly ? 0 : h * 0.16)
+            .frame(width: g.size.width, height: h)
+        }
+        .background(Color(hex: 0x263238))
+        .accessibilityHidden(true)
     }
 }
 private struct RingWaits: ViewModifier {
@@ -2286,27 +2595,36 @@ struct BannerFallback: View {
         .accessibilityHidden(true)
     }
 }
+// A section of the Apps tab: every app in it on the page, in rows that wrap at the width the tab gives it, never a
+// sideways row with its fifth tile cut at the edge (gate 276).
 struct BannerRow: View {
     let title: String, apps: [TVStatus.App]
+    var across: Int
+    var width: CGFloat
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RowTitle(title).padding(.leading, 20)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: TVLook.gap) { ForEach(apps) { Banner(app: $0, browses: true) } }.padding(.horizontal, 20).scrollTargetLayout()
+            RowTitle(title)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(width), spacing: TVLook.gap, alignment: .leading), count: max(across, 1)), alignment: .leading, spacing: TVLook.gap) {
+                ForEach(apps) { Banner(app: $0, browses: true, width: width) }
             }
-            .rowEdge()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+    // How many across for this many tiles in this width: as many as fit at the launcher's size (at least two), then
+    // fewer if that leaves fewer holes in the last row (six in a row of four would be four and two; it's three and three).
+    static func across(_ n: Int, in w: CGFloat) -> Int {
+        let fit = max(2, Int((w + TVLook.gap) / (TVLook.bannerSize.width + TVLook.gap)))
+        guard n > 0 else { return fit }
+        return (2...fit).reversed().min { a, b in
+            let ha = (a - n % a) % a + (a > n ? a - n : 0), hb = (b - n % b) % b + (b > n ? b - n : 0)
+            return ha != hb ? ha < hb : a > b
+        } ?? fit
+    }
+    static func width(_ across: Int, in w: CGFloat) -> CGFloat { max(40, (w - CGFloat(across - 1) * TVLook.gap) / CGFloat(across)) }
 }
 struct AppsTab: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
-    @ObservedObject private var draft = SendDraft.shared
-    // Words typed into the bar search Stremio and Mint as you type. A link is only ever sent.
-    var query: String? {
-        let t = draft.text.trimmingCharacters(in: .whitespaces)
-        return t.count >= 2 && !SendBar.isLink(t) ? t : nil
-    }
     static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
     static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.macropinch.axe"]
     // Never offered on the phone at all: no games.
@@ -2320,9 +2638,43 @@ struct AppsTab: View {
     var watch: [TVStatus.App] { Self.watching(all) }
     var listen: [TVStatus.App] { Self.listen.compactMap { p in all.first { $0.pkg == p } } }
     var tools: [TVStatus.App] { all.filter { Self.tools.contains($0.pkg) } }
-    @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App]) -> some View {
-        if !apps.isEmpty { BannerRow(title: title, apps: apps) }
+    @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App], across: Int, width: CGFloat) -> some View {
+        if !apps.isEmpty { BannerRow(title: title, apps: apps, across: across, width: width) }
     }
+    // The room the rows have, inside the page's 20 pt sides: the whole column folded and open upright, each pane open flat
+    // (both panes' tiles take the narrower pane's size, so the same kind of tile is one size on both sides; gate 276).
+    @State private var pageWidth: CGFloat = 0
+    @State private var leftWidth: CGFloat = 0
+    @State private var rightWidth: CGFloat = 0
+    // Open flat, the right pane starts its first heading level with "Watch", under the search on the left.
+    @State private var barRoom: CGFloat = 0
+    func measured(_ w: Binding<CGFloat>) -> some View {
+        Color.clear.frame(height: 0).onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs($0 - w.wrappedValue) > 0.5 { w.wrappedValue = $0 } }
+    }
+
+    // Folded and open upright: Watch as many across as leave no holes; open upright Listen and Tools share one band, two
+    // each, rather than two rows of two with half the screen empty beside them.
+    @ViewBuilder var rows: some View {
+        let w = max(pageWidth - 40, 1)
+        let a = BannerRow.across(watch.count, in: w)
+        row("Watch", watch, across: a, width: BannerRow.width(a, in: w))
+        if w >= 520, !listen.isEmpty, !tools.isEmpty {
+            let half = (w - TVLook.gap * 2) / 2
+            HStack(alignment: .top, spacing: TVLook.gap * 2) {
+                row("Listen", listen, across: 2, width: BannerRow.width(2, in: half)).frame(width: half, alignment: .leading)
+                row("Tools", tools, across: 2, width: BannerRow.width(2, in: half)).frame(width: half, alignment: .leading)
+            }
+        } else {
+            let b = BannerRow.across(max(listen.count, tools.count), in: w)
+            row("Listen", listen, across: b, width: BannerRow.width(b, in: w))
+            row("Tools", tools, across: b, width: BannerRow.width(b, in: w))
+        }
+    }
+    // Open flat: two across each side, at one width.
+    // Two across in each pane at one width: the narrower pane's room inside its 20 pt sides, so the right pane's two
+    // end where Settings' cards do, and the left's are the same size (fifth pass).
+    static let railClear: CGFloat = 66
+    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth - 40, rightWidth - 20 - Self.railClear), 1)) }
     // Before the first answer, the shape of the page instead of a blank one.
     var waiting: some View {
         HStack(spacing: TVLook.gap) {
@@ -2334,6 +2686,7 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
+        let _ = SwipeLog.mark("body apps")
         content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).modifier(TypingHidesTabBar()) }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
@@ -2341,20 +2694,20 @@ struct AppsTab: View {
     }
     @ViewBuilder var content: some View {
         if all.isEmpty {
-            ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }.backToTop()
+            ScrollView { VStack(alignment: .leading, spacing: 24) { PageHeading("Apps").padding(.horizontal, 20); waiting }.padding(.vertical, 12) }.backToTop()
         } else if panes {
             FoldSplit {
                 ScrollView {
+                    // The field opens the one search (the Search tab); a copied link pasted here still goes to the TV.
                     VStack(alignment: .leading, spacing: 26) {
-                        SendBar().padding(.horizontal, 20)
-                        if let query { EverywhereSearch(text: query) } else { row("Watch", watch) }
+                        // The field as wide as the grid under it, so the column has one right edge (fifth pass).
+                        PageHeading("Apps").padding(.horizontal, 20)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if abs($0 - barRoom) > 0.5 { barRoom = $0 } }
+                        row("Watch", watch, across: 2, width: paneTile).padding(.horizontal, 20)
                     }
                     .padding(.vertical, 12)
-                    // The rows give way to the results with the same fade as folded: open, they vanished and the results'
-                    // box popped in (tv21 realsearch-open 16.65 → 17.71 s, no frame between).
-                    .animation(.snappy, value: query == nil)
+                    .background(alignment: .top) { measured($leftWidth) }
                 }
-                .scrollDismissesKeyboard(.immediately)
                 .backToTop(posed: false)
             } right: {
                 // Unfolded, the apps go on across the fold: what he watches with the search on the left, what he listens
@@ -2362,27 +2715,27 @@ struct AppsTab: View {
                 // watching is Watch's and Recently played is Playing's.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
-                        row("Listen", listen)
-                        row("Tools", tools)
+                        Color.clear.frame(height: barRoom)
+                        row("Listen", listen, across: 2, width: paneTile)
+                        row("Tools", tools, across: 2, width: paneTile)
                     }
+                    // Inside a tab's page the right pane's room runs about 16 pt under the side bar, where Settings'
+                    // does: kept 66 pt clear, so the tiles end 50 pt short of the bar where Settings' cards do (fifth pass, measured).
+                    .padding(.leading, 20).padding(.trailing, Self.railClear)
                     .padding(.vertical, 12)
+                    .background(alignment: .top) { measured($rightWidth) }
                 }
                 .backToTop()
             }
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
-                    SendBar().padding(.horizontal, 20)
-                    if let query { EverywhereSearch(text: query) } else {
-                        row("Watch", watch)
-                        row("Listen", listen)
-                        row("Tools", tools)
-                    }
+                    PageHeading("Apps").padding(.horizontal, 20)
+                    rows.padding(.horizontal, 20)
                 }
                 .padding(.vertical, 12)
-                .animation(.snappy, value: query == nil)
+                .background(alignment: .top) { measured($pageWidth) }
             }
-            .scrollDismissesKeyboard(.immediately)
             .backToTop()
         }
     }
@@ -2413,7 +2766,7 @@ struct SeekButton: View {
         // Still on its way after a moment: a ring turning round the key that shows how far, easier to see than anything
         // on a long film's bar.
         .overlay { if mine && seeker.spinning { SpinRing().transition(.opacity) } }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).keyGlass().accessibilityLabel(label)
         .accessibilityValue(mine ? "\(abs(net)) seconds" : "")
         .animation(.easeOut(duration: 0.2), value: mine && seeker.spinning)
         .animation(.snappy(duration: 0.2), value: net)
@@ -2612,6 +2965,47 @@ struct FlickCard: View {
         .accessibilityAddTraits(.isButton).accessibilityHint("Sends it to the TV")
     }
 }
+// A song's keys on one row, as Apple Music's player has them: previous, play, next together in the middle, shuffle and
+// repeat small at the row's two ends. No ten-second jumps on a song (2026-11-20). Richard, 2026-11-21, open upright:
+// "terrible" (the three keys 72-80 pt wide against the rail, shuffle and repeat on a row of their own cut off at the foot).
+struct MusicTransport: View {
+    let playing: Bool?
+    // Shuffle and repeat at the ends: Mint's alone, so the phone's own song has the three keys only.
+    var modes = true
+    static let key: CGFloat = 58, play: CGFloat = 68, mode: CGFloat = 44
+    var body: some View {
+        HStack(spacing: 0) {
+            if modes { PlayModes(keys: [.shuffle], size: Self.mode) }
+            Spacer(minLength: 6)
+            HStack(spacing: 16) {
+                GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: Self.key)
+                PlayKey(playing: playing, size: Self.play)
+                GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: Self.key)
+            }
+            Spacer(minLength: 6)
+            if modes { PlayModes(keys: [.repeatMode], size: Self.mode) }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+// "South Park is on the TV": the one line Music says about a film or show, and the way to its Remote.
+struct OnTVLine: View {
+    @Environment(TVModel.self) var model
+    let name: String
+    var body: some View {
+        Button { model.tick(); model.tab = 0 } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "tv").font(.system(size: 17, weight: .semibold))
+                Text("\(name) is on the TV").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 18).frame(height: 56).contentShape(Rectangle())
+            .tvCard(18)
+        }
+        .buttonStyle(.plain)
+    }
+}
 struct NowControls: View {
     @Environment(TVModel.self) var model
     let music: TVStatus.Music
@@ -2622,7 +3016,8 @@ struct NowControls: View {
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             // The one transport, the same five as for a film: one way to play anything in this app (r17).
             // At the song's end with the TV still saying playing: an old word, shown stopped there, as a film's is (r18).
-            Transport(ended: model.songEnded(music), playing: .some(model.songPlaying(music)))
+            // Shuffle and repeat, as Mint has them, at its two ends.
+            MusicTransport(playing: model.songEnded(music) ? false : model.songPlaying(music))
         }
     }
 }
@@ -2651,10 +3046,11 @@ struct PhoneControls: View {
                 .accessibilityValue("\(NowControls.clock(now * 1000)) of \(NowControls.clock(song.duration * 1000))")
                 .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))); MusicDetailStore.shared.moved() }
             }
-            HStack(spacing: 26) {
-                GlassButton(icon: "backward.fill", label: "Previous", size: 54) { phone.previous() }
-                PlayKey(playing: phone.playing, size: 74) { phone.toggle() }
-                GlassButton(icon: "forward.fill", label: "Next", size: 54) { phone.next() }
+            // The same three keys, at the same sizes and gaps, as Mint's song has.
+            HStack(spacing: 16) {
+                GlassButton(icon: "backward.end.fill", label: "Previous", size: MusicTransport.key) { phone.previous() }
+                PlayKey(playing: phone.playing, size: MusicTransport.play) { phone.toggle() }
+                GlassButton(icon: "forward.end.fill", label: "Next", size: MusicTransport.key) { phone.next() }
             }
         }
     }
@@ -2731,6 +3127,10 @@ struct PlayingTab: View {
     @State private var pending = false
     @State private var pendingWait: Task<Void, Never>?
     @FocusState private var playFocused: Bool
+    @State private var flickHeight: CGFloat = 0
+    // How tall the page's scroll view shows, under its heading: the cover takes what the song's names, bar and keys leave
+    // of it, so the whole player is on the first screen in every posture (2026-11-21).
+    @State private var seen: CGFloat = 0
     // Never Mint's last song while the phone plays something else of its own.
     var music: TVStatus.Music? { model.nowMusic }
     var otherAppIsActive: Bool { model.videoIsCurrent }
@@ -2743,17 +3143,19 @@ struct PlayingTab: View {
                 Image(systemName: a.handoff == "youtube" ? "play.rectangle.fill" : "iphone").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
                 Text(a.title?.isEmpty == false ? a.title! : "From this iPhone").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : a.title?.isEmpty == false ? "Playing from this iPhone" : "AirPlay").font(.subheadline).foregroundStyle(.secondary)
-            } else if phone.drives, let song = phone.song, !otherAppIsActive {
-                songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
-                          titles(song.title, [song.artist, song.album]), PhoneControls(song: song))
-            } else if let m = music, !otherAppIsActive {
-                songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
-                          titles(m.title, [m.artist, m.album]), NowControls(music: m))
-            } else if let s = model.status?.session {
-                // The one way a film or show is shown and driven, the same transport as the Remote's.
-                PlayingVideo(session: s, stale: stale, ended: Self.atEnd(s)).padding(.top, panes ? 0 : 8)
             } else {
-                ContentUnavailableView("Nothing playing", systemImage: "music.note", description: Text("Search below, or flick something from this iPhone."))
+                // A film or show on the TV is the Remote's: said here in one line, with his last music kept ready under
+                // it. Music never says a song is playing while it isn't, and never shows the film as its own.
+                if otherAppIsActive, let s = model.status?.session, !s.showName.isEmpty { OnTVLine(name: s.showName) }
+                if phone.drives, let song = phone.song, !otherAppIsActive {
+                    songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
+                              titles(song.title, [song.artist, song.album], upNext: false), PhoneControls(song: song))
+                } else if let m = music {
+                    songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
+                              titles(m.title, [m.artist, m.album]), NowControls(music: m))
+                } else if !otherAppIsActive {
+                    ContentUnavailableView("Nothing playing", systemImage: "music.note")
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -2765,9 +3167,8 @@ struct PlayingTab: View {
     var nowKind: Int {
         if model.otherAirPlay, model.status?.airplay != nil { return 0 }
         if phone.drives, phone.song != nil, !otherAppIsActive { return 1 }
-        if music != nil, !otherAppIsActive { return 2 }
-        if model.status?.session != nil { return 3 }
-        return 4
+        if music != nil { return otherAppIsActive ? 3 : 2 }
+        return otherAppIsActive ? 5 : 4
     }
     static func atEnd(_ s: TVStatus.Session) -> Bool {
         guard s.playing, let p = s.position, let d = s.duration, d > 0 else { return false }
@@ -2781,20 +3182,30 @@ struct PlayingTab: View {
         VStack(spacing: 0) {
             art
             names.padding(.top, 20)
-            controls.padding(.top, 18)
-            showOnTV.padding(.top, 12)
+            controls.padding(.top, 12)
         }
     }
+    // What the stack needs under the cover: the names (one line each) and their 20 pt, the bar and its times with 12 pt,
+    // the 10 pt and the row of keys, and 16 pt to the page's foot.
+    static let underCover: CGFloat = 20 + 54 + 12 + 40 + 10 + MusicTransport.play + 16
     func cover(_ c: some View) -> some View {
-        // As wide as the column lets it be, up to the open pane's 300: folded, 180 left the cover a stamp in the middle of
-        // the page (r35).
-        c.aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 280)
+        // As wide as the column, and as tall as the screen leaves it, never a stamp (r35): Richard, 2026-11-21, of a 280 pt
+        // cover inset in a 336 pt column, "terrible".
+        let room = seen > 0 ? max(160, seen - Self.underCover - (panes ? Self.paneTop : 0)) : .infinity
+        return c.aspectRatio(1, contentMode: .fit).frame(maxWidth: room, maxHeight: room)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+            .frame(maxWidth: .infinity)
     }
-    func titles(_ title: String, _ more: [String]) -> some View {
-        VStack(spacing: 3) {
-            Text(title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-            Text(more.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+    // The song's name and who it's by, at the column's left under the cover, as Apple Music's player sets them; Mint's
+    // Up next beside them, where his thumb finds the queue.
+    func titles(_ title: String, _ more: [String], upNext: Bool = true) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.title2.weight(.bold)).lineLimit(2)
+                Text(more.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if upNext { PlayModes(keys: [.upNext], size: MusicTransport.mode) }
         }
         .contentTransition(.opacity)
         .settledAnimation(.easeInOut(duration: 0.25), value: title)
@@ -2813,6 +3224,8 @@ struct PlayingTab: View {
     // music or nothing, and after what's next and what was flicked under a film. Its place is kept while Mint's home
     // comes, and closed if Mint couldn't be asked or has no such row, so no gap is left for it.
     static let recentTitle = "Recently played"
+    // Where both panes begin, under the page's heading: one top line for the cover and the right pane's first heading.
+    static let paneTop: CGFloat = 6
     var showsRecent: Bool {
         mintHome.rows.isEmpty ? !mintHome.failed : mintHome.rows.contains { $0.title == Self.recentTitle && !$0.items.isEmpty }
     }
@@ -2849,8 +3262,13 @@ struct PlayingTab: View {
         return nil
     }
     var send: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 24) {
+            // Mostly nothing but a 1 pt picker: its place in the stack would leave 19 pt above the first heading, so while
+            // it has no card it takes none (the right pane's first line is the cover's line).
             FlickCard()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { flickHeight = $0 }
+            // (A stack takes no negative size, so the empty picker's gap is drawn back off the top of what follows.)
+            VStack(alignment: .leading, spacing: 24) {
             // Mint's own screen, here: the song's words, the sung line leading, and what plays after it. First under
             // what's on (open flat, level with the cover), ahead of what he played before.
             // On the page only when Mint has words or a queue for this song, so a song with neither leaves it as it was.
@@ -2864,6 +3282,7 @@ struct PlayingTab: View {
                     ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist"), ("Station", "station")], id: \.1) { Text($0.0).tag($0.1) }
                 }
                 .pickerStyle(.segmented).labelsHidden()
+                .haptic(.tick, trigger: kind)
                 HStack(spacing: 10) {
                     HStack(spacing: 8) {
                         TextField("What should play?", text: $query).autocorrectionDisabled().submitLabel(.go).onSubmit { play() }
@@ -2900,6 +3319,8 @@ struct PlayingTab: View {
                 }
                 .transition(.opacity.combined(with: .offset(y: 10)))
             }
+            }
+            .padding(.top, flickHeight <= 2 ? -(flickHeight + 24) : 0)
         }
         .task { if mintHome.rows.isEmpty { await mintHome.load() } }
         // The asking for the words and the queue, which draws nothing and takes no room.
@@ -2919,46 +3340,53 @@ struct PlayingTab: View {
             if pending { pendingWait?.cancel(); withAnimation(.easeOut(duration: 0.2)) { pending = false }; query = "" }
         }
     }
-    // With a film, show or video on, what's under it is what comes after it: the next episode, ready to flick, or failing
-    // that where he is in other things, and what was flicked lately. Never a row of one, and never the music search,
-    // which is only for when Mint is what's on or nothing is.
+    // With a film, show or video on, what's under it is what comes after it: the next episode, ready to flick, and what was
+    // flicked and played lately. Never what's already on again, and never Continue watching, which is Watch's first row
+    // (the 11-10 shelf ruling; gate 276: under a YouTube video its first card was the same video). Never the music
+    // search either, which is only for when Mint is what's on or nothing is.
     @ObservedObject private var stremio = BrowseStore.shared(.stremio)
-    var continuing: [MediaItem] { Array((stremio.rows.first { $0.title == "Continue watching" }?.items ?? []).prefix(5)) }
-    var watching: Bool { otherAppIsActive && model.status?.session != nil }
+    // Music is music's alone now: a film's episodes and what comes next are the Remote's.
+    var watching: Bool { false }
+    // A show on, with its episodes in the right pane.
+    var showsEpisodes: Bool { model.status?.session?.pkg == "com.stremio.one" && nextUp.series != nil }
+    // Open flat, Recently played goes under the transport on the left, so the picture's pane isn't two-thirds empty
+    // beside a packed episode list (gate 276).
     var upNext: some View {
         VStack(alignment: .leading, spacing: 24) {
             // A show: its episodes, the one on marked Playing and the next Up next, in view, rather than a lone card
             // of the same poster again (Richard, 2026-11-05: "again looks bad").
-            if model.status?.session?.pkg == "com.stremio.one", nextUp.series != nil {
+            if showsEpisodes {
                 ShowEpisodes(bringsIntoView: panes).padding(.horizontal, 20)
-            } else if continuing.count > 1 {
-                VStack(alignment: .leading, spacing: 0) {
-                    RowTitle("Continue watching").padding(.leading, 20)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        // A little smaller than elsewhere: a YouTube video's wide card at 124 filled the column, its neighbour a
-                        // sliver cut at the side bar (r35). At 100 the next card shows as a card, so it reads as a row.
-                        LazyHStack(alignment: .top, spacing: 10) { ForEach(continuing) { FlickCardButton(item: $0, source: .stremio, width: 100) } }
-                            .padding(.horizontal, 20)
-                    }
-                    .rowEdge()
-                }
             }
             RecentRow()
-            // Music is still a tap away with a film on: the search isn't offered here, his last albums are.
-            if showsRecent { Shelf(source: .mint, title: Self.recentTitle) }
+            // Music is still a tap away with a film on: the search isn't offered here, his last albums are. Open flat
+            // beside a show's episodes it goes under the transport on the left; under a film or video it stays here, so
+            // neither pane is left empty (gate 276, second pass).
+            if showsRecent && !(panes && showsEpisodes) { Shelf(source: .mint, title: Self.recentTitle) }
             // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri. Last, so its
             // empty place never pushes the episodes down below the picture's top line (r21).
             FlickCard().padding(.horizontal, 20)
         }
-        .padding(.vertical, panes ? 20 : 0)
+        .padding(.bottom, panes ? 20 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+    // The left pane open flat: what's on, and under a film, show or video, what he last played in Mint.
+    var nowPane: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            now.padding(.horizontal, 20)
+            if watching && showsEpisodes && showsRecent { Shelf(source: .mint, title: Self.recentTitle).transition(.opacity) }
+        }
+        .padding(.top, Self.paneTop).padding(.bottom, 20)
+        .settledAnimation(.easeOut(duration: 0.3), value: watching)
+    }
     var body: some View {
+        let _ = SwipeLog.mark("body playing")
         Group {
             if panes {
-                FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: {
-                    // The same 20 pt from the top as the picture beside it, so the two panes' first lines sit level (r21).
-                    ScrollView { Group { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop()
+                FoldSplit { ScrollView { nowPane }.modifier(SeenHeight(seen: $seen)).backToTop() } right: {
+                    // The same 20 pt from the top as the picture beside it, so the picture's top and "Season" sit level
+                    // (r21; gate 276: the right pane was 40 pt down, the picture's top 20 above the season chips).
+                    QueueOr(content: ScrollView { Group { if watching { upNext.padding(.top, Self.paneTop) } else { send.padding(.horizontal, 20).padding(.top, Self.paneTop).padding(.bottom, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop().modifier(PaneFoot()))
                 }
             } else {
                 // The rows under a film run to the screen's edges, as rows do everywhere else.
@@ -2973,12 +3401,25 @@ struct PlayingTab: View {
                     }
                     .padding(.bottom, 16)
                 }
+                .modifier(SeenHeight(seen: $seen))
                 .backToTop()
             }
         }
         .environment(\.keysInScroll, true)
+        .modifier(QueueSheetHost(panes: panes))
         // Where he is in Stremio, for what's under a show while it's on.
         .task { await stremio.load() }
+    }
+}
+
+// How tall a scroll view shows between its insets (the heading above, the foot below), for a page that fits itself to it.
+// The keyboard's inset is left out (capped at a home bar's room), so the cover doesn't shrink while he types under it.
+private struct SeenHeight: ViewModifier {
+    @Binding var seen: CGFloat
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height - $0.contentInsets.top - min($0.contentInsets.bottom, 40) } action: { _, h in
+            if abs(seen - h) > 1 { seen = h }
+        }
     }
 }
 
@@ -2986,18 +3427,20 @@ struct PlayingTab: View {
 struct FilmCard: View {
     @Environment(TVModel.self) var model
     let film: Film
+    @State private var place = FrameBox()
     var body: some View {
-        Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
+        Button { guard Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35 else { return }; model.tick(); FlickCardButton.tap(model, film.media, .stremio, origin: place.rect) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .measured(place)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(film.title).font(.footnote.weight(.semibold)).lineLimit(1)
                     if !film.note.isEmpty { Text(film.note).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 .frame(width: 118, alignment: .leading)
             }
-        }.buttonStyle(PressCard()).accessibilityLabel(film.title)
+        }.buttonStyle(PressCard()).modifier(RowFlick(item: film.media, source: .stremio, width: 118, place: place)).accessibilityLabel(film.title)
     }
 }
 struct FilmRow: View {
@@ -3018,10 +3461,11 @@ struct FilmList: View {
     var body: some View {
         RowList(title: title) {
             ForEach(films) { film in
-                Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
+                FlickRowBox(item: film.media, source: .stremio, width: 50, label: { place in AnyView(
                     HStack(spacing: 12) {
                         Art(url: URL(string: film.poster)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 75).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .measured(place)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(film.title).font(.body.weight(.semibold)).lineLimit(2)
                             HStack(spacing: 6) {
@@ -3033,9 +3477,7 @@ struct FilmList: View {
                         Image(systemName: "tv").foregroundStyle(TVLook.accent).accessibilityHidden(true)
                     }
                     .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(film.title)
+                ) })
             }
         }
     }
@@ -3051,6 +3493,7 @@ struct FilmsTab: View {
     static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
     @Environment(\.paneLayout) private var panes
     var body: some View {
+        let _ = SwipeLog.mark("body films")
         // Films or shows only swaps the rows: the switch itself, the search and the place on the page stay put.
         Group {
             // Unfolded, the rows take turns on each side of the fold, as on an app's own page, rather than running across it.
@@ -3061,6 +3504,38 @@ struct FilmsTab: View {
                 DiscoverColumn(store: kind == "movie" ? films : shows, kind: $kind)
             }
         }
+    }
+}
+// Watch's one filter: films or shows, and the genre, in a menu beside the page's name.
+struct WatchFilterKey: View {
+    @Environment(TVModel.self) var model
+    @SceneStorage("watchKind") private var kind = "movie"
+    @ObservedObject private var films = BrowseStore.discover("movie")
+    @ObservedObject private var shows = BrowseStore.discover("series")
+    var store: BrowseStore { kind == "movie" ? films : shows }
+    var body: some View {
+        Menu {
+            Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
+            Picker("Genre", selection: Binding(get: { store.genre }, set: { g in
+                let st = store
+                st.genre = g
+                Task { await st.load(force: true) }
+            })) {
+                Text("All genres").tag("")
+                ForEach(FilmsTab.genres, id: \.self) { Text($0).tag($0) }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 15, weight: .semibold))
+                Text((kind == "movie" ? "Films" : "Shows") + (store.genre.isEmpty ? "" : " · " + store.genre)).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14).frame(height: 44)
+            .background(.white.opacity(0.12), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .haptic(.tick, trigger: kind)
+        .accessibilityLabel("Filter: " + (kind == "movie" ? "films" : "shows") + (store.genre.isEmpty ? "" : ", " + store.genre))
     }
 }
 struct DiscoverColumn: View {
@@ -3114,6 +3589,8 @@ struct DiscoverColumn: View {
     var shown: [MediaRow] {
         part == .all ? rows : rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
     }
+    // Continue watching leads, as large cards, about two and a half across: what he throws most nights (brief 3.3).
+    var leadWidth: CGFloat { paneWidth < 1 ? 150 : max(132, min(190, (paneWidth - 40 - 20) / 2.5)) }
     func shelf(_ row: MediaRow) -> some View {
         // What a search found is named for what it is ("Films", "Shows", as on the Apps page), not "Results"; and a list
         // short enough to be all on screen has no door to a page of the same few cards.
@@ -3124,7 +3601,7 @@ struct DiscoverColumn: View {
             else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 10) {
-                    ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: 124) }
+                    ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: row.title == Self.continueTitle ? leadWidth : 124) }
                 }
                 .padding(.horizontal, 20)
             }
@@ -3148,42 +3625,17 @@ struct DiscoverColumn: View {
                         // store holds (r28: the store had the rows, the screen didn't, and the check passed).
                         .task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home&pane=\(part)"), timeout: 3) }
                 } else {
-                    PlaceholderShelf(headed: true)
+                    PlaceholderShelf(cardWidth: leadWidth, cardHeight: MediaCard.height(leadWidth, .stremio), headed: true, title: Self.continueTitle)
                 }
             }
             .id(Self.continueTitle)
         }
-        Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
-            .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
-            // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
-            .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
-                if let v { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
-            }
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(kind == "movie" ? "Search films" : "Search shows", text: $store.query).autocorrectionDisabled().submitLabel(.search)
-                .focused($searchFocused).hidesTabBar(while: searchFocused, "watch")
-                .onChange(of: store.query) { _, _ in store.searchSoon() }
-            if !store.query.isEmpty {
-                Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
-                    .transition(.opacity)
-            }
-        }
-        .padding(.horizontal, 16).frame(height: 46)
-        .glassEffect(.regular, in: Capsule())
-        .padding(.horizontal, 20)
-        if store.query.isEmpty {
-            // Inset inside the row, so the chips scroll on to the screen's edge rather than stopping short of it.
-            Chips(options: [("", "All")] + FilmsTab.genres.map { ($0, $0) }, selected: Binding(get: { store.genre }, set: { g in
-                store.genre = g
-                Task { await store.load(force: true) }
-            }), inset: 20)
-            .rowEdge()
-        }
+        // Films or shows and the genre are one key beside the page's name (WatchFilterKey), not three rows in the middle
+        // of the shelves; searching is the Search tab's (2026-11-20).
         if store.query.isEmpty { RecentRow(kind: kind) }
         if store.rows.isEmpty {
             Group {
-                if store.loading { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } }
+                if store.loading { VStack(alignment: .leading, spacing: 22) { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf(headed: true) } } }
                 else if store.failed { ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again.")) }
                 else { ContentUnavailableView.search }
             }
@@ -3192,7 +3644,9 @@ struct DiscoverColumn: View {
     }
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
+            // Not lazy: every row is laid out before it can be reached, so the page's height never changes under a fling
+            // to its end (2026-11-20: the last row arrived blank and the page crept after the bounce).
+            VStack(alignment: .leading, spacing: 24) {
                 if part != .right { controls }
                 // The Mac can't be asked: the rows are the ones kept from last time, said so and dimmed.
                 if part != .right, store.query.isEmpty, let since = store.keptSince ?? home.keptSince { KeptNote(since: since) }
@@ -3235,6 +3689,10 @@ struct DiscoverColumn: View {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
+        // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
+        .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
+            if let v, part != .right { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
+        }
         .refreshable { await store.load(force: true) }
         .task(id: kind) { await store.load() }
         .onChange(of: store.rows, initial: true) { _, _ in built = computeRows() }
@@ -3255,8 +3713,8 @@ struct RecentRow: View {
         return recent.list.filter { ($0.item.stremioRef?.type ?? ($0.item.kind == "series" ? "series" : "movie")) == kind }
     }
     var body: some View {
-        // Never a row of one.
-        if list.count > 1 {
+        // Its own row only with four or more (2026-11-20: two posters in a row made for five).
+        if list.count >= 4 {
             VStack(alignment: .leading, spacing: 0) {
                 RowTitle("Recently flicked").padding(.leading, 20)
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -3279,10 +3737,22 @@ struct PlaceholderShelf: View {
     var cardHeight: CGFloat = MediaCard.height(124, .stremio)
     // Where the row's own heading will be: the height of its line, so the cards start where they will.
     var headed = false
+    // The row's own name when it's known (Continue watching), drawn as the real heading draws it, so it doesn't change
+    // as the row comes (gate 3: the skeleton, then a different page).
+    var title: String? = nil
     @State private var breathe = false
     var body: some View {
         VStack(alignment: .leading, spacing: headed ? 8 : 10) {
-            Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16)
+            Group {
+                if let title {
+                    HStack(spacing: 5) {
+                        Text(title).font(.title3.weight(.bold))
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16)
+                }
+            }
                 .frame(height: headed ? 25 : 16, alignment: .leading).padding(.leading, 20)
             // Each waiting card in the cover's own waiting look, the light running round it (ruling 9), never a flat grey slab (r20).
             HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in CoverWait().frame(width: cardWidth, height: cardHeight).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)).overlay { LoadingRing(radius: 6) } } }
@@ -3371,9 +3841,7 @@ struct VideoProgress: View {
                     let d = try await TVBridge.post("player-seek-to", ["ms": Int(sent)], timeout: 60)
                     landed = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue
                 } catch {
-                    #if canImport(UIKit)
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
-                    #endif
+                    Haptic.fire(.fail)
                     model.say("Couldn’t move there"); landed = nil; break
                 }
                 guard let t = target, t != sent else { break }
@@ -3541,20 +4009,36 @@ struct UnderFlick: ViewModifier {
     // A page pushed over a tab that draws its own large heading: the system's bar stays, for its Back (the Duo's own,
     // 2026-11-08), but carries no title, so the heading isn't printed twice.
     var barHidden = false
+    // The Remote's page: drawn, not hidden, while it's built unseen ahead of the first pick (remoteWarming), so its text and
+    // pictures are drawn then rather than at the pick.
+    var warms = false
     func body(content: Content) -> some View {
         // Not once a pick is on its way to the Remote (flickHandoff): the Remote's tab is up under the flick's page then,
         // and must be drawn there for the picture to land on, while the page's own rail stays beside it.
-        let covered = (model.flickChoosing && !model.flickHandoff) || model.flickCovering
+        let covered = ((model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering) && !(warms && model.remoteWarming)
         content
             .opacity(covered ? 0 : 1)
             // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay
             // under the faded page, a brown (28,16,10) against the page's near-black (8,5,4) edge, a band (r30).
             .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
-            .animation(.easeOut(duration: 0.15), value: covered)
+            // Covered as the flick's page fades up over it (flickArrived, set with the fade once the page is drawn), slowly
+            // at first so the flick is mostly up before the page darkens; uncovered at once.
+            .animation(covered ? .easeIn(duration: 0.22) : .easeOut(duration: 0.15), value: covered)
             .modifier(Untitled(on: barHidden))
             #if os(iOS)
             .toolbarVisibility(barHidden ? .visible : .automatic, for: .navigationBar)
             #endif
+    }
+}
+// The black over a whole tab's stack, art included, while a flick's page covers it (the same rule as UnderFlick).
+struct UnderFlickGround: ViewModifier {
+    @Environment(TVModel.self) private var model
+    var warms = false
+    func body(content: Content) -> some View {
+        let covered = ((model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering) && !(warms && model.remoteWarming)
+        content
+            .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
+            .animation(covered ? .easeIn(duration: 0.22) : .easeOut(duration: 0.15), value: covered)
     }
 }
 // The bar's title emptied for a page that draws its own heading; off, whatever the page set stands.
@@ -3564,7 +4048,7 @@ private struct Untitled: ViewModifier {
         if on { content.navigationTitle("").navigationBarTitleDisplayMode(.inline) } else { content }
     }
 }
-extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }
+extension View { func underFlick(barHidden: Bool = false, warms: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden, warms: warms)) } }
 
 // While a search or send box has the keyboard, the tab bar steps aside, as the Remote's does while typing on the TV: the
 // keyboard sliced the side bar and left half a button peeking over it (review of dfd490e, tv-realsearch 12–14 s). The

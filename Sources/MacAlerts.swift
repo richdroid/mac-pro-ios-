@@ -53,6 +53,7 @@ enum AlertDismissals {
 }
 
 struct AlertBanner: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     let alerts: [Status.Alert]
     @AppStorage(AlertDismissals.key) private var dismissedRaw = ""
@@ -61,7 +62,7 @@ struct AlertBanner: View {
     func dismiss(_ a: Status.Alert) {
         withAnimation(.snappy) { AlertDismissals.dismiss(a) }
         AlertWatch.shared.putAway(a.id)
-        Task { try? await model.api.pushSeen(a.id) }
+        Task { try? await model.api.pushSeen(a.id); await model.api.alertDismiss(a.id) }
     }
     @State private var restarting: String?
     @State private var fails: [String: String] = [:]
@@ -123,13 +124,14 @@ struct AlertBanner: View {
     }
     // Arriving, or the last one put away: the page makes room in one move, never in one frame.
     var body: some View {
+        let _ = SwipeLog.mark("banner body \(shown.count)")
         Group { banner }.animation(.snappy, value: shown.map(\.dismissKey))
     }
     @ViewBuilder var banner: some View {
         if !shown.isEmpty {
             Section {
                 ForEach(shown) { a in
-                    row(a).listRowBackground(a.tint.opacity(0.22))
+                    row(a).listRowBackground(a.tint.opacity(0.22)).modifier(LogsHeight(id: AnyHashable("alert-" + a.id)))
                 }
             }
             // For the build's film of a dismissal: all three shown, then the first put away. Only with the pose.
@@ -145,27 +147,26 @@ struct AlertBanner: View {
     }
 }
 
+// The alerts switch, a row in Settings' Behaviour card (it sat on Status, Richard 2026-11-11: "the notify setting should
+// be in settings"). What it sends is that card's footnote.
 struct AlertSettings: View {
     @EnvironmentObject var model: AppModel
     @AppStorage(AlertWatch.enabledKey) private var enabled = true
     @State private var denied = false
+    static let note = "Alerts when the Mac is too hot, its disk is nearly full, something is down, or Claude usage is nearly out."
     var body: some View {
-        Section {
-            Toggle("Notify this iPhone", isOn: $enabled)
-                .onChange(of: enabled) { _, on in
-                    if on { Task { denied = !(await AlertWatch.shared.ask()) } }
-                    // Off: the Mac forgets this iPhone. On: it's told where to send again.
-                    PushToken.share(model.api)
-                }
-            #if canImport(UIKit)
-            if denied && enabled, let u = URL(string: UIApplication.openSettingsURLString) {
-                Link("Allow notifications in Settings", destination: u)
+        Toggle("Notify this iPhone", isOn: $enabled)
+            .onChange(of: enabled) { _, on in
+                if on { Task { denied = !(await AlertWatch.shared.ask()) } }
+                // Off: the Mac forgets this iPhone. On: it's told where to send again.
+                PushToken.share(model.api)
             }
-            #endif
-        } header: { Text("Alerts") } footer: {
-            Text("Too hot, disk nearly full, something down, or Claude usage nearly out.")
+            .task { denied = await AlertWatch.shared.isDenied() }
+        #if canImport(UIKit)
+        if denied && enabled, let u = URL(string: UIApplication.openSettingsURLString) {
+            Link("Allow notifications in Settings", destination: u)
         }
-        .task { denied = await AlertWatch.shared.isDenied() }
+        #endif
     }
 }
 
@@ -280,8 +281,14 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
         // The Mac's notifications carry the alert's id; one made here is named by it.
         let id = response.notification.request.content.userInfo["alert"] as? String ?? response.notification.request.identifier
+        // Handoff from the Mac's Console: the page it names, opened as its link would be.
+        if let l = response.notification.request.content.userInfo["link"] as? String, let u = URL(string: l), u.scheme == "macproapp" {
+            #if canImport(UIKit)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { UIApplication.shared.open(u) }
+            #endif
+            done(); return
+        }
         AlertDismissals.restore(id: id)
-        UserDefaults.standard.set(id.hasPrefix("session:") || id.hasPrefix("usage:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
         if id == OTAInstaller.alertID { Task { @MainActor in OTAInstaller.shared.wanted = true } }
         // Kept too, in case the tap launched the app and nothing is listening yet.
         Self.pending = id

@@ -26,15 +26,27 @@ private struct Spark: View {
                 Path { p in p.move(to: CGPoint(x: 0, y: g.size.height - 1)); p.addLine(to: CGPoint(x: g.size.width, y: g.size.height - 1)) }
                     .stroke(.white.opacity(0.14), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [2, 5]))
             } else {
-            Path { p in
+            // Stood on the tile's foot: the line with its area filled down to the foot, so a low reading (CPU) and a high
+            // one (memory) read as levels on one floor, never as two lines floating at different heights (gate 276).
+            let line = Path { p in
                 guard values.count > 1 else { return }
                 p.move(to: point(0))
                 for i in 1..<values.count { p.addLine(to: point(i)) }
             }
-            .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            let area = line.foot(g.size)
+            area.fill(LinearGradient(colors: [TVLook.accent.opacity(0.28), TVLook.accent.opacity(0.04)], startPoint: .top, endPoint: .bottom))
+            line.stroke(TVLook.accent, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
             }
         }
         .frame(height: 38)
+    }
+}
+private extension Path {
+    // The line closed down to the foot of a box this size, for the area under it.
+    func foot(_ size: CGSize) -> Path {
+        var p = self
+        p.addLine(to: CGPoint(x: size.width, y: size.height)); p.addLine(to: CGPoint(x: 0, y: size.height)); p.closeSubpath()
+        return p
     }
 }
 private struct Tile: View {
@@ -50,10 +62,12 @@ private struct Tile: View {
             Text(settled ? value : "—").font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
                 .opacity(settled ? 1 : breathe ? 0.75 : 0.35)
                 .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
-            Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-            Spark(values: spark, top: top).padding(.top, 8)
+            if !detail.isEmpty { Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+            // Each tile's spark on its foot, whatever the lines above it hold, so sibling tiles' sparks share one line.
+            Spacer(minLength: 8)
+            Spark(values: spark, top: top)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(14)
         .tvCard(16)
     }
@@ -64,6 +78,21 @@ final class DeviceStore: ObservableObject {
     static let shared = DeviceStore()
     @Published var info: DeviceInfo?
     @Published var failed = false
+    // Since when no answer has come, by any asking. "Can't reach" only after about 25 s of that, as everywhere in the app:
+    // a blip leaves no trace, and the last reading stays at full strength meanwhile (Richard's rulings, 11-11). A request
+    // cut short because he left the tab is no answer either way: it flashed "Can't reach it" over greyed tiles for a
+    // frame on coming back to Status (gate HOLD of 8446178).
+    // The clock starts afresh with each visit, and after a quiet spell with no miss: one miss long ago and one now are two
+    // blips, not 25 s of failure (gate of 87d77ca).
+    var failingSince: Date?, lastMiss: Date?, lastAnswer: Date?
+    func answered() { failingSince = nil; lastMiss = nil; lastAnswer = Date(); if failed { failed = false } }
+    func arrived() { failingSince = nil; lastMiss = nil }
+    func missed() {
+        let now = Date()
+        if failingSince == nil || now.timeIntervalSince(lastMiss ?? now) > 30 { failingSince = now }
+        lastMiss = now
+        if !failed, now.timeIntervalSince(failingSince!) >= TVModel.unreachableAfter { failed = true }
+    }
 }
 struct DeviceTab: View {
     @Environment(TVModel.self) var model
@@ -71,7 +100,12 @@ struct DeviceTab: View {
     @Environment(\.scenePhase) private var phase
     @ObservedObject private var store = DeviceStore.shared
     var info: DeviceInfo? { store.info }
-    var failed: Bool { store.failed }
+    // Out of touch: the Mac (said once, by the banner at the top, and dimmed with it), or only the box's own readings
+    // while the Mac still answers. While the Mac's own reading is failing too, the box's wait for the banner, so the page
+    // dims once, as the banner arrives (gate of 87d77ca: the pill said it again, and the tiles greyed, 2 s later).
+    // A box failure counted from before the Mac came back is the outage's, and is never said as the TV's: it read "Can't
+    // reach the TV" for a quarter second as the Mac returned (gate of f6d2272).
+    var failed: Bool { !model.reachable || model.status?.online == false || (store.failed && !model.retrying && (store.failingSince.map { $0 > model.reachedAt } ?? false)) }
     @State private var tidying = false
     @State private var tidyNote: String?
     @State private var breathe = false
@@ -87,10 +121,22 @@ struct DeviceTab: View {
             tidying = false
         }
     }
+    // The same words as the Remote's, from the same reading: the television off over HDMI-CEC is "Asleep" there, so it
+    // is here (it said "Awake" beside the Remote's "Asleep", gate of 8446178).
+    var screenWords: String {
+        guard let s = model.status else { return "Awake" }
+        if s.screen == "asleep" { return "Asleep" }
+        if let a = s.away { return a.line }
+        if s.comingOn { return TVStatus.comingOnLine }
+        if s.screen == "screensaver" { return "Screensaver" }
+        return "Awake"
+    }
     var hero: some View {
         VStack(spacing: 4) {
             // Fades in when it comes, rather than appearing in a frame.
-            Cover(url: TVBridge.url("/api/tv/device-image")) { Color.clear }
+            // Asked again once the box first answers: a picture asked for while the Mac was away stayed missing for good,
+            // only its glow showing (gate of 87d77ca).
+            Cover(url: TVBridge.url("/api/tv/device-image"), key: "device-image-\(info != nil)") { Color.clear }
                 .frame(height: panes ? 260 : 170)
                 .background(RadialGradient(colors: [.white.opacity(0.16), .clear], center: .center, startRadius: 4, endRadius: 110).frame(width: 240, height: 240))
                 .accessibilityLabel("The TV box and its remote")
@@ -100,8 +146,13 @@ struct DeviceTab: View {
             Text(info.map { "Android \($0.android) · up \(span($0.uptime))" } ?? "Android 14 · up 1d 1h").font(.subheadline).foregroundStyle(.secondary)
                 .redacted(reason: info == nil ? .placeholder : [])
             HStack(spacing: 6) {
-                Circle().fill(failed ? Color.orange : Color.green).frame(width: 9, height: 9)
-                Text(failed ? "Can’t reach it" : model.status?.screen == "asleep" ? "Asleep" : "Awake")
+                Circle().fill(failed ? TVLook.away : Color.green).frame(width: 9, height: 9)
+                // The banner says the Mac is out of reach; the pill never says it again, only how old the readings are.
+                if failed, !model.reachable || model.status?.online == false, let at = store.lastAnswer {
+                    Text("Last seen \(Text(at, style: .time))")
+                } else {
+                    Text(!failed ? screenWords : model.reachable ? "Can’t reach the TV" : "No reading yet")
+                }
             }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).tvCard(14).padding(.top, 6)
             // The dot's colour eases between green and orange, as the tiles do, rather than switching in a frame.
@@ -135,8 +186,9 @@ struct DeviceTab: View {
                 Tile(title: "Memory", value: bytes(i.memUsed), detail: "of \(bytes(i.memTotal))", spark: i.hist.mem, top: 100)
             }
             GridRow {
-                Tile(title: "Download", value: rate(i.rxRate), detail: i.wifi.isEmpty ? "Wi-Fi" : i.wifi, spark: i.hist.rx)
-                Tile(title: "Upload", value: rate(i.txRate), detail: i.ip, spark: i.hist.tx)
+                Tile(title: "Download", value: rate(i.rxRate), detail: "", spark: i.hist.rx)
+                // No subtitle on either: the box's IP address was plumbing, and the home network isn't news (gate 276).
+                Tile(title: "Upload", value: rate(i.txRate), detail: "", spark: i.hist.tx)
             }
         }
         // Out of touch, the last numbers stay but step back, so they aren't read as live.
@@ -154,7 +206,7 @@ struct DeviceTab: View {
             Divider()
             HStack { Text("Temperature"); Spacer(); Text("\(Int((i.tempC * 9 / 5 + 32).rounded()))°F").foregroundStyle(.secondary).monospacedDigit() }.padding(14)
             Divider()
-            HStack { Text("Resolution"); Spacer(); Text(i.resolution).foregroundStyle(.secondary) }.padding(14)
+            HStack { Text("Resolution"); Spacer(); Text(i.resolution.replacingOccurrences(of: "x", with: " × ")).foregroundStyle(.secondary) }.padding(14)
             Divider()
             // The television behind the box, as HDMI-CEC tells it: a row and its rule, or nothing while that isn't known.
             TelevisionRow(status: model.status)
@@ -176,16 +228,24 @@ struct DeviceTab: View {
         // The television's row comes and goes with the whole card easing, so the rows under it never move at a stroke.
         .settledAnimation(.easeOut(duration: 0.25), value: TelevisionRow.value(model.status?.cec))
         .tvCard()
+        // Stepped back with the tiles, so the whole page reads as last seen, not half of it.
+        .opacity(failed ? 0.4 : 1)
+        .saturation(failed ? 0 : 1)
+        .settledAnimation(.easeOut(duration: 0.3), value: failed)
     }
-    // Asked for only while this tab is on screen.
+    // Asked for only while this tab is on screen, every 2 s (and so retried every 2 s while it fails). Leaving the tab, or
+    // a push over it, cancels the task: whatever that cut short says nothing about the TV, and is dropped.
     func poll() async {
         guard phase == .active else { return }
+        store.arrived()
         while !Task.isCancelled {
-            if let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8), let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
+            let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8)
+            if Task.isCancelled { return }
+            if let d, let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
                 // The first answer just appears; only later changes ease, so the name never crossfades over a placeholder.
                 if store.info == nil { store.info = i } else { withAnimation(.easeOut(duration: 0.25)) { store.info = i } }
-                if store.failed { store.failed = false }
-            } else { store.failed = true }
+                store.answered()
+            } else { store.missed() }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
@@ -208,6 +268,7 @@ struct DeviceTab: View {
                         .task(id: phase) { await poll() }
                 }
                 .backToTop()
+                .onChange(of: model.reachable) { _, back in if back { store.arrived(); if store.failed { store.failed = false } } }
             }
         } else {
             ScrollView {
@@ -221,6 +282,7 @@ struct DeviceTab: View {
                 .task(id: phase) { await poll() }
             }
             .backToTop()
+            .onChange(of: model.reachable) { _, back in if back { store.arrived(); if store.failed { store.failed = false } } }
         }
     }
 }

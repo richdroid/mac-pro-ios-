@@ -9,6 +9,12 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     GENERATE_INFOPLIST_FILE: YES
     TARGETED_DEVICE_FAMILY: "1"
+# Play on iPhone's player (TV app): KSPlayer 2.3.4, the last release built from source (later ones ship iOS as a paid
+# binary only). Its FFmpeg player takes the MKV and HEVC files Stremio add-ons mostly give. GPL; his own builds only.
+packages:
+  KSPlayer:
+    url: https://github.com/kingslay/KSPlayer
+    exactVersion: 2.3.4
 targets:
   MacPro:
     type: application
@@ -18,9 +24,6 @@ targets:
       - target: MacProWidget
       # Send to Mac Pro in the share sheet, embedded as TV embeds Send to TV.
       - target: MacProShare
-      - target: HotProbe
-        embed: true
-        link: false
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -103,14 +106,20 @@ targets:
         CFBundleDisplayName: Chumby
         CFBundleURLTypes: [{ CFBundleURLName: chumbyapp, CFBundleURLSchemes: [chumbyapp] }]
         CADisableMinimumFrameDurationOnPhone: true
+        # The ringing alarm's card on the Lock Screen and in the Dynamic Island (ChumbyRingActivity.swift).
+        NSSupportsLiveActivities: true
         # The sea and the wordmark from the first frame, the wordmark pinned where Home draws it (ChumbyLaunch.storyboard).
         UILaunchStoryboardName: ChumbyLaunch
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSCalendarsFullAccessUsageDescription: Chumby sets your alarms from what's on your calendar. Nothing leaves your phone but the alarm times and titles sent to your Chumby.
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.Chumby.calendar]
+        NSAlarmKitUsageDescription: So your iPhone can wake you if the Chumby alarm doesn't.
         NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
         # Where the app hands the Mac its notification token; baked in at signing, like DefaultAddress, never in the repo.
         MacAddress: ""
+        # "Play a song from the Mac" on Sounds: off until the Mac answers a search in under a second (an index of the
+        # library; music.js takes 8 to 12 s today, measured 11-12). The build's films turn it on with -mac.
+        MacMusicOn: false
         UIBackgroundModes: [fetch, remote-notification]
         NSBonjourServices: [_http._tcp]
         NSAppTransportSecurity:
@@ -144,6 +153,7 @@ targets:
     dependencies:
       - target: TVShare
       - target: TVWidget
+      - package: KSPlayer
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV
@@ -155,14 +165,18 @@ targets:
         CFBundleURLTypes: [{ CFBundleURLName: tvremoteapp, CFBundleURLSchemes: [tvremoteapp] }]
         CADisableMinimumFrameDurationOnPhone: true
         NSSupportsLiveActivities: true
-        # The Now Playing card's occasional refresh while the app is closed (TVBackground); no push with a free Apple ID.
-        UIBackgroundModes: [fetch]
+        # The Now Playing card's occasional refresh while the app is closed (TVBackground); audio: Play on iPhone carries on
+        # playing in Picture in Picture and with the screen locked.
+        UIBackgroundModes: [fetch, audio]
+        NSUserActivityTypes: [local.macpro.TV.watch]
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.TV.nowplaying]
         NSAppleMusicUsageDescription: Sees the song playing on this iPhone, so you can flick it to the TV and play, pause or skip it from here while it plays there.
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+          # Add-on streams are sometimes plain http.
+          NSAllowsArbitraryLoadsForMedia: true
   TVWidget:
     type: app-extension
     platform: iOS
@@ -205,7 +219,9 @@ targets:
       - Widget/MacProWidget.swift
       - Widget/Assets.xcassets
       - Shared/Gauges.swift
+      - Sources/MacIntents.swift
       - ci/gallery-mac
+      - ci/widget-sheet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryMac
@@ -217,10 +233,12 @@ targets:
     platform: iOS
     sources:
       - ChumbyWidget/ChumbyWidgets.swift
+      - ChumbyWidget/ChumbyRingActivity.swift
       - ChumbyApp/Sources/ChumbyAPI.swift
       - ChumbyApp/Sources/ChumbyArt.swift
       - ChumbyApp/Sources/ChumbyIntents.swift
       - ci/gallery-chumby
+      - ci/widget-sheet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryChumby
@@ -232,20 +250,14 @@ targets:
     sources:
       - TVWidget/TVWidgets.swift
       - TVWidget/TVIslandWidget.swift
+      - TVWidget/PhoneWidget.swift
       - TVApp/Sources/TVShared.swift
       - TVApp/Sources/TVTheme.swift
       - TVApp/Sources/TVIsland.swift
       - ci/gallery-tv
+      - ci/widget-sheet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryTV
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-  HotProbe:
-    type: framework
-    platform: iOS
-    sources: [Hot]
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.HotProbe
-        DEFINES_MODULE: NO

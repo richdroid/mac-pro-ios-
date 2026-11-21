@@ -387,5 +387,140 @@ do {
     expect(o.alarmForm().contains { $0.0 == "1_own" && $0.1 == "1" }, "and every save says so, or the Chumby puts the shared set back")
 }
 
+section("The phone's backup alarm")
+do {
+    let daily = alarm("Work", "daily", "420")
+    let cal = alarm("Calendar: Dentist", "once", mins(at(2026, 11, 11, 13)))
+    let nap = alarm("Nap", "once", mins(at(2026, 11, 11, 10)))
+    let offA = alarm("Weekend", "daily", "480", on: false)
+    let far = once("Later", at(2026, 11, 14, 8))
+    let rs = BackupPlan.rings(in: state([daily, cal, offA, far]), now: now, horizon: 36 * 3600)
+    expect(rs.map(\.at) == [at(2026, 11, 11, 13), at(2026, 11, 12, 7)], "rings within the horizon; off and far-off alarms get none")
+    let week = BackupPlan.rings(in: state([daily, cal, nap, offA, far, alarm("Catch-up", "once", mins(at(2026, 11, 11, 14)))]), now: now)
+    expect(week.filter { $0.name == "Work" }.count == 7, "a week of a daily alarm: covered while the app stays closed")
+    expect(week.contains { $0.name == "Later" } && !week.contains { $0.name == "Catch-up" }, "a ring days off is covered; Catch-up is not")
+    expect(week.contains { $0.name == "Nap" } == (at(2026, 11, 11, 10) > now), "a nap is a wake-up too")
+    let ids = (1...9).map { UUID(uuidString: "00000000-0000-0000-0000-00000000000\($0)")! }
+    var n = 0; func mk() -> UUID { n += 1; return ids[n - 1] }
+    let r1 = BackupPlan.reconcile(kept: [], wanted: rs, delay: 5, now: now, makeID: mk)
+    expect(r1.add.map(\.fireAt) == [at(2026, 11, 11, 13, 5), at(2026, 11, 12, 7, 5)], "each backup is its ring plus the delay")
+    expect(BackupPlan.reconcile(kept: r1.entries, wanted: rs, delay: 5, now: now, makeID: mk).add.isEmpty, "syncing again changes nothing")
+    let r2 = BackupPlan.reconcile(kept: r1.entries, wanted: [rs[1]], delay: 10, now: now, makeID: mk)
+    expect(r2.cancel.count == 2 && r2.add.count == 1 && r2.add[0].fireAt == at(2026, 11, 12, 7, 10), "a ring no longer wanted is cancelled; a new delay moves the rest")
+    let during = at(2026, 11, 11, 13, 2)
+    expect(BackupPlan.handled(r1.entries, now: during, name: "Dentist").cancel.map(\.ringAt) == [at(2026, 11, 11, 13)], "stopping cancels the ring in progress, found by name")
+    expect(BackupPlan.handled(r1.entries, now: now).cancel.isEmpty, "with nothing ringing, nothing is cancelled")
+    let sn = BackupPlan.snoozed(r1.entries, now: during, name: nil, until: at(2026, 11, 11, 13, 9), delay: 5, makeID: mk)
+    expect(sn.add.map(\.fireAt) == [at(2026, 11, 11, 13, 14)] && sn.cancel.count == 1, "a snooze moves the backup to its end plus the delay")
+    let sn2 = BackupPlan.snoozed(sn.entries, now: at(2026, 11, 11, 13, 3), name: "Dentist", until: at(2026, 11, 11, 13, 9), delay: 5, makeID: mk)
+    expect(sn2.add.isEmpty && sn2.cancel.isEmpty && sn2.entries == sn.entries, "the same snooze told twice changes nothing")
+    expect(BackupPlan.handled(r1.entries, now: at(2026, 11, 11, 13).addingTimeInterval(-30), name: "Calendar: Dentist").cancel.count == 1, "a Stop up to a minute before the ring by this clock still finds it, by name")
+    expect(BackupPlan.handled(r1.entries, now: at(2026, 11, 11, 13).addingTimeInterval(-30)).cancel.isEmpty, "but not without a name")
+    expect(BackupPlan.reconcile(kept: sn.entries, wanted: [rs[1]], delay: 5, now: at(2026, 11, 11, 13, 3), makeID: mk).cancel.isEmpty, "a snoozed backup still ahead survives a sync")
+    expect(BackupPlan.reconcile(kept: sn.entries, wanted: [], delay: 5, now: at(2026, 11, 11, 13, 20), makeID: mk).entries.isEmpty, "and is dropped once it has passed")
+    expect(BackupPlan.signal(["ring": NSNull()], now: now) == .over && BackupPlan.signal(["ring": ["over": true]], now: now) == .over, "a push with ring null or over ends it")
+    expect(BackupPlan.signal(["ring": ["snoozed": true, "name": "Work", "until": 1000.0]], now: now) == .snoozed(name: "Work", until: Date(timeIntervalSince1970: 1000)), "a snoozed push carries its end")
+    expect(BackupPlan.signal(["ring": ["snoozed": false, "name": "Work"]], now: now) == nil && BackupPlan.signal([:], now: now) == nil, "a ringing push or none says nothing")
+    expect(BackupPlan.signal(["ring": ["over": true, "stopped": true, "name": "Work", "at": 1000.0]], now: now) == .stopped(name: "Work", at: Date(timeIntervalSince1970: 1000)), "over with the Chumby's stop row is a Stop, for the ring that began at `at`")
+    let dentist = at(2026, 11, 11, 13)
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: dentist.addingTimeInterval(40)).cancel.map(\.ringAt) == [dentist], "a Stop on the Chumby takes that ring's backup")
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: at(2026, 11, 11, 12, 50)).cancel.isEmpty, "a late push for an earlier ring takes no other ring's backup")
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: nil).cancel.isEmpty, "and with no time it takes nothing")
+    expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 6), at: dentist).cancel.isEmpty, "nor one that has already rung")
+}
+
+section("The backup rings after the Chumby's loud beep")
+do {
+    var music = alarm("Calendar: Shift", "once", mins(at(2026, 11, 11, 13))); music.type = "audio"; music.arg = "pandora"
+    let beep = once("Nap", at(2026, 11, 11, 10))
+    let ids = (1...9).map { UUID(uuidString: "00000000-0000-0000-0000-00000000001\($0)")! }
+    var n = 0; func mk() -> UUID { n += 1; return ids[n - 1] }
+    let rs = BackupPlan.rings(in: state([music, beep]), now: now, horizon: 36 * 3600)
+    let r = BackupPlan.reconcile(kept: [], wanted: rs, delay: 1, now: now, makeID: mk)
+    expect(r.add.map(\.fireAt) == [at(2026, 11, 11, 10, 1), at(2026, 11, 11, 13, 5)], "music: its beep at 4 min, then 1 min; a beep alarm: 1 min after it rings")
+    let sn = BackupPlan.snoozed(r.entries, now: at(2026, 11, 11, 13, 2), name: "Shift", until: at(2026, 11, 11, 13, 11), delay: 1, makeID: mk)
+    expect(sn.add.map(\.fireAt) == [at(2026, 11, 11, 13, 13)], "after a snooze: the re-ring's beep 1 min in, then 1 min")
+    var off = state([music]); off.escalate = [0]
+    expect(BackupPlan.reconcile(kept: [], wanted: BackupPlan.rings(in: off, now: now, horizon: 36 * 3600), delay: 3, now: now, makeID: mk).add.map(\.fireAt) == [at(2026, 11, 11, 13, 3)], "the Chumby's beep off: counted from the ring")
+    var own = state([music]); own.escalate = [300, 90]
+    let ro = BackupPlan.reconcile(kept: [], wanted: BackupPlan.rings(in: own, now: now, horizon: 36 * 3600), delay: 6, now: now, makeID: mk)
+    expect(ro.add.map(\.fireAt) == [at(2026, 11, 11, 13, 11)] && ro.add.first?.again == 90, "its own escalation times are used")
+    expect(BackupPlan.reconcile(kept: r.entries, wanted: rs, delay: 1, now: now, makeID: mk).add.isEmpty, "syncing again changes nothing")
+    let begun = BackupPlan.reconcile(kept: sn.entries, wanted: rs, delay: 1, now: at(2026, 11, 11, 13, 3), makeID: mk)
+    expect(begun.entries.filter { $0.ringAt == at(2026, 11, 11, 13) }.map(\.fireAt) == [at(2026, 11, 11, 13, 13)] && begun.add.allSatisfy { $0.ringAt != at(2026, 11, 11, 13) }, "a ring begun and moved by a snooze keeps the snooze's time through a sync, with no twin")
+    expect([3, 5, 10].map { BackupPlan.migrated(fromRing: $0) } == [1, 1, 6], "a delay saved from the ring: 5 and 10 ring when they did, 3 just after the beep")
+    let old = BackupPlan.Entry(id: ids[8], ringAt: at(2026, 11, 11, 13), name: "Calendar: Shift", fireAt: at(2026, 11, 11, 13, 5))
+    expect(BackupPlan.snoozed([old], now: at(2026, 11, 11, 13, 2), name: nil, until: at(2026, 11, 11, 13, 9), delay: 1, makeID: mk).add.map(\.fireAt) == [at(2026, 11, 11, 13, 11)], "one saved before 11-19 takes the 1 min after a snooze")
+}
+
+// MARK: The volume he sets sticks
+section("volume hold")
+do {
+    let t0 = now, sent = VolumeHold(level: 30, sentAt: t0)
+    func sec(_ x: Double) -> Date { t0.addingTimeInterval(x) }
+    var r = VolumeHold.shown(reported: 7, takenAt: sec(-5), hold: sent, now: sec(12))
+    expect(r.vol == 30 && r.hold != nil, "a copy taken before the send (the Mac's, served 17 s old) never puts the old level back")
+    r = VolumeHold.shown(reported: 7, takenAt: sec(1), hold: sent, now: sec(11))
+    expect(r.vol == 30 && r.hold != nil, "nor does one taken before the panel could apply it")
+    r = VolumeHold.shown(reported: 30, takenAt: sec(2), hold: sent, now: sec(2.5))
+    expect(r.vol == 30 && r.hold == nil, "a reading with his level confirms it and lets go")
+    r = VolumeHold.shown(reported: -1, takenAt: sec(6), hold: sent, now: sec(6))
+    expect(r.vol == 30 && r.hold != nil, "an unknown level isn't a no")
+    r = VolumeHold.shown(reported: 7, takenAt: sec(6), hold: sent, now: sec(6))
+    expect(r.vol == 30 && r.hold?.doubtedAt != nil, "one late reading that says otherwise is doubted, not believed")
+    let again = VolumeHold.shown(reported: 7, takenAt: sec(6), hold: r.hold, now: sec(8))
+    expect(again.vol == 30 && again.hold != nil, "the same copy served twice is one reading")
+    let second = VolumeHold.shown(reported: 7, takenAt: sec(9), hold: r.hold, now: sec(9))
+    expect(second.vol == 7 && second.hold == nil, "a second one is believed: the Chumby really is elsewhere")
+    r = VolumeHold.shown(reported: 7, takenAt: sec(-1), hold: sent, now: sec(21))
+    expect(r.vol == 7 && r.hold == nil, "after 20 s the Chumby's word goes, whatever its age")
+    // Mute then unmute: 30, 0 at 0 s, 30 again at 1 s. A copy from before the unmute says 30 and must not let go, or
+    // the next reading (0, the mute landing) would drop the slider.
+    let unmute = VolumeHold(level: 30, sentAt: sec(1))
+    r = VolumeHold.shown(reported: 30, takenAt: sec(-2), hold: unmute, now: sec(1.5))
+    expect(r.vol == 30 && r.hold != nil, "an old 30 doesn't confirm the unmute's 30")
+    r = VolumeHold.shown(reported: 0, takenAt: sec(1.5), hold: r.hold, now: sec(2.5))
+    expect(r.vol == 30 && r.hold != nil, "the mute landing just after doesn't drop the slider")
+    r = VolumeHold.shown(reported: 30, takenAt: sec(3), hold: r.hold, now: sec(4))
+    expect(r.vol == 30 && r.hold == nil, "a 30 read after the unmute confirms it")
+    r = VolumeHold.shown(reported: 12, takenAt: sec(30), hold: nil, now: sec(30))
+    expect(r.vol == 12 && r.hold == nil, "with nothing held, the reading is shown")
+}
+
+// MARK: A Stop or Snooze the Chumby confirmed holds against old copies of its status
+section("ring readings after a Stop or Snooze")
+do {
+    let t0 = now
+    func sec(_ x: Double) -> Date { t0.addingTimeInterval(x) }
+    let ringing = "r\tWork\tBeep", snoozed = "s\tWork\tBeep\t1790000000"
+    expect(RingReading.believed(ringing, shown: "", takenAt: sec(0), stoppedAt: nil, snoozedAt: nil) == ringing, "with nothing confirmed, a ring is a ring")
+    expect(RingReading.believed(ringing, shown: "", takenAt: sec(-3), stoppedAt: t0, snoozedAt: nil) == "", "a copy taken before a confirmed Stop never rings again")
+    expect(RingReading.believed(snoozed, shown: ringing, takenAt: sec(1), stoppedAt: t0, snoozedAt: nil) == "", "nor one that says snoozed, taken as the Chumby noted the Stop")
+    expect(RingReading.believed(ringing, shown: "", takenAt: sec(60), stoppedAt: t0, snoozedAt: nil) == ringing, "the next alarm, a minute after a Stop, rings")
+    expect(RingReading.believed(ringing, shown: snoozed, takenAt: sec(-3), stoppedAt: nil, snoozedAt: t0) == snoozed, "a copy taken before a confirmed Snooze doesn't put Ringing back")
+    expect(RingReading.believed(ringing, shown: snoozed, takenAt: sec(540), stoppedAt: nil, snoozedAt: t0) == ringing, "the snooze's own re-ring is believed")
+    expect(RingReading.believed(ringing, shown: ringing, takenAt: sec(-3), stoppedAt: nil, snoozedAt: t0) == ringing, "a ring still shown as ringing stays as read")
+    expect(RingReading.believed("", shown: snoozed, takenAt: sec(-3), stoppedAt: nil, snoozedAt: t0) == "", "nothing ringing is never turned into a ring")
+    expect(RingReading.believed(ringing, shown: snoozed, takenAt: sec(-3), stoppedAt: sec(-86400), snoozedAt: t0) == snoozed, "yesterday's Stop says nothing about today's ring")
+}
+
+// The Chumby's answer to a Stop or Snooze (chalarm, 11-20): only done, with a line that agrees, is a confirmation.
+do {
+    let ringing = "r\tWork\tBeep", snoozed = "s\tWork\tBeep\t1790000000"
+    expect(RingAnswer(["ok": true]).read(stop: true) == .wait, "an older Chumby's bare ok confirms nothing")
+    expect(RingAnswer(["ok": true]).wait == 14 && RingAnswer(["ok": true, "done": false]).wait == 10 && RingAnswer(["ok": true, "done": false]).step == 1, "done:false: its line each second for 10 s")
+    expect(RingAnswer(["ok": true, "done": false, "how": "tap sent", "ring": ringing]).read(stop: true) == .wait, "done:false is waited on")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": ""]).read(stop: true) == .confirmed(until: nil), "a Stop done, nothing on its line: stopped")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": snoozed]).read(stop: false) == .confirmed(until: 1790000000), "a Snooze done: until the Chumby's own time")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": "s\tWork\tBeep"]).read(stop: false) == .confirmed(until: nil), "a Snooze done with no time on its line")
+    expect(RingAnswer(["ok": true, "done": true, "how": "nothing ringing", "ring": ""]).read(stop: false) == .nothingRinging, "nothing was ringing")
+    expect(RingAnswer(["ok": true, "done": true, "how": "hook", "ring": ""]).read(stop: false) == .nothingRinging, "a Snooze that leaves nothing on the line snoozed nothing")
+    expect(RingAnswer(["ok": true, "done": true, "how": "tap", "ring": ringing]).read(stop: true) == .wait, "a Stop called done while its line still rings is not believed yet")
+    expect(RingAnswer(["ok": true, "done": true, "how": "tap", "ring": ringing]).read(stop: false) == .wait, "nor a Snooze whose line still says ringing")
+    expect(RingAnswer(["ok": true, "done": true, "how": "tap", "ring": snoozed]).read(stop: true) == .wait, "nor a Stop that left it snoozing")
+    expect(RingAnswer(["ok": true, "done": true]).read(stop: true) == .confirmed(until: nil), "done with no line is taken at its word")
+    expect(RingAnswer.stillRinging(ChumbyError.message("still ringing")) && !RingAnswer.stillRinging(ChumbyError.message("bad token")) && !RingAnswer.stillRinging(ChumbyError.deviceDown), "only \"still ringing\" is asked again")
+}
+
 print(failures == 0 ? "ok: \(checks) checks" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

@@ -75,9 +75,14 @@ enum ChumbyPalette {
         let b = ChumbyArt.octEyes.boundingRect
         return UnitPoint(x: (b.midX - ChumbyArt.octBox.minX) / ChumbyArt.octBox.width, y: (b.midY - ChumbyArt.octBox.minY) / ChumbyArt.octBox.height)
     }
+    // "Can't reach the Mac": amber, calm, the alarm not known to be at risk. Red is kept for the Chumby itself.
+    static let away = Color(red: 0xe5 / 255.0, green: 0x9a / 255.0, blue: 0x2e / 255.0)
     static func hex(_ h: UInt32) -> Color { Color(red: Double(h >> 16 & 255) / 255, green: Double(h >> 8 & 255) / 255, blue: Double(h & 255) / 255) }
     static func sea(_ dark: Bool) -> [Color] { dark ? [0x061a3f, 0x0a4a9c, 0x7a3a2a, 0x0b5f58, 0x3b2470].map(hex) : [0xdbe9fb, 0xa9cdf8, 0xffc477, 0x7be8bd, 0xfc8a63].map(hex) }
     static let orange = hex(0xfc5825), on = hex(0x29c77e)
+    // The ringing alarm in the Dynamic Island only: the octopus's blue (Richard, 11-20: "blue for chumby ... the card is fine its just
+    // the dynamic island entry"). The Lock Screen card, the ring page and the backup alarm keep the orange.
+    static let ring = hex(0x5aa9ff)
     static func ink(_ dark: Bool) -> Color { dark ? hex(0xeef4ff) : hex(0x0b2a5c) }
     static func sub(_ dark: Bool) -> Color { dark ? hex(0xa4b7d6) : hex(0x54688c) }
     static func acc(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x0051bd) }
@@ -86,8 +91,11 @@ enum ChumbyPalette {
     // Calendar alarms' own colour, a coral from the sea, so they never look like his own alarms in the accent blue.
     static func cal(_ dark: Bool) -> Color { dark ? hex(0xff9a76) : hex(0xc4472a) }
     static func oct(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x2c5bae) }
-    // The website's blue; in the dark only as much lighter as it needs to read against the deep sea (3.8:1).
-    static func word(_ dark: Bool) -> Color { dark ? hex(0x3b78c3) : hex(0x0a57b4) }
+    // Taking something out (a row's minus): the system's red, a touch softer on the dark cards.
+    static func remove(_ dark: Bool) -> Color { dark ? hex(0xff6961) : hex(0xe5332a) }
+    // The website's blue; in the dark the octopus's own light blue, as clear as he is on the deep sea (the mid blue it was,
+    // 3.8:1, sank into it: designer, 11-11).
+    static func word(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x0a57b4) }
 }
 
 // A still version of the web app's sea: soft colour blobs.

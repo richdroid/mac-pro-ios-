@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import WidgetKit
 import Security
 #if canImport(UIKit)
 import UIKit
@@ -47,7 +48,7 @@ enum MacBridge {
 }
 enum MacIntentError: LocalizedError {
     case noAnswer
-    var errorDescription: String? { "The Mac Pro didn’t answer. Is Tailscale on?" }
+    var errorDescription: String? { "The Mac didn’t answer. Try again in a moment." }
 }
 enum ScreenRequest {
     static let notification = Notification.Name("macOpenScreen")
@@ -77,11 +78,6 @@ struct MacDisplayOffIntent: AppIntent {
     static var description = IntentDescription("Darkens the computer’s display. It keeps running.")
     func perform() async throws -> some IntentResult { try await MacBridge.action("display-off"); return .result() }
 }
-struct MacRenewAppsIntent: AppIntent {
-    static var title: LocalizedStringResource = "Renew iPhone Apps"
-    static var description = IntentDescription("Asks the computer to sign and reinstall your apps. This phone must be on the same Wi-Fi.")
-    func perform() async throws -> some IntentResult { try await MacBridge.action("ios-resign"); return .result() }
-}
 struct MacOpenScreenIntent: AppIntent {
     static var title: LocalizedStringResource = "Show the Mac Pro Screen"
     static var description = IntentDescription("Opens straight into the computer’s screen.")
@@ -105,7 +101,9 @@ struct MacCopyIntent: AppIntent {
     }
 }
 struct MacSendIntent: AppIntent {
-    static var title: LocalizedStringResource = "Send to the Mac"
+    // "Paste", as the Status key that does the same is "Paste to Mac": "Send to Mac" is the files' name (Control, the
+    // share sheet).
+    static var title: LocalizedStringResource = "Paste Text to the Mac"
     static var description = IntentDescription("Puts text on the computer’s clipboard.")
     @Parameter(title: "Text") var text: String
     func perform() async throws -> some IntentResult { try await MacBridge.send("/api/clipboard", body: Data(text.utf8), json: false); return .result() }
@@ -118,25 +116,66 @@ struct MacSendIntent: AppIntent {
 // same way (b7ee5f4). Here, not in the app's sources alone, because shortcuts and the widget read it too.
 enum SavedAddress {
     private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
+    // This app's own item, since 2026-11-20. The old unscoped one ("local.macpro.address") is shared by every app of the
+    // team, because the App Store signing gives each the team's whole Keychain (the profile's "TEAM.*"): the Chumby app
+    // read this app's bridge address from it as its own, and its saves replaced this app's. The shared group above is
+    // this app's alone and keeps its old name, which the share sheet reads.
+    private static let own: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.macpro.address", kSecAttrAccount as String: "address"]
     // Settings first, then the Keychain, then the address baked into this build.
     static var value: String {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
         if !stored.isEmpty { return stored }
+        // In a widget or control: the address the app shares with them (MacPrefs.shareWithWidgets), once the build has
+        // the App Group. A widget kept using the baked address after it was changed in the app.
+        if let g = MacPrefs.shared?.string(forKey: "address"), !g.isEmpty { return g }
+        if let k = sharedValue(), !k.isEmpty { return k }
         if let k = keychain(), !k.isEmpty { return k }
         return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
     }
+    // The address shared with this app's widgets, controls and share sheet: a Keychain item in the app's shared access
+    // group ("<team>.local.macpro.MacPro.shared"), which the TestFlight signing (store-sign.sh) gives the app and each of
+    // its extensions. Their own settings and Keychain are their own, so before this they only ever had the address
+    // baked into the build. No group (a simulator build, no team in the bundle id): nil, and nothing changes.
+    static var sharedGroup: String? {
+        // The team, as the signing writes it into Info.plist (AppIdentifierPrefix, "TEAM."), else from the bundle id it gives.
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) else { return nil }
+        return "\(team).local.macpro.MacPro.shared"
+    }
+    static func sharedValue() -> String? {
+        guard let g = sharedGroup else { return nil }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+    static func share(_ s: String) {
+        guard let g = sharedGroup, sharedValue() != s else { return }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        SecItemDelete(q as CFDictionary)
+        guard !s.isEmpty else { return }
+        q[kSecValueData as String] = Data(s.utf8)
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // The widgets redraw with the new address rather than at their next refresh.
+        if SecItemAdd(q as CFDictionary, nil) == errSecSuccess { WidgetCenter.shared.reloadAllTimelines() }
+    }
     static func save(_ s: String) {
         UserDefaults.standard.set(s, forKey: "address")
+        share(s)
         guard keychain() != s else { return }
-        SecItemDelete(base as CFDictionary)
+        SecItemDelete(own as CFDictionary)
         guard !s.isEmpty else { return }
-        var add = base
+        var add = own
         add[kSecValueData as String] = Data(s.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
     }
     static func keychain() -> String? {
-        var q = base
+        var q = own
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?

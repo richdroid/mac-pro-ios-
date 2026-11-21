@@ -11,6 +11,8 @@ import UIKit
 // Turns what's on this iPhone's calendar into real alarms on the Chumby, which then ring with or without the phone.
 @MainActor
 final class CalendarWake: ObservableObject {
+    // What the calendar switch does, in one sentence wherever the switch is (Alarms and Calendar settings: designer, 11-11).
+    static let what = "Rings before your first event."
     static let shared = CalendarWake()
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
@@ -293,7 +295,9 @@ struct CalendarSettingsSections: View {
     var body: some View {
         Group {
             Section {
-                Toggle("Wake me from my calendar", isOn: $wake.rules.enabled)
+                Toggle(isOn: $wake.rules.enabled) { TwoLine("Wake me from my calendar", CalendarWake.what) }
+                    .padding(.trailing, 2)
+                    .soloCard()
             }
             Section {
                 leadRow("Work", $wake.rules.workLead)
@@ -305,25 +309,27 @@ struct CalendarSettingsSections: View {
                         Text("\(wake.rules.daysAhead) wake-up\(wake.rules.daysAhead == 1 ? "" : "s")").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-            } header: { Text("Awake before it starts") }
+            } header: { SectionHead(icon: "clock", text: "Awake before it starts") }
             Section {
                 CalendarSoundRow(autoOpen: ChumbyModel.pose == "template")
-            } header: { Text("How they ring") }
+            } header: { SectionHead(icon: "music.note", text: "How they ring") }
             // Only on a Chumby that knows how.
             if let on = model.state.calOverride {
                 Section {
-                    Toggle("Calendar days skip my other alarms", isOn: Binding(get: { on == 1 }, set: { v in Task { await model.setCalendarOverride(v) } }))
+                    Toggle(isOn: Binding(get: { on == 1 }, set: { v in Task { await model.setCalendarOverride(v) } })) {
+                        TwoLine("Calendar days skip my other alarms", on == 1 ? "On a day your calendar wakes you, your repeating alarms stay quiet. They ring as usual the day after."
+                                : "Your repeating alarms ring as usual, even on days your calendar wakes you.")
+                    }
+                    .padding(.trailing, 2)
+                    .soloCard(on: model.failed("calover") == nil)
                     if let f = model.failed("calover") { FailNote(text: f) }
-                } header: { Text("Skipping other alarms") } footer: {
-                    Text(on == 1 ? "On a day your calendar wakes you, your repeating alarms stay quiet. They ring as usual the day after."
-                         : "Your repeating alarms ring as usual, even on days your calendar wakes you.")
-                }
+                } header: { SectionHead(icon: "bell.slash.fill", text: "Skipping other alarms") }
             }
             Section {
                 WordsGroup(title: "Counts as work", words: $wake.rules.workWords)
                 WordsGroup(title: "Never wake for", words: $wake.rules.ignoreWords)
                 WordsGroup(title: "Days off", words: $wake.rules.offWords)
-            } header: { Text("Words in titles") }
+            } header: { SectionHead(icon: "text.quote", text: "Words in titles") }
             if !wake.calendars.isEmpty {
                 Section {
                     // Closed to begin with: it's set once and rarely looked at again.
@@ -342,7 +348,7 @@ struct CalendarSettingsSections: View {
                             }
                         }
                     }
-                } footer: { if showCalendars { Text("Tap Work on a calendar to count everything in it as work.") } }
+                } footer: { if showCalendars { SectionFoot("Tap Work on a calendar to count everything in it as work.") } }
             }
         }
     }
@@ -408,7 +414,7 @@ struct CalendarDayPage: View {
     @EnvironmentObject var model: ChumbyModel
     let key: String
     var body: some View {
-        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
+        CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false)
             .pushedPage("day")
     }
 }
@@ -432,7 +438,7 @@ private struct PushedPage: ViewModifier {
             .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
             // Open in portrait the tab bar runs along the foot under this page too: its rows fade out above the bar, as a
             // tab's do, never reading through it (build 204: "Never wake for…" beside the bar).
-            .modifier(TabBarFade())
+            .modifier(TabBarFade(top: size == .regular))
             .overSea()
             .pageLog(name)
             .toolbar(.visible, for: .navigationBar)
@@ -450,6 +456,7 @@ private struct PushedPage: ViewModifier {
 struct CalendarDaySheet: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openCalendarSettings) private var openCalendarSettings
     @ObservedObject private var wake = CalendarWake.shared
     @Environment(\.colorScheme) private var scheme
     // Folded: measured on first layout, a first guess until then.
@@ -513,6 +520,7 @@ struct CalendarDaySheet: View {
             }
             Section {
                 Picker("Wake", selection: Binding(get: { item.exact }, set: { exact in
+                    Haptic.fire(.tick)
                     problem = nil
                     setEdit { $0.wakeAt = exact ? (item.wake.timeIntervalSince1970 / 60).rounded() * 60 : nil }
                 })) {
@@ -541,12 +549,13 @@ struct CalendarDaySheet: View {
                         .submitLabel(.done).onSubmit(commitLabel)
                 }
                 Toggle("Ring that day", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) }))
-            } header: { Text("Just this day") }
+            } header: { SectionHead(icon: "calendar", text: "Just this day") }
             soundSection(item)
             if item.custom || model.state.justOnce(for: item) != nil {
                 Section {
-                    Button("Use the usual settings") { useUsual(item) }.foregroundStyle(.tint).disabled(undoing).background { foot }
-                } footer: { Text("This day wakes and rings like every other again.") }
+                    Button("Use the usual settings") { useUsual(item) }.foregroundStyle(.tint).disabled(undoing)
+                        .soloCard(note: "This day goes back to the usual.").background { foot }
+                }
             }
             // No "How they all ring" here: a day's page changes that day alone, and the shared sound is set in Calendar
             // settings (and shown under Sounds). A control for every day on one day's page read as one more place the same
@@ -574,6 +583,7 @@ struct CalendarDaySheet: View {
     @ViewBuilder func soundSection(_ item: PlannedWake) -> some View {
         Section {
             Picker("Sound", selection: Binding(get: { edit.own != nil }, set: { on in
+                Haptic.fire(.tick)
                 if on { var a = Alarm(); a.takeSettings(from: shared); setEdit { $0.own = a } } else { setEdit { $0.own = nil } }
                 loadOwn()
             })) {
@@ -586,9 +596,14 @@ struct CalendarDaySheet: View {
                 // The shared set, as information: dimmed, nothing to tap, and where it's changed (Richard, 2026-11-10:
                 // read-only rows look read-only).
                 let r = wake.ringsWith(model.state)
-                LabeledContent("Plays", value: r.sound).lineLimit(1).foregroundStyle(.secondary).background { foot }
+                LabeledContent("Plays", value: r.sound).foregroundStyle(.secondary).background { foot }
                 if let z = r.snooze { LabeledContent("Snooze", value: "\(z) min").foregroundStyle(.secondary).background { foot } }
-                Text("How every calendar alarm rings; change it in Calendar settings.").font(.footnote).foregroundStyle(.secondary).background { foot }
+                // Where it's changed is a row that goes there, not a sentence saying to.
+                Button { openCalendarSettings?() } label: {
+                    Text("Change in Calendar settings").font(.body.weight(.semibold)).foregroundStyle(.tint)
+                        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).background { foot }
             }
             if let j = model.state.justOnce(for: item) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -601,7 +616,7 @@ struct CalendarDaySheet: View {
                 }
                 .background { foot }
             }
-        } header: { Text("Sound for this day") }
+        } header: { SectionHead(icon: "music.note", text: "Sound for this day") }
         .onChange(of: ownSound) { _, _ in commitOwn() }
         .onChange(of: ownAlarm) { _, _ in commitOwn() }
     }
@@ -629,10 +644,17 @@ struct CalendarDaySheet: View {
     }
     var body: some View {
         if let close {
-            Group {
-                PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
-                sections
+            // Its own list in the pane, so the title row with Done stays pinned once scrolled (as the editor's does).
+            let doneButton = Group { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
+            // Always its own list, pushed too (CalendarDayPage puts nothing around it): a list inside a list's row
+            // collapsed to one empty bar, and rows handed up loose took this page's onAppear each, so a section scrolling
+            // back reloaded the label and wiped what was typed (designer, 11-11).
+            List {
+                PageTitle(title, pins: done) { doneButton }
+                sections.listRowBackground(GlassRow())
             }
+            // Pinned only with its Done: a pushed page's way out is the system's Back.
+            .pinsTitle(done) { PageTitle(title) { doneButton } }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {
@@ -664,6 +686,9 @@ extension ChumbyState {
     }
 }
 
+// Opens Calendar settings from a day (the pushed page swaps to it; open flat the pane does).
+private struct OpenCalSettingsKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
+extension EnvironmentValues { var openCalendarSettings: (() -> Void)? { get { self[OpenCalSettingsKey.self] } set { self[OpenCalSettingsKey.self] = newValue } } }
 // Opens the calendar alarms' settings in the open Duo's right pane; unset, they open as a sheet.
 private struct OpenTemplateKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
 extension EnvironmentValues { var openTemplate: (() -> Void)? { get { self[OpenTemplateKey.self] } set { self[OpenTemplateKey.self] = newValue } } }

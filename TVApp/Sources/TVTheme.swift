@@ -7,9 +7,13 @@ import UIKit
 // An iPhone app first. A few things carry over from the TV's launcher: its cyan, its banner shape, and the soft wall of colour from the art.
 enum TVLook {
     static let accent = Color(hex: 0x3FE3E8)
+    // "Can't reach the Mac": amber, calm, the same as the Chumby and Mac Pro apps say it. Red is for the TV itself down.
+    static let away = Color(hex: 0xE59A2E)
     static let bannerTile = Color(hex: 0x3A4A52)
     static let bannerSize = CGSize(width: 142, height: 80)
     static let card: CGFloat = 22, banner: CGFloat = 12, gap: CGFloat = 12
+    // Every glass card and section: one corner, 25 pt continuous, as the Chumby app's (2026-11-11 audit).
+    static let glass: CGFloat = 25
     static let press = Animation.spring(duration: 0.25, bounce: 0.25)
     // The side bar's glass and its margin from the display's edge, folded and open alike.
     static let railRoom: CGFloat = 76
@@ -21,7 +25,7 @@ enum TVLook {
 }
 extension Color { init(hex: UInt32) { self.init(red: Double(hex >> 16 & 255) / 255, green: Double(hex >> 8 & 255) / 255, blue: Double(hex & 255) / 255) } }
 extension View {
-    func tvCard(_ radius: CGFloat = TVLook.card) -> some View {
+    func tvCard(_ radius: CGFloat = TVLook.glass) -> some View {
         background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }

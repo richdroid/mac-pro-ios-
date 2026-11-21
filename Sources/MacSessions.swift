@@ -8,6 +8,11 @@ struct TermOption: Identifiable, Equatable { let number: Int; let text: String; 
 @MainActor
 enum TermCache {
     static var screens: [String: API.Term] = [:]
+    // What's typed in a session's box, and whether it had the keyboard as the page went: folded on its side the app's
+    // own tab rail takes over from the system's bar (SideRailTabs), and the page is made anew on the turn, so it takes
+    // both back rather than losing his half-typed message and the keyboard (the session-turn film).
+    static var drafts: [String: String] = [:]
+    static var leftTyping: (key: String, at: Date)?
     static func warm(_ api: API, _ keys: [String]) async {
         for k in keys where !Task.isCancelled {
             if let t = try? await api.termScreen(k) { screens[k] = t }
@@ -46,10 +51,17 @@ struct SessionTerminal: View {
         _text = State(initialValue: kept?.text ?? "")
         _running = State(initialValue: kept?.running ?? true)
         _loaded = State(initialValue: kept != nil)
+        _message = State(initialValue: TermCache.drafts[session.key ?? session.name] ?? "")
     }
     @State private var message = ""
+    @FocusState private var typing: Bool
     @State private var misses = MissClock()
     @State private var note: String?
+    // A send that didn't reach the session: said until the next one that does, with what was typed put back in the box.
+    @State private var sendFailed: String?
+    // The screen has stopped coming (8 s of misses): how old it is, and nothing typed or pressed against it.
+    @State private var stale = false
+    @State private var lastRead: Date?
     @State private var sends = 0
     @State private var width: CGFloat = 0
     @State private var starting = false
@@ -61,6 +73,8 @@ struct SessionTerminal: View {
     // The posture's layout as last read at rest: the fold is read in the page's own space, which moves as the page slides
     // off, so it's held while a push or pop is in flight (NavTransit).
     @State private var heldMode: SessionFoldLayout.Mode?
+    // The kind of layout last drawn (one column, stacked, panes): a change of kind is never glided (below).
+    @State private var drawnKind = 0
     // Glyphs short enough for a sixth of the folded width, each with its full name for VoiceOver.
     static let keys: [(String, String, String)] = [("esc", "esc", "Escape"), ("enter", "⏎", "Enter"), ("up", "↑", "Up"), ("down", "↓", "Down"), ("left", "←", "Left"), ("right", "→", "Right"),
                                                    ("1", "1", "1"), ("2", "2", "2"), ("3", "3", "3"), ("tab", "⇥", "Tab"), ("shift-tab", "⇧⇥", "Shift Tab"), ("ctrl-c", "⌃C", "Control C")]
@@ -104,19 +118,40 @@ struct SessionTerminal: View {
         }
     }
     func load() async {
-        do { show(try await model.api.termScreen(key)); misses.hit(); if note == "Can’t reach the Mac" { note = nil } }
+        do {
+            show(try await model.api.termScreen(key)); misses.hit(); lastRead = Date()
+            // The build's shots: the screen two minutes old, and a message that didn't get through, back in the box.
+            if model.pose == "sessionstale" { stale = true; lastRead = Date().addingTimeInterval(-130); return }
+            if model.pose == "sessionfail", sendFailed == nil { message = "run the tests again and tell me what fails"; sendFailed = "Not sent: \(Phrase.macAway) Your message is back in the box." }
+            if stale { withAnimation(Motion.quick) { stale = false } }
+            if note == Phrase.macAway { note = nil }
+        }
+        catch is CancellationError {}
+        catch is DecodingError { misses.hit() }
         // Only after 8 s without an answer (MissClock): one missed screen said it at once.
-        catch { if misses.miss(), !loaded { note = "Can’t reach the Mac" } }
+        catch {
+            guard misses.miss() else { return }
+            if loaded { if !stale { withAnimation(Motion.quick) { stale = true } } } else { note = Phrase.macAway }
+        }
     }
     // One after another, in the order pressed: ↓ then Enter must never reach the Mac as Enter then ↓.
     @State private var queue: Task<Void, Never>?
-    func send(_ body: [String: Any]) {
+    // `restore` is a message from the box: if it doesn't reach the session it goes back in the box (ahead of anything
+    // typed since), and the failure stays said until a send gets through. It was cleared as it was sent and the note
+    // went after 3 s, so a long instruction typed at work was simply gone (audit, 2026-11-10).
+    func send(_ body: [String: Any], restore: String? = nil) {
         sends += 1
         let before = queue
         queue = Task {
             await before?.value
-            do { show(try await model.api.termSend(key, body)) }
-            catch { withAnimation(Motion.quick) { note = error.localizedDescription } }
+            do {
+                show(try await model.api.termSend(key, body)); lastRead = Date()
+                if sendFailed != nil { withAnimation(Motion.quick) { sendFailed = nil } }
+            } catch {
+                if let restore { message = message.isEmpty ? restore : restore + "\n" + message }
+                let why = MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription
+                withAnimation(Motion.quick) { sendFailed = restore != nil ? "Not sent: \(why) Your message is back in the box." : why }
+            }
         }
     }
     func start() {
@@ -193,6 +228,7 @@ struct SessionTerminal: View {
                 .accessibilityLabel("Choose \(o.number), \(o.text)")
             }
         }
+        .disabled(stale).opacity(stale ? staleDim : 1)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
     func glyph(_ k: String, _ label: String) -> Text {
@@ -214,35 +250,57 @@ struct SessionTerminal: View {
         .tint(k == "ctrl-c" ? .red : nil)
         .accessibilityLabel(name)
     }
-    // Every key in view at once: one row when there's room, two on the folded screen, so the numbers and Ctrl-C are
-    // never cut off when a menu needs them.
+    // Every key in view at once, as few rows as fit: twelve across, six, or four, the keys flexing to the column's width
+    // so they sit flush with the answers above and the box below (designer gate, 2026-11-19: a fixed two-row grid ran
+    // 16 pt wider than the box folded upright, and past a narrow pane under the rail on its side).
     var keyRows: some View {
-        VStack(spacing: 6) {
-            if width >= 520 {
-                HStack(spacing: 6) { ForEach(Self.keys, id: \.0) { keyButton($0.0, $0.1, $0.2) } }
-            } else {
-                HStack(spacing: 6) { ForEach(Self.keys.prefix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
-                HStack(spacing: 6) { ForEach(Self.keys.suffix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
+        // How many across is chosen from the column's measured width, not by ViewThatFits: the bordered keys' smallest
+        // width (about 54 pt for "esc") let a twelve-across grid overhang the column by 8 pt, and the whole controls stack
+        // shifted right off the terminal's edges (designer gates 4 and 5, 2026-11-19). 56 pt a key leaves no overhang.
+        // The column is measured by an empty full-width line above the keys, never by the grid itself: a grid that
+        // overhung read its own overhang as room and kept six across folded on first open (designer gate 6).
+        VStack(spacing: 0) {
+            Color.clear.frame(height: 0).frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            keyGrid(width >= 12 * 56 + 66 ? 12 : width >= 6 * 56 + 30 ? 6 : 4)
+                .frame(maxWidth: .infinity)
+        }
+    }
+    func keyGrid(_ across: Int) -> some View {
+        let rows = stride(from: 0, to: Self.keys.count, by: across).map { Array(Self.keys[$0..<min($0 + across, Self.keys.count)]) }
+        return Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+            ForEach(rows.indices, id: \.self) { r in
+                GridRow { ForEach(rows[r], id: \.0) { keyButton($0.0, $0.1, $0.2) } }
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
     var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message the session", text: $message, axis: .vertical)
+            // Short where the column is narrow (a pane folded on its side), so the placeholder is never cut.
+            TextField(width > 0 && width < 300 ? "Message" : "Message the session", text: $message, axis: .vertical)
                 .lineLimit(1...5)
+                .focused($typing)
+                .onChange(of: message) { _, m in TermCache.drafts[key] = m.isEmpty ? nil : m }
+                // Made anew on a turn with the keyboard up: the keyboard comes back with the box. Only straight after (a
+                // page left by Back and opened again later starts without it).
+                .onAppear {
+                    if let t = TermCache.leftTyping, t.key == key, Date().timeIntervalSince(t.at) < 2 { typing = true }
+                    TermCache.leftTyping = nil
+                }
+                .onDisappear { if typing { TermCache.leftTyping = (key, Date()) } }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             Button {
                 let m = message; message = ""
-                send(["text": m])
+                send(["text": m], restore: m)
             } label: {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 40, height: 40)
                     .background(macBlue, in: Circle()).foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .opacity(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+            // Not against a screen that has stopped coming: the box still takes what's typed, to send once it's back.
+            .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || stale)
+            .opacity(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || stale ? 0.4 : 1)
             .accessibilityLabel("Send")
         }
     }
@@ -261,12 +319,15 @@ struct SessionTerminal: View {
     }
     // The page's two halves: the screen (with what the session wants under the title), and the controls, which read from
     // the foot up: the box, the keys, then the menu's choices.
-    var terminalColumn: some View {
+    // `titleLead`: what puts the name 20 pt from the display's edge, on the tabs' title line, whatever the column's own
+    // margin (12 in one column, 14 in a pane put it at 13 to 15; designer gate, 2026-11-19). The screen keeps its width.
+    func terminalColumn(titleLead: CGFloat) -> some View {
         VStack(spacing: 8) {
             // The name heads the screen's column (its pane open flat), as on every pushed page.
-            PaneHeading(title: session.name)
-            stateChip
-            screen.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
+            PaneHeading(title: session.name).padding(.leading, titleLead)
+            stateChip.opacity(stale ? staleDim : 1)
+            if stale { StaleLine(lastRead: lastRead) }
+            screen.opacity(stale ? staleDim : 1).onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
         }
         .coordinateSpace(.named("termcol"))
     }
@@ -276,7 +337,22 @@ struct SessionTerminal: View {
         VStack(spacing: 8) {
             if !options.isEmpty { choices }
             Spacer(minLength: 0)
-            keyRows
+            keyRows.disabled(stale).opacity(stale ? staleDim : 1)
+            // A send that failed, said in the layout above the box its text went back to, never over the session's own
+            // lines (it stays until a send gets through, and laid over the screen it hid the menu being answered;
+            // designer, 2026-11-10). One ✕ puts it away.
+            if let f = sendFailed {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(f).font(.footnote.weight(.medium)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { withAnimation(Motion.quick) { sendFailed = nil } } label: {
+                        Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.white).frame(width: 44, height: 28).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                }
+                .padding(.leading, 6)
+                .transition(.opacity)
+            }
             composer
         }
         .padding(.top, lead)
@@ -299,10 +375,52 @@ struct SessionTerminal: View {
                 let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
                 return .panes(seam: min(max(crease?.midX ?? w / 2, w * 0.3), w * 0.7), gutter: min(max(24, (crease?.width ?? 0) / 2 + 4), 40))
             }
+            if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.5).rounded(), gutter: 12) }
             return .column
         }
+        if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.5).rounded(), gutter: 12) }
         #endif
         return panes ? .panes(seam: w / 2, gutter: 24) : .column
+    }
+    // Folded and turned on its side: a short, wide page. One column there gave the controls the foot and left the screen
+    // a few lines over them (fewer still with the keyboard up), so the screen takes the left and the controls the right,
+    // as open flat. Judged from the window, not this page, whose height the keyboard takes: open upright with the
+    // keyboard up is shorter than it is wide too, and stays one column.
+    // Folded on its side the tab rail stands over the page's trailing strip without taking it from the page's safe area,
+    // and the keys and the box ran under it (designer gate, 2026-11-19): how much of this page it covers, from the window.
+    // Only what overlaps the page counts: the page's own safe area already leaves out a rail that takes part in it (adding
+    // the trailing safe area again, and taking the widest tab-bar container rather than the rail's own edge, left the
+    // right pane about 90 pt short of the rail; designer gate 4, 2026-11-19). The innermost edge found wins.
+    static func rail(_ g: GeometryProxy) -> CGFloat {
+        #if os(iOS)
+        guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return 0 }
+        let page = g.frame(in: .global)
+        var edge: CGFloat?
+        func look(_ v: UIView) {
+            guard !v.isHidden, v.alpha > 0.01 else { return }
+            let name = String(describing: type(of: v))
+            if v is UITabBar || name.contains("TabBar") || name.contains("TabSidebar") {
+                let f = v.convert(v.bounds, to: win)
+                // Upright along the trailing edge: the rail, not the bar along the foot.
+                if f.height > f.width * 2, f.width < 160, f.midX > win.bounds.midX { edge = max(edge ?? f.minX, f.minX) }
+            }
+            v.subviews.forEach(look)
+        }
+        look(win)
+        guard let edge else { return 0 }
+        return min(max(page.maxX - edge, 0), page.width / 3)
+        #else
+        return 0
+        #endif
+    }
+    func onItsSide(_ w: CGFloat) -> Bool {
+        #if os(iOS)
+        guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first?.bounds.size else { return false }
+        // 500, not 560: the app's own rail on its side takes its room from the page's safe area (railRoom).
+        return win.width > win.height && w >= 500
+        #else
+        return false
+        #endif
     }
     var body: some View {
         // A page of its own, pushed like any other, so Back is where the system puts it, on the side on the Duo.
@@ -311,13 +429,17 @@ struct SessionTerminal: View {
         // all of them, so the box is the same view through every change of posture, with its text and focus.
         GeometryReader { g in
             let live = arrangement(g)
-            let mode = NavTransit.shared.active ? (heldMode ?? live) : live
-            SessionFoldLayout(mode: mode) {
-                terminalColumn
+            let mode = NavTransit.shared.inFlight ? (heldMode ?? live) : live
+            SessionFoldLayout(mode: mode, trail: onItsSide(g.size.width) && !panes ? Self.rail(g) : 0) {
+                terminalColumn(titleLead: { if case .panes = mode { return 20 - SessionFoldLayout.outer } else { return 20 - SessionFoldLayout.side } }())
                 controls(lead: { if case .panes = mode { return screenTop } else { return 0 } }())
             }
             // The parts move to their new places in the Screen's own spring as the hinge moves.
-            .animation(RemoteScreenView.posture, value: mode)
+            // Only within one kind (the crease moving): between one column and two panes the parts glided across each
+            // other, the answers drawn over the terminal card for a moment as the page turned (designer gate 4,
+            // 2026-11-19). A change of kind lands in place, under the system's own turn.
+            .animation(mode.kind == drawnKind ? RemoteScreenView.posture : nil, value: mode)
+            .onChange(of: mode.kind, initial: true) { _, k in drawnKind = k }
             .onChange(of: live, initial: true) { _, m in if !NavTransit.shared.moving() { heldMode = m } }
             .onChange(of: NavTransit.shared.active) { _, now in if !now { heldMode = live } }
         }
@@ -330,10 +452,11 @@ struct SessionTerminal: View {
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
         .pushedTitle()
         .preferredColorScheme(.dark)
-        .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
+        .haptic(.tap, trigger: sends)
         .task {
             while !Task.isCancelled {
-                await load()
+                // Not under the Mac's screen, which has the link to itself while it's open.
+                if !model.screenOpen { await load() }
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
             }
         }
@@ -344,8 +467,13 @@ struct SessionTerminal: View {
 // foot, the screen taking the rest), stacked either side of a crease across, or a pane each side of the hinge. The same
 // two children in every mode, so nothing in them is made anew when the Duo folds.
 struct SessionFoldLayout: Layout {
-    enum Mode: Equatable { case column, stacked(above: CGFloat, below: CGFloat), panes(seam: CGFloat, gutter: CGFloat) }
+    enum Mode: Equatable {
+        case column, stacked(above: CGFloat, below: CGFloat), panes(seam: CGFloat, gutter: CGFloat)
+        var kind: Int { switch self { case .column: 0; case .stacked: 1; case .panes: 2 } }
+    }
     var mode: Mode
+    // Folded on its side, the width the tab rail covers at the trailing edge: the right pane stops short of it.
+    var trail: CGFloat = 0
     // The page's own margins: the sides, the foot, the gap between the parts, and the display's bare outer edge open
     // flat, where the left pane gets the same air FoldSplit gives it.
     static let side: CGFloat = 12, foot: CGFloat = 8, gap: CGFloat = 8, outer: CGFloat = 14
@@ -372,7 +500,7 @@ struct SessionFoldLayout: Layout {
             } else { column() }
         case .panes(let seam, let gutter):
             screen = CGRect(x: Self.outer, y: 0, width: max(seam - gutter - Self.outer, 0), height: max(h - Self.foot, 0))
-            controls = CGRect(x: seam + gutter, y: 0, width: max(w - seam - gutter - Self.side, 0), height: max(h - Self.foot, 0))
+            controls = CGRect(x: seam + gutter, y: 0, width: max(w - trail - seam - gutter - Self.side, 0), height: max(h - Self.foot, 0))
         }
         subviews[0].place(at: CGPoint(x: b.minX + screen.minX, y: b.minY + screen.minY), proposal: ProposedViewSize(screen.size))
         subviews[1].place(at: CGPoint(x: b.minX + controls.minX, y: b.minY + controls.minY), proposal: ProposedViewSize(controls.size))

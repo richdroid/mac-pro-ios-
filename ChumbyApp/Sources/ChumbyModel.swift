@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import WidgetKit
+import Network
 #if canImport(UIKit)
 import UIKit
 typealias PlatformImage = UIImage
@@ -13,7 +14,27 @@ extension Image { init(platform i: NSImage) { self.init(nsImage: i) } }
 
 // A control's own failure, shown at that control and nowhere else.
 struct Failure: Equatable { let id: String; let text: String; let at: Date }
-enum AlarmMark: Equatable { case failed(head: String, why: String), landed(Date) }
+// retrying: a failed change sent again, its note kept in place ("Trying again…") so nothing moves unless it lands.
+enum AlarmMark: Equatable { case failed(head: String, why: String), retrying(head: String, why: String), landed(Date) }
+
+// Whether the phone has Wi-Fi at all right now. The Chumby's own address (ChumbyFallback) is on home's Wi-Fi, so off Wi-Fi
+// (cellular, 11-20) it can never answer, and trying it only cost the Tailscale route its turns. Its available interfaces,
+// not the path's own: with Tailscale on, the path is the tunnel, which sits on whichever of the two is under it. Until
+// the first answer it counts as Wi-Fi, so nothing is ruled out on a guess.
+final class WiFiWatch: @unchecked Sendable {
+    static let shared = WiFiWatch()
+    private let monitor = NWPathMonitor()
+    private let lock = NSLock()
+    private var wifi = true
+    var on: Bool { lock.lock(); defer { lock.unlock() }; return wifi }
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] p in
+            let w = p.availableInterfaces.contains { $0.type == .wifi }
+            self?.lock.lock(); self?.wifi = w; self?.lock.unlock()
+        }
+        monitor.start(queue: DispatchQueue(label: "chumby.wifi"))
+    }
+}
 
 
 @MainActor
@@ -28,7 +49,7 @@ final class ChumbyModel: ObservableObject {
     @Published var offline = false
     @Published var needsAddress = false
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
-    @Published var address: String { didSet { SavedAddress.save(address); api = Self.makeAPI(address); usingFallback = false; failures = 0 } }
+    @Published var address: String { didSet { SavedAddress.save(address); api = Self.makeAPI(address); usingFallback = false; troubleSince = nil; triedRoutes = []; lastMacTry = .distantPast } }
     @Published var failure: Failure?
     @Published var marks: [String: AlarmMark] = [:]
     @Published var dead = false        // the Mac answers, but the Chumby itself has gone quiet
@@ -47,6 +68,38 @@ final class ChumbyModel: ObservableObject {
     // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
     @Published var railWidth: CGFloat = 0
     @Published var addAlarm: Date?
+    // An alarm another page asked Alarms to open (by Alarm.key, or "Nap"): Home's card, tapped on a nap or a skipped ring.
+    @Published var openAlarm: String?
+    // The full-screen ringing page (ChumbyRing.swift): up when the ring's notification or its Lock Screen card is tapped,
+    // and by itself when the app is in front as an alarm starts to sound. `ringHint` is what the tap itself said, shown
+    // until the Chumby's own reading arrives.
+    @Published var ringScreen = false { didSet { if ringScreen != oldValue { RingPresenter.sync(self) } } }
+    var ringHint: ChumbyRingAttributes.ContentState?
+    // Counts the Chumby's fresh readings of what's ringing, so the ringing page can tell "not heard from yet" from "heard,
+    // and nothing is ringing".
+    @Published private(set) var ringReadings = 0
+    private var ringSwept = false
+    // When the Chumby last confirmed a Stop and a Snooze, whichever door the press came through (the app's own keys,
+    // the Lock Screen card, the notification, Siri): the desk's own note (RingDesk.note).
+    private var ringStoppedAt: Date? { RingDesk.confirmed(RingDesk.stoppedKey) }
+    private var ringSnoozedAt: Date? { RingDesk.confirmed(RingDesk.snoozedKey) }
+    // A Stop or Snooze on its way and not yet confirmed by the Chumby: Home's ringing card and the ringing page say
+    // "Stopping…" or "Snoozing…" with their keys dimmed, as the Lock Screen card does. Nil when nothing is pending.
+    @Published private(set) var ringWorking: String?
+    var ringStopping: Bool { ringWorking == "Stopping…" }
+    // One sentence everywhere for a press the Chumby took and hasn't confirmed (card, notification, app).
+    static let unconfirmed = "Sent. The Chumby hasn’t confirmed yet."
+    private var readingAt = Date()
+    // Opens the ringing page for a tap on the ring's notification or card. With a reading seconds old in hand that says
+    // nothing is ringing, there is no page to show: what was tapped is cleared away instead.
+    func openRing(hint: ChumbyRingAttributes.ContentState?) {
+        if sys.ringing == nil, !unreachable, let seen = seenAt, Date().timeIntervalSince(seen) < 8, running {
+            Task { await ChumbyRingCard.over() }
+            return
+        }
+        ringHint = hint
+        ringScreen = true
+    }
     // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
     // A page opening over Alarms gets anything parked at once (see parks).
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
@@ -60,6 +113,15 @@ final class ChumbyModel: ObservableObject {
     var editingAlarm = false { didSet { if editingAlarm { releaseHeld() } else if let s = heldAdopt { heldAdopt = nil; adopt(s) } } }
     private var heldAdopt: ChumbyState?
     var unreachable: Bool { offline || dead }
+    // One fact, said one way everywhere (2026-11-11 gate). "The Mac" only when the Mac is in the path.
+    // (Not switched by route: while failing, the app alternates routes every few seconds, and the words must hold still.)
+    var reachWords: String { dead ? "Not answering" : "Can’t reach the Mac" }
+    var reachInline: String { dead ? "the Chumby isn’t answering" : "can’t reach the Mac" }
+    // A reading failed and nothing has come through since: nothing is said yet, but kept values (the channel's name)
+    // show rather than waiting on a confirmation that may be a while.
+    @Published private(set) var struggling = false
+    // Heard from within the last 15 minutes, so what was kept is near enough to show without waiting.
+    var keptRecent: Bool { lastHeard.map { Date().timeIntervalSince($0) < 900 } ?? false }
     var seenAt: Date? { dead ? (lastSeen ?? lastHeard) : lastHeard }
     // It restarts itself within a few minutes of hanging (chwd on the device), so only then is it worth getting up.
     var deadText: String {
@@ -68,7 +130,16 @@ final class ChumbyModel: ObservableObject {
     }
     private var fallback: String { Bundle.main.object(forInfoDictionaryKey: "ChumbyFallback") as? String ?? "" }
     private var usingFallback = false
-    private var failures = 0
+    // Since when no reading has come through by any route, and which routes have been tried since. Nothing is said
+    // about it until it has lasted `patience` and every route has failed: opening the app on cellular, Tailscale takes a
+    // few seconds to wake, and the first request or two failing is normal. Richard, 2026-11-11: "i hate opening the app
+    // and getting an its offline message JANKYYY". A blip that recovers leaves nothing on screen.
+    private var troubleSince: Date?
+    private var triedRoutes: Set<Bool> = []
+    private var downSince: Date?
+    static let patience: TimeInterval = 25
+    // Retried every two seconds while in trouble, on whichever route is next, rather than at the route's usual pace.
+    var retrying: Bool { troubleSince != nil || downSince != nil }
     private var sysBytes = Data(), stateBytes = Data(), channelBytes = Data(), shotBytes = Data()
     private var sysHold = Date.distantPast, stateHold = Date.distantPast
     // The Chumby's own list as last read or saved, with nothing of ours laid over it.
@@ -87,6 +158,7 @@ final class ChumbyModel: ObservableObject {
     private static func cache(_ name: String) -> URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("chumby-" + name) }
 
     init() {
+        _ = WiFiWatch.shared
         let saved = SavedAddress.value
         address = saved
         // Kept in the Keychain from the first launch, so a reinstall finds it even if it was never typed.
@@ -113,7 +185,7 @@ final class ChumbyModel: ObservableObject {
     // Polled readings that came in while a page was moving under his finger, put on screen the moment it settles: a
     // row changing height under a page pulled past its end snaps it back instead of letting it spring (2026-11-08).
     // Only what's polled waits: his own saves, skips and channel choices go straight through, and so does a ring.
-    private var heldSys: (data: Data, fresh: Bool)?
+    private var heldSys: (data: Data, fresh: Bool, at: Date)?
     private var heldState: (data: Data, state: ChumbyState, recent: Bool)?
     private var heldChannels: (data: Data, list: ChannelList)?
     private var heldSongs: History?
@@ -125,7 +197,7 @@ final class ChumbyModel: ObservableObject {
     private var parks: Bool { ScrollHold.holding && stateConfirmed && !alarmsPage && !editingAlarm }
     private func releaseHeld() {
         if heldSys != nil || heldState != nil { SwipeLog.note("held readings landed") }
-        if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh) } }
+        if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh, takenAt: h.at) } }
         if let h = heldState { heldState = nil; if Date() >= stateHold { applyState(h.state, data: h.data, recent: h.recent) } }
         if let h = heldChannels { heldChannels = nil; applyChannels(h.list, data: h.data) }
         if let h = heldSongs { heldSongs = nil; applySongs(h) }
@@ -142,12 +214,27 @@ final class ChumbyModel: ObservableObject {
     func adoptFresh(_ s: ChumbyState) { stateConfirmed = true; adopt(s) }
 
     func start() {
+        let left = stoppedAt
         stop()
         running = true
+        ringSwept = false
         stateConfirmed = false      // it may have been hours; the list could have changed from elsewhere
+        // Opening starts afresh: what was kept is shown at once, and only a failure that lasts from here is mentioned.
+        // Back within five minutes of leaving with a verdict already said, it stands (a frozen Chumby must not look alive
+        // for half a minute each time the app is opened, from its own notification say) until a reading clears it.
+        let recentlyLeft = Date().timeIntervalSince(left) < 300
+        // Always from the Mac's route: one left on the Wi-Fi route at home was kept into the next opening on cellular,
+        // where every reading went to an address that can't answer there (11-20).
+        if usingFallback, let mac = Self.makeAPI(address) { usingFallback = false; api = mac }
+        lastMacTry = .distantPast
+        triedRoutes = []
+        troubleSince = recentlyLeft && offline ? .distantPast : nil
+        downSince = recentlyLeft && dead ? .distantPast : nil
+        if !recentlyLeft { staleReadings = 0; set(\.offline, false); set(\.dead, false) }
+        set(\.struggling, recentlyLeft && unreachable)
         loops = [
             // Through the Mac's cache these are cheap. Straight to the 64 MB Chumby they are not, so go far slower there.
-            Task { [weak self] in while !Task.isCancelled { await self?.loadSys(); try? await Task.sleep(nanoseconds: self?.direct == true ? 30_000_000_000 : 4_000_000_000) } },
+            Task { [weak self] in while !Task.isCancelled { await self?.loadSys(); try? await Task.sleep(nanoseconds: self?.retrying == true ? 2_000_000_000 : self?.direct == true ? 30_000_000_000 : 4_000_000_000) } },
             // On opening, the Mac's copy of the list is as old as the last visit; asking is what makes it read a new one,
             // which is there about two seconds later (measured 2026-11-10: 2.1 s). So an old answer is asked for again
             // in 0.7 s, a few times, and not at the next six-second turn: the list is confirmed in about 2.5 s after
@@ -163,7 +250,9 @@ final class ChumbyModel: ObservableObject {
             Task { [weak self] in await self?.loadChannels() },
         ]
     }
-    func stop() { running = false; loops.forEach { $0.cancel() }; loops = [] }
+    func stop() { running = false; loops.forEach { $0.cancel() }; loops = []; stoppedAt = Date() }
+    private var stoppedAt = Date.distantPast
+    private var lastChannelTry = Date.distantPast
     private(set) var running = false
     var direct: Bool { usingFallback }
     private let gate = OneAtATime()
@@ -178,20 +267,30 @@ final class ChumbyModel: ObservableObject {
     private func tryMacRoute() async {
         guard usingFallback, Date().timeIntervalSince(lastMacTry) > 60, let mac = Self.makeAPI(address) else { return }
         lastMacTry = Date()
-        if (try? await mac.raw("sys")) != nil, usingFallback { usingFallback = false; api = mac; failures = 0 }
+        if (try? await mac.raw("sys")) != nil, usingFallback { usingFallback = false; api = mac }
     }
     private var lastMacTry = Date.distantPast
     private var staleReadings = 0
 
     func loadSys() async {
-        guard let api else { needsAddress = true; return }
+        guard self.api != nil else { needsAddress = true; return }
         await tryMacRoute()
+        // The route as it is now: tryMacRoute may just have gone back to the Mac's. Taken before, the reading still went
+        // the old way and its failure was put down to the Mac's route, which then switched away from the one that worked.
+        guard let api else { return }
+        let onFallback = usingFallback
+        // Trouble is timed from when the first failing request was sent, not from its timeout 8 s later.
+        let began = Date()
         do {
             let r = try await fetch("sys", from: api)
-            // The cache stops refreshing when nobody is looking, so one old answer on opening means nothing.
+            // The cache stops refreshing when nobody is looking, so an old answer on opening means nothing; six in a row
+            // (about 25 s) does.
             staleReadings = r.age > 60 ? staleReadings + 1 : 0
             // Each set only when it changes: an unchanged value still republishes and redraws every tab.
-            failures = 0; set(\.offline, false); set(\.dead, staleReadings >= 3)
+            // The channel list is asked once per opening; one lost to the failure, or never kept, is asked for again now.
+            if struggling || (channelData == nil && Date().timeIntervalSince(lastChannelTry) > 30) { lastChannelTry = Date(); Task { await loadChannels() } }
+            troubleSince = nil; triedRoutes = []; downSince = nil
+            set(\.struggling, false); set(\.offline, false); set(\.dead, staleReadings >= 6)
             if r.age <= 60 { heard() }
             // A frozen Chumby mostly shows up here, as an old copy from the Mac, rather than as an error.
             set(\.lastSeen, dead ? (await api.lastSeen() ?? lastSeen) : nil)
@@ -200,23 +299,49 @@ final class ChumbyModel: ObservableObject {
             let fresh = r.age <= 10
             var s = try JSONDecoder().decode(Sys.self, from: r.data)
             if !fresh { s.ring = sys.ring }
+            // A copy taken before a Stop or a Snooze the Chumby has since confirmed still says "ringing": it isn't
+            // believed (RingReading; the Mac's copy can be ten seconds old).
+            s.ring = RingReading.believed(s.ring, shown: sys.ring, takenAt: Date().addingTimeInterval(-r.age), stoppedAt: ringStoppedAt, snoozedAt: ringSnoozedAt)
+            readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
-            if parks, s.ringing == sys.ringing { SwipeLog.note("sys held"); heldSys = (r.data, fresh); return }
+            if parks, s.ringing == sys.ringing { SwipeLog.note("sys held"); heldSys = (r.data, fresh, readingAt); return }
             SwipeLog.note("sys landed")
-            applySys(s, data: r.data, fresh: fresh)
+            applySys(s, data: r.data, fresh: fresh, takenAt: readingAt)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
-            failures = 0; set(\.offline, false); set(\.dead, true); staleReadings = 3
-            set(\.lastSeen, await api.lastSeen())
+            // The Mac answered and says the Chumby doesn't. Said only once that has lasted too: the Mac's own try can
+            // fail once while the Chumby is fine (a busy moment on the Mac, a dropped Wi-Fi packet).
+            troubleSince = nil; triedRoutes = []
+            let now = Date()
+            if downSince == nil { downSince = began }
+            set(\.struggling, true); set(\.offline, false)
+            if now.timeIntervalSince(downSince ?? now) >= Self.patience { set(\.dead, true); staleReadings = 6; set(\.lastSeen, await api.lastSeen()) }
         } catch {
             if Task.isCancelled { return }
-            failures += 1
-            if failures >= 2 { set(\.offline, true); switchRoute() }
+            // Something other than the Chumby's cache answered at the saved address: the address is wrong, not the
+            // network. The build's own one goes back in, and is asked at once.
+            if case ChumbyError.wrongPlace = error, !onFallback, healAddress() { return }
+            // No answer on this route: the other one at once, quietly. Only after `patience`, with both tried, is it said.
+            let now = Date()
+            if troubleSince == nil { troubleSince = began }
+            set(\.struggling, true)
+            triedRoutes.insert(onFallback)
+            // Another reading may already have moved on from the route that failed.
+            if onFallback == usingFallback { switchRoute() }
+            if now.timeIntervalSince(troubleSince ?? now) >= Self.patience, fallback.isEmpty || triedRoutes.count == 2 { set(\.offline, true) }
         }
     }
-    private func applySys(_ s: Sys, data: Data, fresh: Bool) {
+    private func applySys(_ s: Sys, data: Data, fresh: Bool, takenAt: Date) {
         sysBytes = fresh ? data : Data()
+        // A level he just set shows until a reading taken after it could have landed says otherwise (VolumeHold), the
+        // same rule for every reading, parked or not. While it shows over the reading, the same bytes are read again
+        // rather than skipped, so the Chumby's own level comes back if the hold lets go.
+        var s = s
+        if s.vol >= 0 { reportedVol = s.vol }
+        let v = VolumeHold.shown(reported: s.vol, takenAt: takenAt, hold: volumeHold, now: Date())
+        volumeHold = v.hold
+        if v.vol != s.vol { s.vol = v.vol; sysBytes = Data() }
         do {
             if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
             if s.ringing == nil, snoozedAt != nil { snoozedAt = nil }
@@ -224,8 +349,41 @@ final class ChumbyModel: ObservableObject {
             // An alarm just ended: what it woke him to goes into Pandora's history song by song, so "Woke up to" (and its
             // widget) reads it again soon after and a few times more, rather than waiting out the usual five minutes.
             if sys.ringing != nil, s.ringing == nil { songsAfterRing() }
+            // Snoozed on the Chumby, seen fresh: the phone's backup for that ring moves with it. A ring that's gone keeps
+            // its backup: it may have died rather than been stopped (11-19), and only a Stop here cancels it.
+            if fresh {
+                if let r = s.ringing, r.snoozed, sys.ringing?.snoozed != true {
+                    let mins = Double(state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
+                    let until = state.ringingNow?.until.flatMap { $0 > Date().timeIntervalSince1970 ? Date(timeIntervalSince1970: $0) : nil } ?? Date().addingTimeInterval(mins * 60)
+                    ChumbyBackupAlarm.shared.snoozed(name: r.name, until: until)
+                }
+            }
+            // What this phone saw of the ring, for "Woke up to": only fresh readings, never an old copy from the Mac.
+            if fresh {
+                if let r = s.ringing { RingSeen.saw(snoozed: r.snoozed, until: r.snoozed ? state.ringingNow?.until.flatMap { $0 > 0 ? $0 : nil } : nil) }
+                else if sys.ringing != nil || !sys.ring.isEmpty { RingSeen.quiet() }
+            }
+            if fresh {
+                // An alarm starting to sound (or sounding again after a snooze), read from the Chumby with the app in
+                // front: its page comes up by itself, over whatever is showing, since stopping it is what the phone is
+                // for just then. Only from a reading, never from a Stop or Snooze taken back; closed, it stays closed
+                // until the alarm next sounds. The build's posed shots keep their pages.
+                let sounding = s.ringing.map { !$0.snoozed } ?? false, before = sys.ringing.map { !$0.snoozed } ?? false
+                if sounding && !before && running && !ChumbyNotify.shared.staged { ringScreen = true }
+                // Nothing ringing: a card or notification left from a ring that ended where the phone wasn't told (stopped
+                // on the Chumby, the Mac's push not delivered) goes now. Once per opening and at each ring's end.
+                if s.ringing == nil, sys.ringing != nil || !ringSwept {
+                    ringSwept = true; ringHint = nil
+                    let asOf = readingAt
+                    Task { await ChumbyRingCard.sweep(asOf: asOf) }
+                }
+                ringReadings += 1
+            }
             // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
+            // Day or night changed on the Chumby itself (its own button, its schedule), seen here: the widget is told.
+            let nightChanged = s.night != sys.night && seenAt != nil
             if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
+            if nightChanged { nightChangedAt = Date(); WidgetCenter.shared.reloadAllTimelines() }
             try? data.write(to: Self.cache("sys"), options: .atomic)
         }
     }
@@ -240,8 +398,18 @@ final class ChumbyModel: ObservableObject {
     }
     // Tailscale off at home: go straight to the Chumby. Back the other way when that stops working.
     private func switchRoute() {
+        // Off Wi-Fi the Chumby's own address can't answer: it counts as tried, and the Mac's route keeps every turn.
+        if !usingFallback, !WiFiWatch.shared.on { triedRoutes.insert(true); return }
         guard !fallback.isEmpty, let next = Self.makeAPI(usingFallback ? address : fallback) else { return }
-        usingFallback.toggle(); api = next; failures = 0
+        usingFallback.toggle(); api = next
+    }
+    // The saved address answered 404 for the Chumby's path (the Mac's bridge, say): the build's own address instead.
+    // False when there's nothing better to go to.
+    private func healAddress() -> Bool {
+        let built = SavedAddress.builtIn
+        guard SavedAddress.usable(built), built != address, Self.makeAPI(built) != nil else { return false }
+        address = built
+        return true
     }
     // False when the answer was an old copy (the Mac is reading a new one), so the caller may ask again soon.
     @discardableResult
@@ -250,6 +418,8 @@ final class ChumbyModel: ObservableObject {
         // Only a recent reading counts: the cache can hand back a list from hours ago, and once a recent one has come in,
         // an older copy (the Mac's, just after a save) is never shown over it.
         let recent = r.age < 30
+        // Any recent answer is the Chumby reached: what was said about not reaching it goes at once, not at the next sys.
+        if recent, offline || troubleSince != nil, !dead { troubleSince = nil; triedRoutes = []; set(\.offline, false); set(\.struggling, false); heard() }
         if !recent && stateConfirmed { return false }
         if r.data == stateBytes { if recent, !stateConfirmed { stateConfirmed = true }; return recent }
         guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return true }
@@ -283,13 +453,15 @@ final class ChumbyModel: ObservableObject {
         }
         deviceState = s
         if !stateKnown { stateKnown = true }
+        // The phone's own backup alarm for each ring coming up (ChumbyBackupAlarm).
+        ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()), escalation: BackupPlan.Escalation(s.escalate))
         if let d = doubted, Self.skipAgrees(s.skipped, d) { doubted = nil; letGo("skip") }
         // A change that didn't get through, which the Chumby now matches anyway (put right on the Chumby, say), is done.
         pending.removeAll { p in
             guard p.failed != nil else { return false }
             var x = s; p.change.apply(&x)
             let done = ChumbyAPI.form(x.alarmForm()) == ChumbyAPI.form(s.alarmForm())
-            if done { marks[p.change.mark] = nil }
+            if done { clearNote(p.change.mark) }
             return done
         }
         relay()
@@ -373,7 +545,7 @@ final class ChumbyModel: ObservableObject {
     // Notes about whether tonight's alarm is as he left it (a skip or an undo the Chumby didn't confirm), and one that
     // arrives up to a minute after the tap (a station looked up), stay until he puts them away or the Chumby agrees:
     // one that cleared itself after six seconds was gone before a locked phone was looked at again.
-    static let keptNotes: Set<String> = ["skip", "pandora"]
+    static let keptNotes: Set<String> = ["skip", "pandora", "macmusic", "calsound"]
     @Published private(set) var kept: [String: String] = [:]
     func letGo(_ id: String) {
         if kept[id] != nil { withAnimation(.snappy) { kept[id] = nil } }
@@ -382,9 +554,7 @@ final class ChumbyModel: ObservableObject {
     // The ✕ for a note that stays; nil for one that clears itself.
     func dismissal(_ id: String) -> (() -> Void)? { kept[id] == nil ? nil : { [weak self] in self?.tick(); self?.letGo(id) } }
     func fail(_ id: String, _ text: String) {
-        #if canImport(UIKit)
-        Haptics.note.notificationOccurred(.error)
-        #endif
+        Haptic.fire(.warn)
         if Self.keptNotes.contains(id) { withAnimation(.snappy) { kept[id] = text }; return }
         // The note's row comes and goes in one spring, never in one frame.
         withAnimation(.snappy) { failure = Failure(id: id, text: text, at: Date()) }
@@ -392,6 +562,17 @@ final class ChumbyModel: ObservableObject {
         failureClear = Task { [weak self] in try? await Task.sleep(nanoseconds: 6_000_000_000); if !Task.isCancelled { withAnimation(.snappy) { self?.failure = nil } } }
     }
     func failed(_ id: String) -> String? { kept[id] ?? (failure?.id == id ? failure?.text : nil) }
+    func clearFail(_ id: String) { if failure?.id == id { withAnimation(.snappy) { failure = nil } } }
+    // A calm note, not a failure: no warning haptic, and it stays (with its ✕) until letGo, as the kept notes do.
+    func note(_ id: String, _ text: String) { withAnimation(.snappy) { kept[id] = text } }
+    // Nothing that reloads the Chumby's channel goes while an alarm rings, snoozes or is a minute or two from ringing (a
+    // channel's reload under a ring can cut it off; Richard, 2026-11-18). Nil when it's clear, else what's in the way, for
+    // the note: "Not while an alarm is ringing."
+    var alarmBusy: String? {
+        if let r = sys.ringing { return r.snoozed ? "an alarm is snoozing" : "an alarm is ringing" }
+        if let n = state.nextRing(), n.at.timeIntervalSinceNow < 150, n.at.timeIntervalSinceNow > -60 { return "the \(n.at.formatted(date: .omitted, time: .shortened)) alarm is about to ring" }
+        return nil
+    }
     func hold(_ seconds: Double = 8) { let until = Date().addingTimeInterval(seconds); sysHold = until; stateHold = until; sysBytes = Data(); stateBytes = Data() }
     func tick() {
         #if canImport(UIKit)
@@ -408,17 +589,84 @@ final class ChumbyModel: ObservableObject {
                 try await api?.cmd("night", v)
                 // Ending night mode also brings the screen back up, one after the other so neither gets lost.
                 if v == "off" { try await api?.cmd("screen", "bright") }
+                widgetsFollowNight()
             } catch {
                 fail("remote", "The Chumby didn’t get that. \(AlarmWriter.explain(error))")
                 sys.night = v == "off" ? 1 : 0
             }
         }
     }
-    func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) {
+    // Day or night changed from the app: the Home Screen widget is told, which it never was (Richard, 11-20: the widget
+    // "sometimes doesn't update" after night is switched to day in the app; it only caught up when iOS next refreshed
+    // it by itself). It reads the Mac's copy of the Chumby, which can be from before the change for some seconds, so
+    // it is told now and again once that copy is new, with the app kept awake for it if he has already left for the
+    // Home Screen; leaving the app within two minutes of a change tells it once more.
+    private var nightChangedAt: Date?
+    func widgetsFollowNight() {
+        nightChangedAt = Date()
+        WidgetCenter.shared.reloadAllTimelines()
+        #if canImport(UIKit)
+        var hold = UIBackgroundTaskIdentifier.invalid
+        hold = UIApplication.shared.beginBackgroundTask(withName: "Chumby widget follows night") { UIApplication.shared.endBackgroundTask(hold); hold = .invalid }
+        #endif
+        Task {
+            for wait in [4.0, 8.0] {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            #if canImport(UIKit)
+            if hold != .invalid { UIApplication.shared.endBackgroundTask(hold); hold = .invalid }
+            #endif
+        }
+    }
+    func widgetsOnLeaving() {
+        if let t = nightChangedAt, Date().timeIntervalSince(t) < 120 { WidgetCenter.shared.reloadAllTimelines() }
+    }
+    // The Chumby's volume, set from the phone (Sounds and Home's Playing card, the mute key): shown at once, held until the
+    // Chumby reports it, never sent under an alarm (the ring sets its own volume and puts his back after).
+    // Every place that shows or sets it (Home's Playing card, Sounds' Now, the mute key) goes through here and reads
+    // sys.vol, so they can't disagree. Shortcuts and Control Center use the same ChumbyAPI.setVolume.
+    private var volumeHold: VolumeHold?
+    // The level the Chumby itself last reported, for a send that didn't get through.
+    private var reportedVol = -1
+    // False when it wasn't sent (an alarm is ringing): the caller's slider goes back to the Chumby's level.
+    @discardableResult func setVolume(_ v: Int, id: String) -> Bool {
+        let level = min(max(v, 0), 100)
+        if let why = alarmBusy, sys.ringing != nil { fail(id, "Not while \(why)."); return false }
+        if reportedVol < 0 { reportedVol = sys.vol }
+        let sent = VolumeHold(level: level, sentAt: Date())
+        volumeHold = sent
+        if sys.vol != level { sys.vol = level }
+        tick()
+        hold(2)
+        // One send at a time, in order, and only the newest level: levels sent side by side could land out of order.
+        volumeWanted = (level, sent.sentAt, id)
+        if volumeSender == nil { volumeSender = Task { [weak self] in await self?.sendVolumes(); self?.volumeSender = nil } }
+        return true
+    }
+    private var volumeWanted: (level: Int, at: Date, id: String)?
+    private var volumeSender: Task<Void, Never>?
+    private func sendVolumes() async {
+        while let w = volumeWanted {
+            volumeWanted = nil
+            do { try await api?.setVolume(w.level, checkRing: false) } catch {
+                // Superseded by a newer level: that one goes, and says how it went.
+                guard volumeWanted == nil else { continue }
+                if case ChumbyError.refused(let why) = error { fail(w.id, why) }
+                else { fail(w.id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))") }
+                // Not taken: back to what the Chumby has.
+                if volumeHold?.sentAt == w.at { volumeHold = nil; if reportedVol >= 0 { sys.vol = reportedVol } }
+            }
+        }
+    }
+    // True once the Chumby took it, for a caller that says so.
+    @discardableResult func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) -> Task<Bool, Never> {
+        // The ones that reload or switch the channel wait out an alarm (alarmBusy).
+        if ["channel", "shuffle", "widget", "reload"].contains(c), let why = alarmBusy { fail(id, "Not while \(why)."); return Task { false } }
         tick()
         hold(holdFor)
-        Task {
-            do { try await api?.cmd(c, v) } catch { fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))") }
+        return Task {
+            do { try await api?.cmd(c, v); return true } catch { fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))"); return false }
         }
     }
     // A channel chosen to play, from Home or Channels. Kept here, so the channel editor moves to it whichever screen it came
@@ -426,6 +674,7 @@ final class ChumbyModel: ObservableObject {
     struct ChannelChoice: Equatable { let name: String; let at: Date }
     @Published var chosenChannel: ChannelChoice?
     func playChannel(_ name: String, id: String) {
+        if let why = alarmBusy { fail(id, "Not while \(why)."); return }
         state.channel = name
         let choice = ChannelChoice(name: name, at: Date())
         chosenChannel = choice
@@ -455,27 +704,126 @@ final class ChumbyModel: ObservableObject {
     // Stopped: the card is gone by opacity in its first 0.12 s, and only then does what was under it move up (a frame later,
     // for a slow one), so no control ever passes under its fading words.
     static let stopFade = 0.12
+    // Home's ringing card and the next alarm's gel change hands over this long, both at once.
+    static let slotFade = 0.2
     static let stopSpring = ringSpring.delay(stopFade + 1.0 / 60)
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
-    func ringOff() {
+    // A Stop or Snooze the Chumby has just confirmed, pressed somewhere other than this app's own keys (the Lock
+    // Screen's card, the notification, Siri) while the app is open: shown at once, in the same springs as its own. Its
+    // own presses (ringWorking set) show themselves.
+    func ringConfirmedElsewhere(stop: Bool, until: Double?) {
+        guard ringWorking == nil, let r = sys.ringing else { return }
+        if stop { withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }; ringHint = nil }
+        else if !r.snoozed { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() } }
+    }
+    func ringOff() { ringOffTask() }
+    // The same, for a page that waits on the answer (the ringing screen): true once the Chumby says it has stopped. It goes
+    // through the one desk the card, the notification and Siri use (RingDesk), so a press here and one on the Lock Screen
+    // are one press; the page holds "Stopping…" until the Chumby's own reading shows nothing ringing.
+    @discardableResult func ringOffTask() -> Task<Bool, Never> {
         #if canImport(UIKit)
         Haptics.medium.impactOccurred(); Haptics.medium.prepare()
         #endif
         let was = sys.ring
-        withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
-        hold(5)
-        Task { do { try await api?.cmd("ringoff") } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))") } }
+        hold(RingDesk.longest + 2)
+        let tapped = Date().timeIntervalSince1970
+        withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Stopping…" }
+        guard let api else { ringWorking = nil; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
+        return Task {
+            let out = await RingDesk.shared.press(.stop, send: { c in try await api.ring(c) }, read: { try await RingDesk.ringLine(api) })
+            // To the Mac's log with the Chumby's own word for how it went, as every other door's press is.
+            Task.detached { await ChumbyRingActions.report("app", "stop", out, since: Date(timeIntervalSince1970: tapped), backup: "the app’s own") }
+            hold(0)
+            withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
+            switch out {
+            case .confirmed, .nothingRinging:
+                withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
+                RingSeen.stopped(at: tapped)
+                // the phone's backup alarm for this ring goes with it (ChumbyBackupAlarm)
+                ChumbyBackupAlarm.shared.handled(name: was.components(separatedBy: "\t").dropFirst().first)
+                // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
+                await ChumbyRingCard.over()
+                Task { await ChumbyRingCard.handled() }
+                return true
+            case .unconfirmed:
+                // if the Mac reports the ring over within 3 minutes, this was his Stop and the backup goes then
+                ChumbyBackupAlarm.shared.stopUnconfirmed(name: was.components(separatedBy: "\t").dropFirst().first)
+                withAnimation(Self.ringSpring) { sys.ring = was }
+                fail("ring", Self.unconfirmed)
+                Task { await self.loadSys() }
+                return false
+            case .failed(let why):
+                withAnimation(Self.ringSpring) { sys.ring = was }
+                fail("ring", "Didn’t stop. \(why)")
+                return false
+            }
+        }
     }
-    func ringSnooze() {
+    func ringSnooze() { ringSnoozeTask() }
+    // Snooze: shown snoozed at once (the page's key answers the thumb), then by the Chumby's own time once it confirms.
+    @discardableResult func ringSnoozeTask() -> Task<Bool, Never> {
         tick()
         let was = sys.ring
-        if let r = sys.ringing { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)"; snoozedAt = Date() } }
-        hold(5)
-        Task { do { try await api?.cmd("ringsnooze") } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "The Chumby didn’t snooze. \(AlarmWriter.explain(error))") } }
+        // "Snoozing…" until the Chumby says so, then its own time: never a guessed "Snoozed until" (gate, 11-18).
+        withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Snoozing…" }
+        let began = Date()
+        hold(RingDesk.longest + 2)
+        guard let api else { ringWorking = nil; withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
+        return Task {
+            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.ring(c) }, read: { try await RingDesk.ringLine(api) })
+            Task.detached { await ChumbyRingActions.report("app", "snooze", out, since: began, backup: "the app’s own") }
+            // A Stop pressed while this Snooze was on its way has the card now ("Stopping…", its own hold on readings):
+            // whatever the Snooze came to, the Stop's answer is the one shown.
+            if ringStopping {
+                if case .confirmed(let until) = out {
+                    let end = until ?? snoozeEnds?.timeIntervalSince1970
+                    ChumbyBackupAlarm.shared.snoozed(name: was.components(separatedBy: "\t").dropFirst().first,
+                                                     until: end.map { Date(timeIntervalSince1970: $0) } ?? Date().addingTimeInterval(9 * 60))
+                    return true
+                }
+                return out == .nothingRinging
+            }
+            hold(0)
+            // "Snoozing…" giving way and the card turning snoozed are one change in the card's one spring, so Stop widens
+            // into Snooze's room with it rather than in a frame (gate, 11-18).
+            if case .confirmed = out {} else { withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil } }
+            switch out {
+            case .confirmed(let until):
+                withAnimation(Self.ringSpring) {
+                    ringWorking = nil
+                    if let r = sys.ringing { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() }
+                }
+                Task { await ChumbyRingCard.handled() }
+                let end = until ?? snoozeEnds?.timeIntervalSince1970
+                // the phone's backup alarm moves to the snooze's end plus its delay (ChumbyBackupAlarm)
+                ChumbyBackupAlarm.shared.snoozed(name: was.components(separatedBy: "\t").dropFirst().first,
+                                                 until: end.map { Date(timeIntervalSince1970: $0) } ?? Date().addingTimeInterval(9 * 60))
+                await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = end; $0.problem = nil }
+                await ChumbyRingCard.clearNotice()
+                return true
+            case .nothingRinging:
+                // a Snooze that found nothing ringing keeps the backup, as the Lock Screen's does (ChumbyRingActions.backupAfter)
+                withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
+                await ChumbyRingCard.over()
+                return true
+            case .unconfirmed:
+                withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }
+                fail("ring", Self.unconfirmed)
+                Task { await self.loadSys() }
+                return false
+            case .failed(let why):
+                withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }
+                fail("ring", "Didn’t snooze. \(why)")
+                return false
+            }
+        }
     }
     // When a snooze ends: the panel's own time when it reports one, else from when it began and that alarm's snooze length.
     var snoozeEnds: Date? {
         guard let r = sys.ringing, r.snoozed else { return nil }
+        // The hook's own line carries the time: "s<TAB>name<TAB>sound<TAB>rings again at EPOCH".
+        let f = sys.ring.components(separatedBy: "\t")
+        if f.count > 3, let u = Double(f[3]), u > Date().timeIntervalSince1970 { return Date(timeIntervalSince1970: u) }
         if let p = state.ringingNow, p.state == "snoozing", p.name == r.name, let u = p.until, u > Date().timeIntervalSince1970 { return Date(timeIntervalSince1970: u) }
         guard let snoozedAt else { return nil }
         let minutes = Double(state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
@@ -485,6 +833,27 @@ final class ChumbyModel: ObservableObject {
     // MARK: Alarms
     // Toggles and the alarm volume: shown at once, sent through the one careful save, marked if they don't get through.
     struct Pending { let id = UUID(); let change: AlarmChange; var failed: String? }
+    // When each note's retry began: "Trying again…" is held at least a second, so a fast failure never flashes it.
+    private var retryAt: [String: Date] = [:]
+    // Notes fading before their row closes: the words go first, then the rows below move up (no text over text).
+    @Published private(set) var fading: Set<String> = []
+    // Notes arriving: their row opens with the words held back, which come in once the rows below have stopped.
+    @Published private(set) var arriving: Set<String> = []
+    // A note leaving: fade its words (0.15 s), then close its row in one spring.
+    func clearNote(_ mark: String, then: AlarmMark? = nil) {
+        guard marks[mark] != nil, !fading.contains(mark) else { return }
+        if case .landed = marks[mark] { marks[mark] = nil; return }
+        let was = marks[mark]
+        withAnimation(.easeOut(duration: 0.15)) { _ = fading.insert(mark) }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 160_000_000)
+            guard let self, self.fading.contains(mark) else { return }
+            // Something newer arrived meanwhile (a fresh failure, a landing): it stays, its words faded back in.
+            guard self.marks[mark] == was else { withAnimation(.easeIn(duration: 0.15)) { _ = self.fading.remove(mark) }; return }
+            withAnimation(.snappy) { self.marks[mark] = then }
+            self.fading.remove(mark)
+        }
+    }
     private var pending: [Pending] = []
     func change(_ c: AlarmChange) {
         tick()
@@ -492,7 +861,7 @@ final class ChumbyModel: ObservableObject {
         pending.removeAll { $0.change.mark == c.mark }
         let p = Pending(change: c, failed: nil)
         pending.append(p)
-        marks[c.mark] = nil
+        clearNote(c.mark)
         relay()
         Task { await send(p.id) }
     }
@@ -500,7 +869,8 @@ final class ChumbyModel: ObservableObject {
         guard let i = pending.firstIndex(where: { $0.change.mark == mark }) else { return }
         tick()
         pending[i].failed = nil
-        marks[mark] = nil
+        // The note stays where it is while the change goes again: a note that left and came back was two jump cuts.
+        if case .failed(let head, let why) = marks[mark] { marks[mark] = .retrying(head: head, why: why); retryAt[mark] = Date() } else { marks[mark] = nil }
         relay()
         let id = pending[i].id
         Task { await send(id) }
@@ -510,7 +880,7 @@ final class ChumbyModel: ObservableObject {
     func dismiss(_ mark: String) {
         tick()
         pending.removeAll { $0.change.mark == mark }
-        withAnimation(.snappy) { marks[mark] = nil }
+        clearNote(mark)
         relay()
     }
     private func send(_ id: UUID) async {
@@ -526,12 +896,29 @@ final class ChumbyModel: ObservableObject {
             landed(r, mark: p.change.mark)
         } catch {
             guard let i = pending.firstIndex(where: { $0.id == id }) else { return }
-            pending[i].failed = AlarmWriter.explain(error)
-            marks[p.change.mark] = .failed(head: p.change.failHead, why: AlarmWriter.explain(error))
+            let why = p.change.explain(error)
+            pending[i].failed = why
+            let mark = p.change.mark
+            if case .retrying = marks[mark], let at = retryAt[mark] {
+                let left = 1.0 - Date().timeIntervalSince(at)
+                if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1e9)) }
+            }
+            retryAt[mark] = nil
+            // A new note: its row springs open with the words held back, and they fade in once the rows have stopped.
+            // After a retry its words change in place.
+            let new: Bool = { switch marks[mark] { case .failed, .retrying: return false; default: return true } }()
+            if new {
+                arriving.insert(mark)
+                withAnimation(.snappy) { marks[mark] = .failed(head: p.change.failHead, why: why) }
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 520_000_000)
+                    withAnimation(.easeIn(duration: 0.18)) { _ = self?.arriving.remove(mark) }
+                }
+            } else {
+                marks[mark] = .failed(head: p.change.failHead, why: why)
+            }
             relay()
-            #if canImport(UIKit)
-            Haptics.note.notificationOccurred(.error)
-            #endif
+            Haptic.fire(.warn)
         }
     }
     private func landed(_ r: AlarmWriter.Result, mark: String?) {
@@ -541,7 +928,10 @@ final class ChumbyModel: ObservableObject {
         stateHold = Date().addingTimeInterval(3)
         if let mark, r.saved {
             let at = Date()
-            marks[mark] = .landed(at); tick()
+            // A retried change landing takes its note away: words first, then the row (clearNote), the bubble after.
+            // then the landing bubble, as for any change that lands.
+            if case .retrying = marks[mark] { retryAt[mark] = nil; clearNote(mark, then: .landed(at)) } else { marks[mark] = .landed(at) }
+            Haptic.fire(.done)
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 1_400_000_000)
                 if self?.marks[mark] == .landed(at) { self?.marks[mark] = nil }
@@ -604,22 +994,31 @@ final class ChumbyModel: ObservableObject {
     // Kept on the phone too, so calendar alarms made before the Chumby has a set of its own ring this way.
     // Nil once it's saved or waiting for a ringing alarm to pass; otherwise why it couldn't be.
     func saveCalendarTemplate(_ t: Alarm) async -> String? {
+        // A newer pick takes over from one still waiting for a ringing alarm to pass: the older one must never go out
+        // after it, and what the screen shows if this one fails is what the Chumby held before the first of them.
+        calendarRetry?.cancel()
+        if heldCalendar == nil { calendarBefore = CalendarWake.shared.storedSettings }
         CalendarWake.shared.storedSettings = t
         heldCalendar = t
-        return await sendCalendarTemplate()
+        return await sendCalendarTemplate(silent: false)
     }
     private var heldCalendar: Alarm?
+    private var calendarBefore: Alarm?
+    // The pick the Chumby turned down, so the note's Retry can send it again (nil once it lands or is put away).
+    @Published private(set) var failedCalendarPick: Alarm?
+    func clearFailedCalendarPick() { failedCalendarPick = nil }
     private var calendarRetry: Task<Void, Never>?
     @Published var calendarWaiting = false
     @discardableResult
-    private func sendCalendarTemplate() async -> String? {
+    private func sendCalendarTemplate(silent: Bool) async -> String? {
         guard let t = heldCalendar, let api else { return nil }
         do {
             let r = try await AlarmWriter.shared.edit(api, quiet: true, force: true, template: { $0.alarms.contains { $0.isCalendar } }, permit: SavePermit()) { (s: inout ChumbyState) -> Void in
                 // A day with its own sound keeps it; the Chumby leaves those alone too.
                 for i in s.alarms.indices where s.alarms[i].isCalendar && !s.alarms[i].isOwn { s.alarms[i].takeSettings(from: t) }
             }
-            heldCalendar = nil; calendarWaiting = false
+            heldCalendar = nil; calendarBefore = nil; calendarWaiting = false
+            failedCalendarPick = nil
             landed(r, mark: nil)
             return nil
         } catch ChumbyError.waiting {
@@ -628,12 +1027,21 @@ final class ChumbyModel: ObservableObject {
             calendarRetry?.cancel()
             calendarRetry = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
-                if !Task.isCancelled { await self?.sendCalendarTemplate() }
+                if !Task.isCancelled { await self?.sendCalendarTemplate(silent: true) }
             }
             return nil
         } catch {
+            // Turned down: the pick is given up here, so no later retry can send what the screen takes back. What the
+            // Chumby held goes back as the stored set, and Retry (on the note) asks for the pick again.
+            let why = AlarmWriter.explain(error)
             calendarWaiting = false
-            return AlarmWriter.explain(error)
+            calendarRetry?.cancel()
+            CalendarWake.shared.storedSettings = calendarBefore
+            heldCalendar = nil; calendarBefore = nil
+            failedCalendarPick = t
+            // A silent retry has no caller waiting on the answer, so the note is raised here.
+            if silent { fail("calsound", why) }
+            return why
         }
     }
 
@@ -809,6 +1217,11 @@ final class ChumbyModel: ObservableObject {
     // A Pandora station added from its share link (a=pstation, chumby 9d3c1a1): the Chumby reads the station's number
     // from the link and its name from Pandora's own page, and adds it to the stations an alarm can play. Nothing of his
     // account is used. The Chumby answers at once and the result arrives in its state a few seconds later.
+    // A song the Mac's Music is playing on the Chumby (ChumbyMusic.swift), for the Now card.
+    @Published var macPlaying: MacPlaying?
+    // A song just chosen, until the Mac says the Chumby has it (about a quarter of a minute): the Now card shows it as
+    // starting, with no Stop yet.
+    @Published var macStarting: MacPlaying?
     @Published var addingStation = false
     @Published var stationAdded: String?
     func addPandora(_ link: String) async {

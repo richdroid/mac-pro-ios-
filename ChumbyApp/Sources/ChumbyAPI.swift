@@ -1,4 +1,5 @@
 import Foundation
+import WidgetKit
 import Security
 
 // The Chumby's own CGI API. Reads are open on the network; writes need the device's token.
@@ -193,8 +194,8 @@ struct ChumbyState: Decodable {
     var channelNames: [String] = []
     var widgetNames: [String] = []
     var mine: [MineWidget] = []
-    // Alarms that came due while it was frozen, off or restarting.
-    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; let name: String; var id: String { "\(at) \(name)" } }
+    // Alarms that came due while it was frozen, off or restarting; `silent`: it rang, but the Chumby heard no sound from it.
+    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; var silent: Bool? = nil; let name: String; var id: String { "\(at) \(name)" } }
     var missed: [Missed] = []
     // The one set of settings every calendar alarm rings with, once one has been saved as it. Null until then.
     var calTpl: Alarm?
@@ -214,6 +215,8 @@ struct ChumbyState: Decodable {
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
     var now: Double?
     var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
+    // The ring watch's escalation, [FIRST, AGAIN] seconds (/psp/alarm_escalate); nil from a Chumby that doesn't say.
+    var escalate: [Int]?
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
@@ -249,13 +252,14 @@ struct ChumbyState: Decodable {
         song = (try? c.decodeIfPresent(Song.self, forKey: .song)) ?? nil
         rang = (try? c.decodeIfPresent(Ring.self, forKey: .rang)) ?? nil
         musicPlaying = ((try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil)?.playing ?? false
+        escalate = (try? c.decodeIfPresent([Int].self, forKey: .escalate)) ?? nil
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, pandoraAdd, local, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
+    enum Key: String, CodingKey { case escalate, missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, pandoraAdd, local, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
 }
 
 // The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
@@ -289,8 +293,8 @@ struct RingReport: Decodable, Equatable {
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.
-struct ChannelList: Decodable {
-    struct Channel: Decodable { let id: String; let list: [[String]]; let conf: [[String]] }
+struct ChannelList: Decodable, Equatable {
+    struct Channel: Decodable, Equatable { let id: String; let list: [[String]]; let conf: [[String]] }
     let cur: String?; let channels: [Channel]; let names: [[String]]?
 }
 
@@ -302,6 +306,9 @@ enum ChumbyWords {
 
 enum ChumbyError: LocalizedError {
     case message(String), deviceDown, waiting(String)
+    // Something answered at the address, but not the Chumby or its cache (a 404 for the Chumby's own path): the address
+    // is wrong, not the network. ChumbyModel puts the build's own address back rather than calling the Chumby unreachable.
+    case wrongPlace
     // A save AlarmWriter turned down because it would have cost an alarm that's about to ring. Never retried on its own.
     case refused(String)
     var errorDescription: String? {
@@ -309,6 +316,7 @@ enum ChumbyError: LocalizedError {
         case .message(let m), .refused(let m): return m
         case .waiting(let why): return "Waiting: \(why)."
         case .deviceDown: return ChumbyWords.notAnswering + "."
+        case .wrongPlace: return "No answer"
         }
     }
 }
@@ -328,6 +336,7 @@ actor ChumbyAPI {
         guard let h = resp as? HTTPURLResponse else { throw ChumbyError.message("No answer") }
         // The Mac answered, but says the Chumby itself isn't responding.
         if h.statusCode == 502 { throw ChumbyError.deviceDown }
+        if h.statusCode == 404 { throw ChumbyError.wrongPlace }
         guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
         return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)
     }
@@ -394,9 +403,9 @@ actor ChumbyAPI {
     static func form(_ pairs: [(String, String)]) -> String { pairs.map { enc($0.0) + "=" + enc($0.1) }.joined(separator: "&") }
 
     @discardableResult
-    func post(_ action: String, extra: String = "", body: String = "") async throws -> [String: Any] {
+    func post(_ action: String, extra: String = "", body: String = "", timeout: TimeInterval = 15) async throws -> [String: Any] {
         let t = try await getToken()
-        var r = URLRequest(url: url("a=\(action)&t=\(t)\(extra)")); r.httpMethod = "POST"; r.timeoutInterval = 15
+        var r = URLRequest(url: url("a=\(action)&t=\(t)\(extra)")); r.httpMethod = "POST"; r.timeoutInterval = timeout
         r.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); r.httpBody = Data(body.utf8)
         let (data, _) = try await URLSession.shared.data(for: r)
         let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -408,6 +417,104 @@ actor ChumbyAPI {
     }
     func cmd(_ c: String, _ v: String? = nil) async throws {
         try await post("cmd", extra: "&c=\(c)" + (v.map { "&v=" + ChumbyAPI.enc($0) } ?? ""))
+    }
+    // Stop or Snooze (cmd ringoff / ringsnooze), with the Chumby's own answer kept (chalarm, 11-20): it now waits for
+    // its panel's line to change and says {ok, done, how, ring}, or ok:false "still ringing". It can take 7 s, and the
+    // Mac's relay asks once more itself, so it is given longer than any other command.
+    func ring(_ c: String) async throws -> RingAnswer {
+        RingAnswer(try await post("cmd", extra: "&c=\(c)", timeout: 22))
+    }
+    // The one way the Chumby's listening volume (0-100, its /psp/volume) is set, from the app, Shortcuts and Control
+    // Center alike. Never under an alarm: the ring sets its own volume and puts his back after, so a level sent then is
+    // lost. `checkRing` reads the Chumby first; the app, which already knows, passes false.
+    func setVolume(_ v: Int, checkRing: Bool = true) async throws {
+        if checkRing, let r = try? await raw("sys"), let s = try? JSONDecoder().decode(Sys.self, from: r.data), r.age < 30, let ring = s.ringing {
+            throw ChumbyError.refused(ring.snoozed ? "Not while an alarm is snoozing." : "Not while an alarm is ringing.")
+        }
+        // The Chumby refuses it too while one rings or snoozes (409 "an alarm is ringing"), said the same way.
+        do { try await cmd("volume", String(min(max(v, 0), 100))) }
+        catch ChumbyError.message(let m) where m.hasPrefix("an alarm is") { throw ChumbyError.refused("Not while \(m).") }
+    }
+}
+
+// The Chumby's answer to a Stop or Snooze (chalarm since 11-20): `done` true once its panel's own line changed, `how`
+// the way it went (the hook's own stop, the tap, "nothing ringing"), `ring` that line as it now stands. An older
+// Chumby answers a bare ok at once, before anything has happened: all three are then nil.
+struct RingAnswer: Sendable, Equatable {
+    var done: Bool?
+    var how: String?
+    var ring: String?
+    init(done: Bool? = nil, how: String? = nil, ring: String? = nil) { self.done = done; self.how = how; self.ring = ring }
+    init(_ j: [String: Any]) { done = j["done"] as? Bool; how = j["how"] as? String; ring = j["ring"] as? String }
+    enum Read: Equatable {
+        case confirmed(until: Double?), nothingRinging
+        // Not said yet: the Chumby's line is read until it is.
+        case wait
+    }
+    // What the answer says of the press. Only `done` with a line that agrees counts: a Stop whose line still shows the
+    // alarm, or a Snooze whose line still says ringing, is waited on like any other.
+    func read(stop: Bool) -> Read {
+        guard done == true else { return .wait }
+        if how == "nothing ringing" { return .nothingRinging }
+        guard let ring else { return .confirmed(until: nil) }
+        var sys = Sys(); sys.ring = ring
+        guard let r = sys.ringing else { return stop ? .confirmed(until: nil) : .nothingRinging }
+        guard !stop, r.snoozed else { return .wait }
+        let f = ring.components(separatedBy: "\t")
+        return .confirmed(until: f.count > 3 ? Double(f[3]).flatMap { $0 > 0 ? $0 : nil } : nil)
+    }
+    // "still ringing": the Chumby tried and its alarm went on. Asked once more, never a third time.
+    static func stillRinging(_ error: Error) -> Bool {
+        if case ChumbyError.message(let m) = error { return m.lowercased().contains("still ringing") }
+        return false
+    }
+    // How long its line is read for, and how often: each second for 10 s after a `done:false`; an older Chumby, which
+    // answers before anything has happened, in shorter steps for the 14 s it was always given.
+    var step: TimeInterval { done == nil ? 0.6 : 1 }
+    var wait: TimeInterval { done == nil ? 14 : 10 }
+}
+
+// What a reading's ring line is taken to say, given when the Chumby last confirmed a Stop and a Snooze (RingDesk.note).
+// The Mac's copy of the Chumby's status can be ten seconds old, so one taken before a confirmation still says
+// "ringing": believed, it put the ringing card and page back over an alarm just stopped, or "Ringing" and the Snooze
+// key back over a snooze the Chumby had confirmed (11-20). Only a copy taken after the confirmation (and the two
+// seconds the Chumby's own note of it can take) says anything about the ring.
+enum RingReading {
+    static let margin: TimeInterval = 2
+    // `line`: the reading's ring line; `shown`: the one on screen; `takenAt`: when the reading was taken.
+    static func believed(_ line: String, shown: String, takenAt: Date, stoppedAt: Date?, snoozedAt: Date?) -> String {
+        var read = Sys(); read.ring = line
+        guard let r = read.ringing else { return line }
+        if let t = stoppedAt, takenAt < t.addingTimeInterval(margin) { return "" }
+        var now = Sys(); now.ring = shown
+        if !r.snoozed, now.ringing?.snoozed == true, let t = snoozedAt, takenAt < t.addingTimeInterval(margin) { return shown }
+        return line
+    }
+}
+
+// A level he just set, held on screen until the Chumby confirms it (Richard, 11-19: the volume "still fucked", the slider
+// didn't stick). The panel takes the level about a second after the command, and the Mac's copy of `sys` can be ten
+// seconds old, so readings taken before the level could have landed say nothing either way and the held level shows.
+// A reading taken after that which says the level is in confirms it; two that say otherwise (the Chumby really is
+// elsewhere: the command was lost, or something put the volume back) are believed, as is anything once `patience` is up.
+// Before this, the hold went by when the reading arrived, not when it was taken, and readings parked while a page moved
+// skipped it altogether, so an old level came back after the slider had been let go.
+struct VolumeHold: Equatable {
+    static let settle: TimeInterval = 4, patience: TimeInterval = 20
+    let level: Int, sentAt: Date
+    var doubtedAt: Date?
+    init(level: Int, sentAt: Date) { self.level = level; self.sentAt = sentAt }
+    // The level to show for a reading of `reported` taken at `takenAt`, and the hold still to keep (nil: let go).
+    static func shown(reported: Int, takenAt: Date, hold: VolumeHold?, now: Date) -> (vol: Int, hold: VolumeHold?) {
+        guard var h = hold else { return (reported, nil) }
+        // Only a reading taken after the send confirms it: going 30, 0, 30, an old copy saying 30 isn't the new 30.
+        if reported == h.level, takenAt >= h.sentAt { return (reported, nil) }
+        if now.timeIntervalSince(h.sentAt) >= patience { return (reported, nil) }
+        if takenAt < h.sentAt.addingTimeInterval(settle) || reported < 0 || reported == h.level { return (h.level, h) }
+        // The same copy served twice is one reading, not two.
+        if let d = h.doubtedAt, takenAt.timeIntervalSince(d) >= 1 { return (reported, nil) }
+        if h.doubtedAt == nil { h.doubtedAt = takenAt }
+        return (h.level, h)
     }
 }
 
@@ -729,17 +836,65 @@ extension ChumbyState {
 // install of the same app (a TestFlight build replacing a Mac-signed one, or the app deleted and put back) starts with
 // empty settings, but the Keychain keeps its items for the same team and bundle, so the address comes back on its own
 // (Richard, 2026-11-10: "make sure that doesnt happen in the future").
+//
+// Its own Keychain item since 2026-11-20. The old one ("local.macpro.address", account "address") is the same item the
+// Mac Pro and TV apps keep their address in, and the App Store signing gives every app the team's whole Keychain (the
+// profile's "TEAM.*" group, store-sign.sh), so the apps read and replaced each other's. The Chumby app took the Mac Pro
+// app's bridge address as its own and sent every reading there (the bridge's log: GET /cgi-bin/custom/app 404, in bursts
+// whenever the app was open). At home its Wi-Fi route straight to the Chumby hid it; on cellular it said "Can't reach the
+// Mac" while the Chumby's cache was answering (Richard, 11-20: "proxy reliability is like the most important thing").
+// The old item is never read, written or deleted from here again, and the Mac's bridge is never taken for the Chumby's.
 enum SavedAddress {
-    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
-    // Settings first, then the Keychain, then the address baked into this build.
+    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.chumby.address", kSecAttrAccount as String: "address"]
+    static var builtIn: String { Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "" }
+    // Settings first, then the Keychain, then the address baked into this build; never one that is the Mac's bridge.
     static var value: String {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
-        if !stored.isEmpty { return stored }
-        if let k = keychain(), !k.isEmpty { return k }
-        return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
+        for a in [stored, sharedValue() ?? "", keychain() ?? ""] where usable(a) { return a }
+        return builtIn
+    }
+    static func usable(_ a: String) -> Bool { !a.trimmingCharacters(in: .whitespaces).isEmpty && !isMacBridge(a) }
+    // The Mac's own bridge (MacAddress, baked at signing): it has no Chumby path, so an address naming it is a mix-up.
+    static func isMacBridge(_ a: String) -> Bool {
+        guard let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String, let m = URL(string: mac), let mh = m.host,
+              let u = URL(string: a.trimmingCharacters(in: .whitespaces)), let uh = u.host else { return false }
+        func port(_ x: URL) -> Int { x.port ?? (x.scheme == "https" ? 443 : 80) }
+        return mh.lowercased() == uh.lowercased() && port(m) == port(u)
+    }
+    // The address shared with this app's widgets, controls and share sheet: a Keychain item in the app's shared access
+    // group ("<team>.local.macpro.Chumby.shared"), which the TestFlight signing (store-sign.sh) gives the app and each of
+    // its extensions. Their own settings and Keychain are their own, so before this they only ever had the address
+    // baked into the build. No group (a simulator build, no team in the bundle id): nil, and nothing changes.
+    static var sharedGroup: String? {
+        // The team, as the signing writes it into Info.plist (AppIdentifierPrefix, "TEAM."), else from the bundle id it gives.
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) else { return nil }
+        return "\(team).local.macpro.Chumby.shared"
+    }
+    static func sharedValue() -> String? {
+        guard let g = sharedGroup else { return nil }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+    static func share(_ s: String) {
+        guard let g = sharedGroup, sharedValue() != s else { return }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        SecItemDelete(q as CFDictionary)
+        guard !s.isEmpty else { return }
+        q[kSecValueData as String] = Data(s.utf8)
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // The widgets redraw with the new address rather than at their next refresh.
+        if SecItemAdd(q as CFDictionary, nil) == errSecSuccess { WidgetCenter.shared.reloadAllTimelines() }
     }
     static func save(_ s: String) {
         UserDefaults.standard.set(s, forKey: "address")
+        share(s)
         guard keychain() != s else { return }
         SecItemDelete(base as CFDictionary)
         guard !s.isEmpty else { return }

@@ -15,7 +15,17 @@ struct TitleInfo: Decodable {
     var background: String?
     var poster: String?
     var videos: [Video]?
-    struct Video: Decodable { var season: Int?; var episode: Int?; var number: Int? }
+    struct Video: Decodable {
+        var id: String?; var season: Int?; var episode: Int?; var number: Int?
+        var name: String?; var title: String?; var thumbnail: String?; var overview: String?; var description: String?
+    }
+    // The show's episodes as the picker lists them (specials last), straight from the catalogue.
+    var episodeList: [StremioEpisode] {
+        (videos ?? []).compactMap { v in
+            guard let id = v.id, let s = v.season, let e = v.episode ?? v.number else { return nil }
+            return StremioEpisode(id: id, season: s, episode: e, name: v.name ?? v.title ?? "", thumb: v.thumbnail ?? "", runtime: nil, overview: v.overview ?? v.description)
+        }.sorted { ($0.season == 0 ? Int.max : $0.season, $0.episode) < ($1.season == 0 ? Int.max : $1.season, $1.episode) }
+    }
     // "1995 · 2 h 50 min · Crime, Drama"
     var facts: String {
         var parts: [String] = []
@@ -90,8 +100,29 @@ struct TitleInfoPage: View {
     var fromFlick = false
     @State private var info: TitleInfo?
     @State private var failed = false
+    @State private var posterPlace = FrameBox()
     var ref: (type: String, imdb: String, video: String?)? { item.stremioRef }
+    @State private var season = 1
+    @State private var seriesInfo: SeriesInfo.Info?
+    // Where he is in the show, from Stremio's Continue watching, if it knows.
+    @State private var resumeFrom: MediaItem?
+    var episodes: [StremioEpisode] { info?.episodeList ?? [] }
+    // The episode to carry on with: the one he's on, or the one after it once that's all but done, else the first.
+    var resume: StremioEpisode? {
+        let all = episodes
+        let from = resumeFrom?.stremioRef?.video ?? ref?.video
+        if let id = from, let e = all.first(where: { $0.id == id }) {
+            if (resumeFrom?.progress ?? 0) > 0.9, let n = NextUp.after(e, in: all) { return n }
+            return e
+        }
+        return all.first { $0.season > 0 } ?? all.first
+    }
+    var resumeLabel: String { resumeFrom != nil && resume?.id == resumeFrom?.stremioRef?.video ? "Resume" : resumeFrom == nil ? "Play" : "Up next" }
+    func episodeItem(_ e: StremioEpisode) -> MediaItem {
+        NextUp.item(NextUp.Series(imdb: ref?.imdb ?? "", title: item.title, art: item.art, current: ""), e)
+    }
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
@@ -113,33 +144,28 @@ struct TitleInfoPage: View {
                     }
                     if let cast = info?.cast, !cast.isEmpty { fact("With", cast.prefix(6).joined(separator: ", ")) }
                     if let d = info?.director, !d.isEmpty { fact("Directed by", d.joined(separator: ", ")) }
-                    if let s = info?.seasons, !s.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(s.count == 1 ? "1 season" : "\(s.count) seasons").font(.headline)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(s, id: \.season) { x in
-                                        VStack(spacing: 2) {
-                                            Text("Season \(x.season)").font(.subheadline.weight(.semibold))
-                                            Text(x.episodes == 1 ? "1 episode" : "\(x.episodes) episodes").font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        .padding(.horizontal, 14).padding(.vertical, 9)
-                                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                    }
-                                }
-                                .padding(.horizontal, 22)
-                            }
-                            // The chips' row runs to the page's edges like every row, its padding inside it.
-                            .padding(.horizontal, -22)
-                        }
-                    }
                 }
                 .padding(.horizontal, 22)
                 .settledAnimation(.easeOut(duration: 0.25), value: info == nil)
+                // A show's page is its episode chooser: the seasons as the pivot, that season's episodes below, each one
+                // tapped to choose its stream or held and flicked to the TV. Inset like the text, so nothing runs under the rail.
+                if ref?.type == "series", !episodes.isEmpty {
+                    EpisodePicker(episodes: episodes, season: $season, current: resume?.id, currentLabel: resumeLabel,
+                                  progress: resume?.id == resumeFrom?.stremioRef?.video ? resumeFrom?.progress : nil, info: seriesInfo,
+                                  choose: { e in model.tick(); FlickCardButton.tap(model, episodeItem(e), source); dismiss() },
+                                  flickItem: { episodeItem($0) })
+                        .padding(.horizontal, 22)
+                }
             }
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
+        // To the episode he'd carry on with, once the list and his place in it are known.
+        .onChange(of: resume?.id) { _, id in
+            guard let id else { return }
+            Task { try? await Task.sleep(nanoseconds: 120_000_000); proxy.scrollTo(id, anchor: .center) }
+        }
+        }
         // The page runs under the bar to the top of the glass, so the picture is the first thing there and the system's
         // Back floats on it, as in Apple's own TV app. Inset, the page began under the bar instead, leaving a flat band
         // of the app's background between the glass edge and the picture in every posture (tv17's details shots: 23 pt
@@ -151,7 +177,7 @@ struct TitleInfoPage: View {
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if abs(pageHeight - $0) > 0.5 { pageHeight = $0 } } }
         // The key in the page's foot inset: the page scrolls above it, never under it.
         .safeAreaInset(edge: .bottom) {
-            if !fromFlick {
+            if !fromFlick && !(ref?.type == "series" && !episodes.isEmpty) {
                 Button {
                     model.tick()
                     // The flick's screen opens over everything, so this page can go back under it at once.
@@ -180,9 +206,19 @@ struct TitleInfoPage: View {
             guard let ref else { failed = true; return }
             // Reading about it is the moment before choosing it: its streams are asked for now, so they're there.
             StreamCache.shared.prefetch(item)
-            if let c = TitleInfoStore.cached(ref.type, ref.imdb) { info = c; return }
-            let i = await TitleInfoStore.load(ref.type, ref.imdb)
-            withAnimation(.easeOut(duration: 0.25)) { info = i; failed = i == nil }
+            if ref.type == "series" {
+                seriesInfo = SeriesInfo.cached(ref.imdb)
+                Task { let i = await SeriesInfo.load(ref.imdb); withAnimation(.easeOut(duration: 0.2)) { seriesInfo = i } }
+                // Where he is in it: Stremio's Continue watching, once in.
+                let home = BrowseStore.shared(.stremio)
+                if home.rows.isEmpty { await home.load() }
+                resumeFrom = home.rows.first { $0.title == "Continue watching" }?.items.first { $0.stremioRef?.imdb == ref.imdb }
+            }
+            if let c = TitleInfoStore.cached(ref.type, ref.imdb) { info = c } else {
+                let i = await TitleInfoStore.load(ref.type, ref.imdb)
+                withAnimation(.easeOut(duration: 0.25)) { info = i; failed = i == nil }
+            }
+            if let r = resume { season = r.season }
         }
     }
     // The wide picture across the top, edge to edge under the clock and the side strip, no taller than 360 pt open; the
@@ -199,8 +235,11 @@ struct TitleInfoPage: View {
                 .ignoresSafeArea(edges: [.top, .horizontal])
             Art(url: URL(string: info?.poster ?? item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
                 .frame(width: 84, height: 126).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .measured(posterPlace)
                 .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
                 .padding(.leading, 22).offset(y: 30)
+                // Held, the poster lifts off the page and goes to the TV like any card; the key at the foot stays the tap.
+                .modifier(InfoPosterFlick(item: item, source: source, place: posterPlace, on: !fromFlick))
         }
         .padding(.bottom, 30)
     }
@@ -209,6 +248,12 @@ struct TitleInfoPage: View {
             Text(label).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             Text(value).font(.subheadline)
         }
+    }
+}
+private struct InfoPosterFlick: ViewModifier {
+    let item: MediaItem, source: MediaSource, place: FrameBox, on: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if on { content.modifier(RowFlick(item: item, source: source, width: 84, place: place)) } else { content }
     }
 }
 private struct PlaceholderLines: View {

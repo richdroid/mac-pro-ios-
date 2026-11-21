@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import WidgetKit
 import Security
 import SwiftUI
 #if canImport(UIKit)
@@ -31,8 +32,8 @@ struct TVStatus: Decodable, Equatable {
         // "S3 E4 · Notapusy", from the Mac's fields, else read off the player's second line. Nil for a film.
         var episodeLine: String? {
             if let s = season, let e = episode {
-                let t = episodeTitle ?? ""
-                return "S\(s) E\(e)" + (t.isEmpty ? "" : " · " + t)
+                let t = Wording.episodeName(episodeTitle ?? "", number: e)
+                return "S\(s) E\(e)" + (t.map { " · " + $0 } ?? "")
             }
             // A YouTube video's second line is its channel, not an episode (r35: "Lil B" set as the title, the video's own
             // name as the small line over it).
@@ -129,8 +130,16 @@ struct TVStatus: Decodable, Equatable {
         }
         var glyph: String { self == .off ? "moon.fill" : "rectangle.2.swap" }
     }
+    // The box is awake and the television has said it's coming on (a Sony takes 12 to 20 s, black all the while). Said
+    // in the one line where "Asleep" was, so the seconds after "Wake the TV" or the power key aren't a silence in which
+    // a second press looks needed (that press used to turn it off again; the Mac now leaves it alone, 11-14).
+    var comingOn: Bool { online && screen != "asleep" && cec?.enabled == true && cec?.tv == "waking" }
+    static let comingOnLine = "Coming on"
     var away: Away? {
         guard online, screen != "asleep", let c = cec, c.enabled else { return nil }
+        // Coming on, the Sony shows its last input for a few seconds before it takes the box's: that is not him on
+        // another input, and "On PlayStation 5" with its key must not flash up and go (seen on the line, 11-11).
+        if c.tv == "waking" { return nil }
         if c.tv == "off" || c.tv == "sleeping" { return .off }
         if c.input == "other" { return .elsewhere(c.source?.isEmpty == false ? c.source : nil) }
         if c.input == "tv" { return .elsewhere(nil) }
@@ -161,7 +170,19 @@ enum Wording {
         let head = s[r], digits = head.split(whereSeparator: { !$0.isNumber })
         guard digits.count == 2 else { return s }
         let rest = s[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " ·:-–—"))
-        return "S\(digits[0]) E\(digits[1])" + (rest.isEmpty ? "" : " · " + rest)
+        let name = episodeName(rest, number: Int(digits[1]))
+        return "S\(digits[0]) E\(digits[1])" + (name.map { " · " + $0 } ?? "")
+    }
+    // An episode's own name, without the "Episode 2" a catalogue puts in front of it or in place of one: "Episode 2: The
+    // One Where…" is "The One Where…", and "Episode 2" alone is no name at all (gate 276: the hero said "Episode 2", its
+    // row "Episode 2: The One Where…"). The number is said by whatever shows the name.
+    static func episodeName(_ s: String, number: Int?) -> String? {
+        var t = s.trimmingCharacters(in: .whitespaces)
+        if let r = t.range(of: #"^(?i:episode|ep\.?)\s*(\d+)"#, options: .regularExpression) {
+            let n = Int(t[r].filter(\.isNumber))
+            if number == nil || n == number { t = t[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " ·:-–—.")) }
+        }
+        return t.isEmpty ? nil : t
     }
 }
 
@@ -171,25 +192,63 @@ enum Wording {
 // (Richard, 2026-11-10: "make sure that doesnt happen in the future").
 enum SavedAddress {
     private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
+    // This app's own item, since 2026-11-20. The old unscoped one ("local.macpro.address") is shared by every app of the
+    // team, because the App Store signing gives each the team's whole Keychain (the profile's "TEAM.*"): the Chumby app
+    // read this app's bridge address from it as its own, and its saves replaced this app's. The shared group above is
+    // this app's alone and keeps its old name, which the share sheet reads.
+    private static let own: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.tv.address", kSecAttrAccount as String: "address"]
     // Settings first, then the Keychain, then the address baked into this build.
     static var value: String {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
         if !stored.isEmpty { return stored }
+        if let k = sharedValue(), !k.isEmpty { return k }
         if let k = keychain(), !k.isEmpty { return k }
         return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
     }
+    // The address shared with this app's widgets, controls and share sheet: a Keychain item in the app's shared access
+    // group ("<team>.local.macpro.TV.shared"), which the TestFlight signing (store-sign.sh) gives the app and each of
+    // its extensions. Their own settings and Keychain are their own, so before this they only ever had the address
+    // baked into the build. No group (a simulator build, no team in the bundle id): nil, and nothing changes.
+    static var sharedGroup: String? {
+        // The team, as the signing writes it into Info.plist (AppIdentifierPrefix, "TEAM."), else from the bundle id it gives.
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) else { return nil }
+        return "\(team).local.macpro.TV.shared"
+    }
+    static func sharedValue() -> String? {
+        guard let g = sharedGroup else { return nil }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+    static func share(_ s: String) {
+        guard let g = sharedGroup, sharedValue() != s else { return }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        SecItemDelete(q as CFDictionary)
+        guard !s.isEmpty else { return }
+        q[kSecValueData as String] = Data(s.utf8)
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // The widgets redraw with the new address rather than at their next refresh.
+        if SecItemAdd(q as CFDictionary, nil) == errSecSuccess { WidgetCenter.shared.reloadAllTimelines() }
+    }
     static func save(_ s: String) {
         UserDefaults.standard.set(s, forKey: "address")
+        share(s)
         guard keychain() != s else { return }
-        SecItemDelete(base as CFDictionary)
+        SecItemDelete(own as CFDictionary)
         guard !s.isEmpty else { return }
-        var add = base
+        var add = own
         add[kSecValueData as String] = Data(s.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
     }
     static func keychain() -> String? {
-        var q = base
+        var q = own
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?
@@ -207,6 +266,8 @@ enum TVBridge {
     struct Gone: Error {}
     // The TV took the stream but the player never got going, even after a second try.
     struct DidNotStart: Error {}
+    // An `again` about a send the Mac never saw: the first try was lost on the way, so it can go once as itself.
+    struct Unseen: Error {}
     // Too busy to answer in time. Asking again usually works.
     struct Slow: Error {}
     @discardableResult
@@ -315,7 +376,7 @@ enum TVIntentError: LocalizedError {
     case noAnswer, cantOpen
     var errorDescription: String? {
         switch self {
-        case .noAnswer: return "The TV didn’t answer. Is Tailscale on?"
+        case .noAnswer: return "The TV didn’t answer. Try again in a moment."
         case .cantOpen: return "That link can’t open on the TV. Try AirPlay."
         }
     }

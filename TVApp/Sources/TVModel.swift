@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import SwiftUI
+import WidgetKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -21,7 +22,7 @@ final class TVModel {
     var staleStatus = true
     let mirrorStore = MirrorStore()
     // The TV's screen on the Remote: on unless he's turned it off, and kept that way.
-    var mirrorLive = UserDefaults.standard.object(forKey: "mirrorLive") as? Bool ?? true
+    var mirrorLive = true
     #if os(iOS)
     let live = LiveMirror()
     #endif
@@ -31,6 +32,9 @@ final class TVModel {
     // the launch's first pick aims there at once, the Remote not yet built to say where its picture is (it waited on
     // that, up to a second), and follows the real place as soon as it's known.
     @ObservationIgnored private var landedSlots: [String: [Double]] = UserDefaults.standard.dictionary(forKey: "mirrorSlots") as? [String: [Double]] ?? [:]
+    // Where the last pick landed (the Remote's picture, window points) and the window's size then: for a card thrown
+    // from a shelf to fly straight there before its own pick is made.
+    @ObservationIgnored var lastLanded: (rect: CGRect, window: CGSize)?
     func rememberedSlot(_ key: String) -> CGRect? {
         guard let v = landedSlots[key], v.count == 4, v[2] > 20 else { return nil }
         return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
@@ -64,9 +68,17 @@ final class TVModel {
     var footBarRoom: CGFloat = 0
     // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
     var flickChoosing = false
+    // The flick's page is fully up: only then are the pages under it put out of sight, so nothing between them is ever
+    // black (the flick page fades up over what he tapped, which then goes unseen).
+    var flickArrived = false
     // The flick's stage is up over a page (not yet moving onto the Remote): the page steps out of sight under it, so its
     // rows never ghost through the stage's fade (r18).
     var flickCovering = false
+    // The Remote's tab has been built once (its first build is the costly one: 200-700 ms in CI), and it is being built
+    // now, unseen under a flick's page and a veil, ahead of the first pick (FlickScreen.warmRemote). While warming nothing
+    // of it starts: no live picture, no reading.
+    @ObservationIgnored var remoteBuilt = false
+    @ObservationIgnored var remoteWarming = false
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     @ObservationIgnored var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
@@ -75,9 +87,16 @@ final class TVModel {
     // change, Tailscale reconnecting after the phone wakes, or the dashboard restarting each lost a reading or two and put
     // the red note up for a moment (Richard, 2026-11-10: "cant reach the mac is tailscale on keeps happening in tv and
     // its annoying"). Not in the first seconds back in the foreground either, while the tunnel comes back.
+    // The app's one rule for it (as the Chumby and Mac Pro apps): kept readings show at once and at full strength, a
+    // failed reading is retried every 2 s, and nothing is said for about 25 s; then a calm amber "Can't reach the Mac".
+    // Red only when the TV itself is down (Richard, 11-11: a blip leaves no trace; calm status only after sustained
+    // failure).
     @ObservationIgnored private var failingSince: Date?
     @ObservationIgnored private var foregroundAt = Date()
-    private static let unreachableAfter: TimeInterval = 8, settleAfterForeground: TimeInterval = 6
+    static let unreachableAfter: TimeInterval = 25, settleAfterForeground: TimeInterval = 25
+    var retrying: Bool { failingSince != nil }
+    // When the Mac last came back: a box failure counted from before then belongs to the outage, not to the TV.
+    @ObservationIgnored private(set) var reachedAt = Date.distantPast
     private func missed() {
         guard !Task.isCancelled else { return }
         let now = Date()
@@ -88,9 +107,19 @@ final class TVModel {
     var friends: [Film] = []
     var recommended: [Film] = []
     var flicking: FlickTarget?
+    // The title pages showing, newest last, by tab: the tab draws the newest one's ground behind its lip and its page as
+    // one, so there's no band where the lip sits above the stack (gates 3 and 4).
+    struct TitleGroundEntry: Equatable { let id: UUID; let tab: Int; let art: String }
+    var titleGrounds: [TitleGroundEntry] = []
     @ObservationIgnored private var lastFlick: (id: String, at: Date)?
-    // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it.
-    var mood: Color?
+    // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it. Set to what
+    // it already is, nothing redraws: every page's ground reads it, and the pick set it again to the same colour in the
+    // turn that brings the Remote up.
+    var mood: Color? {
+        get { access(keyPath: \.mood); return moodStore }
+        set { guard newValue != moodStore else { return }; withMutation(keyPath: \.mood) { moodStore = newValue } }
+    }
+    @ObservationIgnored private var moodStore: Color?
     // The cover of the last thing flicked, for when the TV's player has none of its own to show.
     var lastArt: String?
     var lastArtPkg: String?
@@ -120,24 +149,24 @@ final class TVModel {
     // done with: the keyboard never stays up over what a search led to (Richard, 2026-11-05).
     func flick(_ target: FlickTarget) {
         Keyboard.dismiss()
-        // One at a time. And a send that goes by itself (next episode, an episode picked from the list) taken twice within
-        // three seconds is the same tap, never a second start.
-        // One being taken down after landing on the Remote (retireFlick) doesn't count.
-        guard flicking == nil || flickRetired else { return }
-        // The very thing a start is already under way for (the card tapped again, the same episode picked again while the
-        // TV brings it up): straight to the Remote, where the start is shown; never a second send (2026-11-08).
-        if let st = starting, !st.failed, !st.played, let t = startingTarget, !target.streamsFirst, target.send == nil,
-           t.item.stremioRef?.imdb == target.item.stremioRef?.imdb, t.item.stremioRef?.video == target.item.stremioRef?.video,
-           target.item.stremioRef != nil {
-            tick(); tab = 0; return
-        }
+        // A key that says what it sends (next episode, the one before): sent as it is, no page, no tab change. The same
+        // key twice within three seconds is the same press.
         if target.autoplay {
             if let l = lastFlick, l.id == target.item.id, Date().timeIntervalSince(l.at) < 3 { return }
             lastFlick = (target.item.id, Date())
+            tick()
+            if target.send != nil || target.item.stremioRef == nil { Thrower.sendPlain(self, target: target) }
+            else { Thrower.sendBest(self, item: target.item, velocity: .zero) }
+            return
         }
-        var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { flicking = target; flickRetired = false }
+        // Anything else he tapped opens as its page on the tab he is on: the poster a card for his hand (brief 3.4). The
+        // page is pushed by the tab's own stack, so the system's Back returns to the exact place he came from.
+        titleAsk = target
+        titleAsks += 1
     }
+    // The title asked for, and each ask counted, for the showing tab's stack to push.
+    @ObservationIgnored var titleAsk: FlickTarget?
+    var titleAsks = 0
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
     // without an episode on its card still opens its page, which says "On the TV".
@@ -168,8 +197,7 @@ final class TVModel {
     }
     func showOnRemote() {
         Keyboard.dismiss()
-        tick()
-        if status?.session?.playing == false { holdPlay(true); key("resume") }
+        if status?.session?.playing == false { holdPlay(true); key("resume") } else { tick() }
         tab = 0
     }
     func closeFlick() {
@@ -214,8 +242,15 @@ final class TVModel {
     // What to reopen for "Choose another", with the streams that didn't start set apart.
     @ObservationIgnored var startingTarget: FlickTarget?
     @ObservationIgnored var startingAvoid: Set<String> = []
+    // A shelf throw's request (startStream), kept so a newer start or the start called off ends it: its retries after a
+    // dropped line never send an older title over a newer one.
+    @ObservationIgnored var shelfStart: Task<Void, Never>?
     func beginStart(_ s: Starting, target: FlickTarget) {
+        shelfStart?.cancel(); shelfStart = nil
         startingTarget = target
+        // A new title's start: the streams an earlier one set apart are no longer this one's (tokens are positional, s0, s1,
+        // so a later "Choose another" would grey out the wrong ones). The page carries its own set apart in its target.
+        startingAvoid = []
         withAnimation(.easeOut(duration: 0.2)) { starting = s }
     }
     func startPhase(_ p: String) {
@@ -235,9 +270,8 @@ final class TVModel {
         holdPlay(true)
         // The light finishes its lap and the picture becomes the TV's own (the Remote reads `played`).
         withAnimation(.easeOut(duration: 0.3)) { starting?.played = true }
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        #endif
+        Haptic.fire(.done)
+        HandLog.note(String(format: "haptic tv-confirmed, %.2f s after the send", Date().timeIntervalSince(st.since)))
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             startEndedAt = Date()
@@ -251,13 +285,11 @@ final class TVModel {
     func startFailed(tokens: [String]) {
         guard let st = starting, !st.failed, !st.played else { return }
         startingAvoid.formUnion(tokens)
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.error)
-        #endif
+        Haptic.fire(.fail)
         withAnimation(.easeOut(duration: 0.25)) { starting?.failed = true }
     }
     // Called off from the Remote (holding ⏯), or done with after a failure.
-    func clearStart() { startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
+    func clearStart() { shelfStart?.cancel(); shelfStart = nil; startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
     // When a start last ended: the Remote keeps the bar's and episode line's places for a while after, until the TV's own
     // reading of what's on has caught up, so nothing drops out and back in at playing (r24: the pad jumped 10 pt).
     var startEndedAt = Date.distantPast
@@ -365,7 +397,27 @@ final class TVModel {
     // Browse used to be tab 4; the apps' banners lead there now.
     // Changing tab puts the keyboard away, except when the change is for a search field about to take it (the Remote's
     // field opening the Apps page): resigning the responder in the same turn raced the field's own focus.
-    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }() { didSet { if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() } } }
+    // Settings was tab 9; it sits behind a gear on Status now (Richard, 2026-11-11): asked for as tab 9 (a link, the build's
+    // shots, the tab he last left it on), it's Status with Settings pushed.
+    // Four tabs (2026-11-20, "never a more thing ever"): Watch 3, Remote 0, Music 2, Search 6. Apps (1, once 4) is a row on
+    // the Remote; Status (5) and Settings (9) are pages behind the lip's gear, pushed on the tab he is on.
+    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return [0, 2, 3, 6].contains(t) ? t : t == 1 || t == 4 ? 0 : 3 }() {
+        didSet {
+            if tab == 9 || tab == 5 { let box = tab == 5; tab = [0, 2, 3, 6].contains(oldValue) ? oldValue : 3; settingsBox = box; settingsAsked += 1; return }
+            if tab == 1 || tab == 4 { tab = 0; return }
+            if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() }
+        }
+    }
+    // Each ask for Settings (tab 9), for Status to push it.
+    // A phone coming from a build with a Settings tab: Status is saved in its place, so Settings is pushed this once only.
+    // Asked for at launch only by the build's shots or a link (the launch arguments): a phone whose saved tab was Status
+    // or Settings from an older build opens on Watch, with nothing pushed by itself.
+    private static var launchTab: Int? { UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["tab"].flatMap { ($0 as? Int) ?? Int("\($0)") } }
+    var settingsAsked = launchTab == 9 || launchTab == 5 ? 1 : 0
+    // Each ask is answered once, by the tab showing.
+    @ObservationIgnored var settingsAnswered = 0
+    // Whether the ask was for the box's own page (once the Status tab) rather than Settings' first page.
+    @ObservationIgnored var settingsBox = launchTab == 5
     var address: String { didSet { SavedAddress.save(address) } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -408,7 +460,7 @@ final class TVModel {
         // Back in the foreground: the polls take over from the background grace.
         grace?.cancel(); grace = nil
         #if canImport(UIKit)
-        Haptics.warm()
+        Haptic.warm()
         #endif
         // Nobody looking, nothing polled. Status steps aside just after a key, so it never competes with one.
         loops = [
@@ -421,7 +473,7 @@ final class TVModel {
                     // The Remote shows play/pause and what's on: every second there, as a check costs the bridge 20-400 ms
                     // (Richard, 2026-11-07: "playing and not playing dont update fast enough", "doesnt update based on
                     // whats on screen" at 5 s).
-                    try? await Task.sleep(nanoseconds: self?.tab == 0 ? 1_000_000_000 : self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
+                    try? await Task.sleep(nanoseconds: self?.tab == 0 ? 1_000_000_000 : self?.retrying == true ? 2_000_000_000 : self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
                 }
             },
             // Still pictures, only while the screen is on show and the live stream isn't. Never switched off by itself
@@ -464,6 +516,8 @@ final class TVModel {
     @ObservationIgnored private var grace: Task<Void, Never>?
     func background() {
         stop()
+        // The Playing widget shows what the app last saw rather than waiting out its own refresh (up to half an hour).
+        WidgetCenter.shared.reloadTimelines(ofKind: "TVNow")
         #if os(iOS)
         grace?.cancel()
         guard TVIsland.live != nil || status?.session?.playing == true || status?.music?.playing == true else { TVBackground.schedule(); return }
@@ -496,7 +550,7 @@ final class TVModel {
     // The live stream started early, as the Remote comes up, so its first picture is there by the time it's looked at.
     func warmMirror() {
         #if os(iOS)
-        if mirrorLive && !filmOnScreen && !flickHandoff { live.start(url("/api/tv/screen-live")) }
+        if mirrorLive && !filmOnScreen && !flickHandoff && !remoteWarming { live.start(url("/api/tv/screen-live")) }
         #endif
     }
     // The Remote's picture of the TV coming on and off the screen.
@@ -504,7 +558,7 @@ final class TVModel {
         mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
         if on {
             warmMirror()
-            if mirrorLive && !liveShowing && !flickHandoff { Task { await loadMirror() } }
+            if mirrorLive && !liveShowing && !flickHandoff && !remoteWarming { Task { await loadMirror() } }
         } else if mirrorViewers == 0 {
             mirrorSlot = nil
             #if os(iOS)
@@ -542,7 +596,7 @@ final class TVModel {
             s = fresh
         }
         failingSince = nil
-        if !reachable { reachable = true }
+        if !reachable { reachedAt = Date(); reachable = true }
         #if os(iOS)
         // The Now Playing card follows on its own, one reading after another, never ahead of the page: awaited here, a
         // new cover's fetch and shrinking (and every update iOS takes its time over) held this reading back from the
@@ -634,7 +688,12 @@ final class TVModel {
             if s.online { let file = Self.cacheFile; Task.detached(priority: .utility) { try? d.write(to: file, options: .atomic) } }
         }
         settlePlayHold(s)
-        if staleStatus { staleStatus = false }
+        if staleStatus {
+            staleStatus = false
+            #if os(iOS)
+            HitchLog.shared.note(String(format: "first status %.2f s after the foreground", Date().timeIntervalSince(foregroundAt)))
+            #endif
+        }
         PhonePlayer.shared.follow(s)
         NextUp.shared.follow(s)
     }
@@ -664,6 +723,7 @@ final class TVModel {
         // catch and much of "the app is SLOW".
         guard let i = await Task.detached(priority: .userInitiated, operation: { Self.decoded(d) }).value else { return }
         mirrorStore.set(i)
+        mirrorStore.keep(d)
     }
     // A picture decoded now, on whatever thread calls this, so drawing it later costs nothing.
     nonisolated static func decoded(_ d: Data) -> TVImage? {
@@ -709,9 +769,7 @@ final class TVModel {
         toastTask = Task { [weak self] in try? await Task.sleep(nanoseconds: 2_000_000_000); if !Task.isCancelled { self?.toast = nil } }
     }
     func tick() {
-        #if canImport(UIKit)
-        Haptics.light.impactOccurred(); Haptics.light.prepare()
-        #endif
+        Haptic.fire(.tap)
     }
     private func request(_ path: String, _ body: [String: Any]) -> URLRequest? {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { return nil }
@@ -727,7 +785,7 @@ final class TVModel {
         lastKeyAt = Date(); lastTouch = Date()
         // Home, Back or anything else pressed after a tile: the ring goes back to what the TV says is in front.
         if openingApp != nil { openingApp = nil }
-        if !repeating { tick() }
+        if !repeating { Haptic.fire(long ? .thunk : .tap) }
         // A hold can't get ahead of the connection, so lifting your finger stops the TV promptly.
         if repeating && repeatPending { return }
         keySeq += 1
@@ -740,7 +798,7 @@ final class TVModel {
             await typing?.value
             defer { if repeating { self?.repeatPending = false } }
             let result = try? await URLSession.shared.data(for: r)
-            if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that") }
+            if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that"); Haptic.fire(.warn) }
         }
         // Outside the chain, so a slow picture never holds up the next press. The live stream shows the press by
         // itself; without it, the first still taken after the press is asked for straight away.
@@ -798,7 +856,7 @@ final class TVModel {
         tick()
         Task {
             guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { say("The TV didn’t get that"); return }
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { say("The TV didn’t get that"); Haptic.fire(.warn); return }
             // Only a link the TV can't open needs saying, since then there's something else to do.
             if !["apple", "words", "youtube", "film", "imdb"].contains(j["kind"] as? String ?? "") { say("That link can’t open on the TV. Try AirPlay.") }
         }
@@ -812,6 +870,27 @@ final class MirrorStore: ObservableObject {
     @Published private(set) var image: TVImage?
     @Published private(set) var at = Date.distantPast
     func set(_ i: TVImage?) { image = i; if i != nil { at = Date() } }
+    // The last still, kept between launches: the Remote's first arrival shows the TV's screen as it last was (dimmed as
+    // old, the light running round it) rather than an empty box (gates 3 and 4). Written at most every 20 s.
+    private static var file: URL? { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-shot.img") }
+    private var keptAt = Date.distantPast
+    func keep(_ d: Data) {
+        guard Date().timeIntervalSince(keptAt) > 20, let f = Self.file else { return }
+        keptAt = Date()
+        Task.detached(priority: .utility) { try? d.write(to: f, options: .atomic) }
+    }
+    init() {
+        guard let f = Self.file else { return }
+        Task { [weak self] in
+            let got: (TVImage, Date)? = await Task.detached(priority: .userInitiated) {
+                guard let d = try? Data(contentsOf: f), let i = TVModel.decoded(d) else { return nil }
+                let at = (try? FileManager.default.attributesOfItem(atPath: f.path))?[.modificationDate] as? Date ?? .distantPast
+                return (i, at)
+            }.value
+            guard let self, let got, self.image == nil else { return }
+            self.image = got.0; self.at = got.1
+        }
+    }
 }
 
 // A half-typed link outlives unfolding, which rebuilds the layout.
@@ -836,41 +915,16 @@ enum Keyboard {
     }
 }
 
-#if canImport(UIKit)
-// Made once and kept warm, so a press buzzes the moment it lands rather than after the generator wakes up.
-@MainActor enum Haptics {
-    static let light: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .light); g.prepare(); return g }()
-    static func warm() { light.prepare() }
-}
-#endif
-
 // The flick's whole set of touches and nothing else (§2.5a C9): lift, the one detent, charged, the impact, caught, and
 // the outcome on the Remote. Each generator made once and kept warm, so the hit lands on the frame it belongs to.
 @MainActor enum FlickHaptic {
-    #if canImport(UIKit)
-    private static let soft = { let g = UIImpactFeedbackGenerator(style: .soft); g.prepare(); return g }()
-    private static let rigid = { let g = UIImpactFeedbackGenerator(style: .rigid); g.prepare(); return g }()
-    private static let medium = { let g = UIImpactFeedbackGenerator(style: .medium); g.prepare(); return g }()
-    private static let heavy = { let g = UIImpactFeedbackGenerator(style: .heavy); g.prepare(); return g }()
-    private static let note = { let g = UINotificationFeedbackGenerator(); g.prepare(); return g }()
-    static func warm() { soft.prepare(); rigid.prepare(); medium.prepare(); heavy.prepare(); note.prepare() }
-    static func lift() { soft.impactOccurred(intensity: 0.5); soft.prepare() }
-    static func detent() { rigid.impactOccurred(intensity: 0.45); rigid.prepare() }
-    static func charged() { medium.impactOccurred(intensity: 0.8); medium.prepare() }
-    static func impact() { heavy.impactOccurred(intensity: 1); heavy.prepare() }
-    static func caught() { rigid.impactOccurred(intensity: 0.6); rigid.prepare() }
-    static func putBack() { soft.impactOccurred(intensity: 0.6); soft.prepare() }
-    static func settle() { soft.impactOccurred(intensity: 0.35); soft.prepare() }
-    static func error() { note.notificationOccurred(.error); note.prepare() }
-    #else
-    static func warm() {}
-    static func lift() {}
+    // The flick keeps the vocabulary's two: thunk on the throw, done on the landing (TVModel, when the TV answers). The hold
+    // completing is a thunk too. The detent, the put-back and the settle are silent now: his finger is already feeling them.
+    static func warm() { Haptic.warm() }
+    static func lift() { Haptic.fire(.thunk) }
     static func detent() {}
-    static func charged() {}
-    static func impact() {}
-    static func caught() {}
+    static func caught() { Haptic.fire(.thunk) }
     static func putBack() {}
     static func settle() {}
-    static func error() {}
-    #endif
+    static func error() { Haptic.fire(.fail) }
 }

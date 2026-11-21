@@ -14,7 +14,12 @@ final class FrameBuffer {
     let bytes: UnsafeMutableRawPointer
     let width: Int, height: Int
     var size: Int { width * height * 4 }
-    init(width: Int, height: Int) { self.width = max(width, 0); self.height = max(height, 0); bytes = calloc(max(self.width * self.height * 4, 1), 1) }
+    // `cleared: false` for memory about to be written over in full, which needn't be cleared first.
+    init(width: Int, height: Int, cleared: Bool = true) {
+        self.width = max(width, 0); self.height = max(height, 0)
+        let n = max(self.width * self.height * 4, 1)
+        bytes = cleared ? calloc(n, 1) : malloc(n)
+    }
     deinit { free(bytes) }
     func provider() -> CGDataProvider? {
         CGDataProvider(dataInfo: Unmanaged.passRetained(self).toOpaque(), data: bytes, size: size) { info, _, _ in
@@ -33,7 +38,17 @@ final class RemoteScreen: ObservableObject {
     private var slowTimer: Task<Void, Never>?
     // Whether there's a picture to show. The pictures themselves never pass through SwiftUI: the screen's own layer
     // takes the newest one on each display refresh (see ScreenLayer).
-    @Published private(set) var hasPicture = false
+    @Published private(set) var hasPicture = false { didSet { if !hasPicture, pictureShown { pictureShown = false } } }
+    // The screen's layer has actually drawn a picture. Between a picture arriving and the layer's next refresh the
+    // picture's space was black with only the pointer on it, for up to 0.3 s (the designer's fifth review): the waiting
+    // sign stays until this.
+    @Published private(set) var pictureShown = false
+    func layerShowedPicture() { if !pictureShown { pictureShown = true }; if macWaking { macWaking = false } }
+    // The bridge found the Mac's display asleep and is waking it ({"waking":true}): the 3 to 12 s before the picture
+    // that a week of sessions showed are the Mac waking and signing in, and the wait says so rather than "Connecting…".
+    // Latched until the picture is drawn: dropped at sign-in or on a retry, the line went back to "Connecting…" or
+    // through a blank frame to "Waiting…" (the designer's gate, 2026-11-19).
+    @Published private(set) var macWaking = false
     @Published var size = CGSize.zero
     // Where the Mac's pointer should be. Not published: it changes at the touch rate, and a published value redrew the
     // whole screen view on every sample. Whoever draws the pointer listens through `cursorChanged` instead.
@@ -65,6 +80,9 @@ final class RemoteScreen: ObservableObject {
     // How many picture requests are kept in flight. One at a time waits a whole round trip for every picture, which over
     // Tailscale caps it near 1 / RTT; a few ahead let the Mac send each change as soon as it happens. The build's
     // measuring shot sets "screenPipeline" to 1 to film the old way beside the new.
+    // Video from a bridge that offers it (see ScreenVideo.swift), unless the build's films ask for the lossless pictures
+    // with "-screenVideo NO".
+    static var videoWanted: Bool { UserDefaults.standard.object(forKey: "screenVideo") == nil || UserDefaults.standard.bool(forKey: "screenVideo") }
     static var pipeline: Int { let v = UserDefaults.standard.integer(forKey: "screenPipeline"); return v > 0 ? min(v, 8) : 4 }
     // Pictures the Mac has sent on this connection, for the measuring overlay.
     var updates: Int { decoder?.snapshot().1 ?? 0 }
@@ -89,6 +107,13 @@ final class RemoteScreen: ObservableObject {
     private var rememberedSpeed = false
     private var base: URL?
     private var wanted = false          // someone wants the screen, so a drop means reconnect
+    // The bridge keeps a Screen session for about a minute after the phone goes (the app in the background, a network
+    // change) and hands out a token for it. With the token the phone reattaches to that very session and carries on
+    // from the byte it last had: no new sign-in, no new picture, no "Reconnecting…" unless the reattach fails.
+    private var resumeToken: String?
+    private var resuming: URLSessionWebSocketTask?
+    private var lastResumeTry = Date.distantPast
+    private var canResume: Bool { resumeToken != nil && hasPicture && (decoder?.resumable ?? false) }
     private var attempts = 0
     private var retry: Task<Void, Never>?
     private var closeLater: Task<Void, Never>?
@@ -150,7 +175,7 @@ final class RemoteScreen: ObservableObject {
         running = false
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
-        if phase == .connected || phase == .connecting { phase = hasPicture ? .reconnecting : .idle }
+        if phase == .connected || phase == .connecting { if !canResume { phase = hasPicture ? .reconnecting : .idle } }
         // The return starts its own 1.5 s before any "Reconnecting…".
         slowTimer?.cancel(); slowTimer = nil; slowReconnect = false
     }
@@ -161,7 +186,7 @@ final class RemoteScreen: ObservableObject {
         attempts = 0
         retry?.cancel()
         if !running || socket == nil { connect(base: base) }
-        else if phase == .connected { checkAlive(); request(incremental: false) }
+        else if phase == .connected { checkAlive(); refresh() }
     }
     // A socket iOS killed while the app was away often takes a send without complaint, so the Mac is asked to answer a
     // ping: no answer in 2 s and a fresh connection starts at once, with no back-off.
@@ -190,7 +215,7 @@ final class RemoteScreen: ObservableObject {
         attempts = 0
         connect(base: base)
     }
-    func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil) }
+    func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil); forgetMovesInFlight() }
 
     private func watchSlowReconnect() {
         guard slowTimer == nil || slowTimer!.isCancelled else { return }
@@ -222,12 +247,19 @@ final class RemoteScreen: ObservableObject {
         self.base = base
         guard !backgrounded else { return }
         running = false
-        socket?.cancel(with: .goingAway, reason: nil)
+        // A reattach leaves the old socket with "going away" (the bridge keeps the session for it); a fresh start closes it for good.
+        let reattach = canResume, replaced = socket
         socket = nil
+        replaced?.cancel(with: reattach ? .goingAway : .normalClosure, reason: nil)
+        resuming = nil
+        let got = reattach ? decoder?.pauseForReattach() : nil
         self.base = base
         guard var parts = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
         parts.scheme = parts.scheme == "http" ? "ws" : "wss"
         parts.path = "/novnc/ws/vnc"
+        if reattach, let token = resumeToken, let got { parts.queryItems = [URLQueryItem(name: "resume", value: token), URLQueryItem(name: "got", value: String(got))] }
+        else { resumeToken = nil }
+        if Self.videoWanted { parts.queryItems = (parts.queryItems ?? []) + [URLQueryItem(name: "video", value: "1")] }
         guard let url = parts.url else { return }
         var request = URLRequest(url: url)
         request.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
@@ -235,6 +267,21 @@ final class RemoteScreen: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: request)
         task.maximumMessageSize = 32 << 20
         socket = task
+        if reattach, let kept = decoder {
+            kept.reattach(to: task)
+            resuming = task; running = true; lastResumeTry = Date()
+            task.resume()
+            // No "resumed" from the bridge in 6 s: that session is gone, so start afresh (over the same picture).
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                guard let self, self.resuming === task, self.socket === task else { return }
+                self.resuming = nil; self.resumeToken = nil
+                task.cancel(with: .abnormalClosure, reason: nil)
+                self.connect(base: base)
+            }
+            Task.detached(priority: .userInitiated) { [weak self] in await Self.receiveLoop(task, decoder: kept, owner: self) }
+            return
+        }
         // Full colour only where the last picture came in fast (home Wi-Fi); otherwise 16-bit, less than half the bytes.
         // The new connection starts from the last picture, so it fills in over it, never over black.
         let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline, deep: Self.deepColour, seed: hasPicture ? self.decoder?.snapshot().0 : nil)
@@ -255,11 +302,12 @@ final class RemoteScreen: ObservableObject {
     }
 
     func disconnect() {
-        running = false
+        running = false; macWaking = false   // a wake said on a session that ended never carries into the next open (designer, 11-19)
         liveCheck?.cancel()
         stopMeasuring()
         flushTimer = nil
-        socket?.cancel(with: .goingAway, reason: nil)
+        resumeToken = nil; resuming = nil
+        socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
         if phase != .needsLogin { phase = .idle }
     }
@@ -285,7 +333,8 @@ final class RemoteScreen: ObservableObject {
                 await owner?.dropped(task, code: code)
                 return
             }
-            let events = decoder.feed(data)
+            let events = decoder.feed(data, from: task)
+            if decoder.socket !== task { return }
             let state = events.filter { !$0.isDrawing }
             let firstPicture = !told && events.contains { $0.isDrawing }
             // And once more when the first picture is whole (the first may only have been its top), for its timing.
@@ -295,7 +344,11 @@ final class RemoteScreen: ObservableObject {
                 if whole { toldWhole = true }
                 guard let owner, await owner.handle(task, events: state, drew: told) else { return }
             }
-            if decoder.stopped { return }
+            if decoder.stopped {
+                // A stream that stopped making sense is closed and opened afresh, over the picture already there.
+                if decoder.lostTrack { task.cancel(with: .abnormalClosure, reason: nil); await owner?.dropped(task, code: 0) }
+                return
+            }
         }
     }
     // False once this socket is no longer the one wanted.
@@ -316,8 +369,22 @@ final class RemoteScreen: ObservableObject {
     // {"pixelScroll":true} when the bridge's input helper can post smooth scrolls. False once this socket isn't wanted.
     private func bridgeSaid(_ text: String, on task: URLSessionWebSocketTask) -> Bool {
         guard running, socket === task else { return false }
-        if let d = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let on = o["pixelScroll"] as? Bool {
-            pixelScrollAvailable = on
+        guard let d = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return true }
+        if let on = o["pixelScroll"] as? Bool { pixelScrollAvailable = on }
+        // Said before the Mac's first words, so the decoder knows what's coming before it reads them.
+        if o["video"] as? Bool == true, Self.videoWanted { decoder?.useVideo() }
+        if o["waking"] as? Bool == true, !macWaking { macWaking = true }
+        if let token = o["resume"] as? String { resumeToken = token }
+        if o["resumed"] as? Bool == true, resuming === task {
+            // Back on the same session: the picture never went, so there's nothing to show but the picture.
+            resuming = nil
+            attempts = 0
+            if phase == .reconnecting || phase == .connecting { phase = .connected }
+            slowTimer?.cancel(); slowTimer = nil; slowReconnect = false
+            send([251, 0, 0, 0])
+            refresh()
+            startMeasuring()
+            watchWhole()
         }
         return true
     }
@@ -328,6 +395,10 @@ final class RemoteScreen: ObservableObject {
         running = false
         socket = nil
         if code == 409 { phase = .needsLogin; return }
+        // A reattach that was refused (the bridge let that session go) starts afresh at once; a session that was up and
+        // dropped is reattached to at once, without a banner, unless it was only just tried.
+        if resuming === task || code == 410 { resuming = nil; resumeToken = nil; if let base, wanted, !backgrounded { connect(base: base) }; return }
+        if canResume, wanted, !backgrounded, let base, Date().timeIntervalSince(lastResumeTry) > 2 { connect(base: base); return }
         // Dropped: try again quietly. Only say so if it keeps failing.
         if attempts >= 8 && !hasPicture { phase = .failed("Can’t reach the Mac’s screen."); return }
         scheduleRetry()
@@ -338,6 +409,11 @@ final class RemoteScreen: ObservableObject {
     func newerPicture(than shown: inout ScreenLayerMark) -> CGImage? {
         if let d = decoder {
             let id = ObjectIdentifier(d)
+            if d.videoOn {
+                guard let (picture, n) = d.video.next(after: shown.generation, fresh: shown.source != id), let image = ScreenVideoDecoder.image(picture) else { return nil }
+                shown = ScreenLayerMark(source: id, generation: n)
+                return image
+            }
             guard let (frame, gen) = d.next(after: shown.generation, fresh: shown.source != id),
                   frame.width > 0, frame.height > 0, let provider = frame.provider() else { return nil }
             shown = ScreenLayerMark(source: id, generation: gen)
@@ -350,12 +426,13 @@ final class RemoteScreen: ObservableObject {
         return nil
     }
 
-    private func send(_ bytes: [UInt8]) {
+    private func send(_ bytes: [UInt8], written: (() -> Void)? = nil) {
         // Nothing of ours goes out until the handshake is done: a touch or key sent mid-handshake landed where the bridge
         // expected the phone's version, and the Mac ended the session at once ("mac side error … up 644", 2026-11-06).
-        guard phase == .connected else { return }
-        let task = socket
-        task?.send(.data(Data(bytes))) { [weak self] error in
+        guard phase == .connected else { written?(); return }
+        guard let task = socket else { written?(); return }
+        task.send(.data(Data(bytes))) { [weak self] error in
+            written?()
             // A send on a socket iOS already killed fails here; the receive loop reconnects, but nudge it.
             if error != nil { Task { @MainActor in if self?.socket === task { self?.dropConnection() } } }
         }
@@ -366,13 +443,14 @@ final class RemoteScreen: ObservableObject {
             width = w; height = h
             size = CGSize(width: w, height: h)
             cursor = CGPoint(x: w / 2, y: h / 2)
-            phase = .connected
+            phase = .connected; forgetMovesInFlight()
             slowTimer?.cancel(); slowReconnect = false
             attempts = 0
             // Tells the bridge this end speaks its extras; it answers in a text frame. A plain RFB bridge would pass the
             // message on to the Mac, which ignores a type it doesn't know only if it never sees one, so only ask ours.
             send([251, 0, 0, 0])
             startMeasuring()
+            watchWhole()
         case .cursor(let image, let hotspot):
             cursorImage = image; cursorHotspot = hotspot
         case .resized(let w, let h):
@@ -383,8 +461,30 @@ final class RemoteScreen: ObservableObject {
         }
     }
 
-    private func request(incremental: Bool) {
-        send([3, incremental ? 1 : 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)])
+    // The picture as it is now, after time away: the whole of it asked for again, or as video a key picture (the system
+    // takes the decoder back while the app is away, and the pictures after that need one to start from).
+    private func refresh() {
+        if decoder?.videoOn == true { send(ScreenVideoDecoder.word(seq: 0, needsKey: true)); return }
+        send([3, 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)])
+    }
+    // The clock behind the whole picture, for as long as this connection lasts: four times a second at first, then once
+    // a second. It asks the Mac again when that's due (an idle Mac sends nothing to prompt it). Nothing shows what
+    // there is instead: a timeout that showed the parts so far was patches over black, his exact complaint, whenever
+    // the whole picture was slow (the designer's fifth review). The waiting sign stays, and the asking goes on.
+    private var wholeClock: Task<Void, Never>?
+    private func watchWhole() {
+        wholeClock?.cancel()
+        guard let watched = decoder else { return }
+        wholeClock = Task { [weak self] in
+            var waited = 0.0
+            while !Task.isCancelled {
+                let step = waited < 5 ? 0.25 : 1.0
+                try? await Task.sleep(nanoseconds: UInt64(step * 1_000_000_000)); waited += step
+                guard let self, !Task.isCancelled, self.running, self.decoder === watched else { return }
+                if watched.wholeSettled { continue }
+                watched.tickWhole()
+            }
+        }
     }
 
     // MARK: Input
@@ -394,9 +494,20 @@ final class RemoteScreen: ObservableObject {
         buttons = mask
         sendPointer(x: x, y: y, mask: mask)
     }
-    private func sendPointer(x: Int, y: Int, mask: UInt8) {
-        send([5, mask, UInt8((x >> 8) & 255), UInt8(x & 255), UInt8((y >> 8) & 255), UInt8(y & 255)])
+    private func sendPointer(x: Int, y: Int, mask: UInt8, move: Bool = false) {
+        let bytes: [UInt8] = [5, mask, UInt8((x >> 8) & 255), UInt8(x & 255), UInt8((y >> 8) & 255), UInt8(y & 255)]
+        if move { movesInFlight += 1; send(bytes) { [weak self] in Task { @MainActor in self?.movesDone() } } }
+        else { send(bytes) }
         movesThisSecond += 1
+    }
+    // Moves handed to the socket and not yet written out. Past two, the newest position waits (only it matters) instead
+    // of queueing behind the older ones on a slow link, so the pointer never replays the path it already took.
+    private var movesInFlight = 0 { didSet { if movesInFlight < 0 { movesInFlight = 0 } } }
+    // A dropped or new connection forgets sends that will never report back, so the pointer can't stay frozen.
+    func forgetMovesInFlight() { movesInFlight = 0; if pendingMove { flushMove() } }
+    private func movesDone() {
+        movesInFlight = max(0, movesInFlight - 1)
+        if pendingMove, movesInFlight < 2 { flushMove() }
     }
     func click(x: Int, y: Int, right: Bool = false) {
         let mask: UInt8 = right ? 4 : 1
@@ -424,8 +535,9 @@ final class RemoteScreen: ObservableObject {
     private var pendingMove = false
     private func flushMove() {
         guard pendingMove else { return }
+        guard movesInFlight < 2 else { return }
         pendingMove = false
-        sendPointer(x: Int(cursor.x), y: Int(cursor.y), mask: buttons)
+        sendPointer(x: Int(cursor.x), y: Int(cursor.y), mask: buttons, move: true)
     }
     #if canImport(UIKit)
     private final class Ticker: NSObject {
@@ -582,8 +694,10 @@ final class RemoteScreen: ObservableObject {
         c.setFillColor(CGColor(red: 0.2, green: 0.2, blue: 0.24, alpha: 0.9)); c.fill(CGRect(x: 0, y: 1020, width: w, height: 30))
         sample = c.makeImage(); hasPicture = true; size = CGSize(width: w, height: h); cursor = CGPoint(x: 700, y: 500); phase = .connected
     }
+    // How much of the first whole picture is in, for the wait before it's shown.
+    var firstPictureProgress: Double? { decoder?.wholeProgress }
     // For the build's shot of the screen when the Mac isn't logged in.
-    func showNeedsLogin() { wanted = false; sample = nil; hasPicture = false; phase = .needsLogin }
+    func showNeedsLogin() { wanted = false; sample = nil; hasPicture = false; macWaking = false; phase = .needsLogin }
     func type(_ text: String) {
         for scalar in text.unicodeScalars { key(scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value) }
     }
@@ -648,6 +762,7 @@ struct ScreenTimings: Sendable {
     var firstPicture: Double?      // the whole first picture was
     var firstBytes = 0             // what the first picture cost on the wire
     var deep = true                // 32-bit colour (or 16-bit)
+    var video = false              // H.264 from the bridge's helper rather than Screen Sharing's own pictures
     var throughput: Double?        // bytes a second while the first picture streamed in
 }
 
@@ -660,11 +775,28 @@ struct ScreenTimings: Sendable {
 //    in, top down, rather than only once its last byte is in.
 //  - A reconnect starts from the last picture, so what's still to come is the old picture, never black.
 final class ScreenDecoder: @unchecked Sendable {
-    let socket: URLSessionWebSocketTask
+    // The socket this decoder is fed from and answers on. It can move to a new one (a reattach to the bridge's kept
+    // session, which carries on from the byte `received` counts); nothing from any other socket is taken in.
+    private let socketLock = NSLock()
+    private var current: URLSessionWebSocketTask?
+    private var receivedBytes = 0
+    var socket: URLSessionWebSocketTask? { socketLock.lock(); defer { socketLock.unlock() }; return current }
+    var received: Int { socketLock.lock(); defer { socketLock.unlock() }; return receivedBytes }
+    // Stops taking anything in and returns how many bytes of the Mac's stream have been.
+    func pauseForReattach() -> Int { socketLock.lock(); defer { socketLock.unlock() }; current = nil; return receivedBytes }
+    func reattach(to task: URLSessionWebSocketTask) { socketLock.lock(); current = task; socketLock.unlock() }
+    var resumable: Bool { stage == .messages }
     private let pipeline: Int
     // 4 bytes a pixel (32-bit, 3 on the wire in ZRLE) or 2 (16-bit, 5-6-5).
-    let deep: Bool
+    private(set) var deep: Bool
     private var bytesPerPixel: Int { deep ? 4 : 2 }
+    // Video, once the bridge has said this connection carries it (before the Mac's first words): the pictures come as
+    // H.264 and go to this decoder, the bridge asks the Mac for them itself, and only the pointer's shape and the
+    // screen's size still come as RFB's own.
+    let video = ScreenVideoDecoder()
+    private(set) var videoOn = false
+    func useVideo() { if stage == .version || stage == .security || stage == .result || stage == .serverInit { videoOn = true } }
+    private var videoDrew = false
     private var cpixel: Int { deep ? 3 : 2 }
     private let seed: FrameBuffer?
     private(set) var frame = FrameBuffer(width: 0, height: 0) { didSet { lock.lock(); shared = frame; lock.unlock() } }
@@ -676,7 +808,8 @@ final class ScreenDecoder: @unchecked Sendable {
     // refresh, and showing only the newest lost one in five; a short queue shows them all, one per refresh.
     private var ready: [(FrameBuffer, Int)] = []
     private var latest: (FrameBuffer, Int)?
-    static let queued = 3
+    // Two, not three: each one waiting is a display refresh (16 ms) between the Mac's change and the phone's pixels.
+    static let queued = 2
     func snapshot() -> (FrameBuffer, Int) { lock.lock(); defer { lock.unlock() }; return (shared, generation) }
     // The oldest picture not yet shown, or, for a layer that has shown nothing of this connection yet, the newest.
     func next(after shown: Int, fresh: Bool) -> (FrameBuffer, Int)? {
@@ -685,15 +818,80 @@ final class ScreenDecoder: @unchecked Sendable {
         if let latest, fresh || latest.1 != shown { return latest }
         return nil
     }
-    private func finished() {
+    // Screen Sharing doesn't always answer the first request with the whole screen. Opened while the Mac's display is
+    // asleep or still waking, it answers with a 2 × 2 rectangle and from then on sends only what changes, so the phone
+    // showed black with a few live patches, or (on a reconnect) the old picture with a few new patches, until each part
+    // of the Mac happened to redraw. Seen on every open from a dark display in three tries (2026-11-10), and asking
+    // again got the whole picture 120 ms later each time. So: until a whole-screen rectangle has arrived on this
+    // connection (and again after the Mac changes resolution), the whole screen is asked for again: at once when the
+    // Mac's first answer wasn't it (when it's coming, it comes first), then every 2 s, and not at all once one
+    // has begun to arrive, so a slow link is never made to carry the whole picture twice.
+    private var haveWhole = false
+    private var askedWhole = CFAbsoluteTimeGetCurrent()
+    private var wholeAskGap = 0.3
+    private var wholeBegun = false
+    // With no earlier picture underneath, patches over black aren't shown: the first thing seen is the whole picture
+    // filling in, however long that takes; it's asked for every 2 s until it comes.
+    // Once the whole picture has begun to arrive it's waited for to its end, however long the link takes, and shown
+    // in one piece: filling in top-down over black was still "stuff draws in so slowly" (Richard, 2026-11-10), and the
+    // wait has a measure to show instead (`wholeProgress`).
+    private var holdBack: Bool {
+        !Self.noReask && !seeded && !haveWhole
+    }
+    // How much of the first whole picture has arrived, 0 to 1, while it's on its way; nil before and after.
+    var wholeProgress: Double? { wholeLock.lock(); defer { wholeLock.unlock() }; return haveWhole ? nil : wholeFraction }
+    private var wholeFraction: Double?
+    private var askedFirst = CFAbsoluteTimeGetCurrent()
+    // The build's way to film the old behaviour beside the new: "screenNoReask" never asks again and shows patches.
+    static let noReask = UserDefaults.standard.bool(forKey: "screenNoReask")
+    private var seeded = false
+    // Whether the whole screen should be asked for again now, and if so the request to send. One gate for both
+    // askers: the receive loop after each update, and the owner's clock (`tickWhole`), because a Mac sitting idle sends
+    // no update to hang the asking on, and the phone would wait on black for as long as nothing on the Mac moved.
+    private let wholeLock = NSLock()
+    private var wholeRequest: [UInt8] = []
+    private var paintedAny = false
+    // Updates the Mac has finished sending since the whole screen was last asked for. One that wasn't the whole screen
+    // is the sign it isn't coming (when it is, it comes first). With none at all, the Mac may simply not have answered
+    // yet (on a slow link the whole picture is seconds in arriving), so the clock leaves it 4 s before asking again.
+    private var updatesSinceAsk = 0
+    private func takeWholeAsk() -> [UInt8]? {
+        wholeLock.lock(); defer { wholeLock.unlock() }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard !videoOn, !haveWhole, !wholeBegun, !Self.noReask, !wholeRequest.isEmpty, now - askedWhole >= wholeAskGap,
+              updatesSinceAsk > 0 || now - askedWhole >= 4 else { return nil }
+        askedWhole = now; wholeAsks += 1; wholeAskGap = 2; updatesSinceAsk = 0
+        return wholeRequest
+    }
+    private func whole(_ change: () -> Void) { wholeLock.lock(); change(); wholeLock.unlock() }
+    private func askNext() {
+        if let again = takeWholeAsk() { send(again) } else { request(incremental: true) }
+    }
+    // From the owner's clock, a few times a second: asks again when it's due, whether or not the Mac has sent anything.
+    func tickWhole() { if let again = takeWholeAsk() { send(again) } }
+    // True once a whole picture has arrived or begun to.
+    var wholeSettled: Bool { wholeLock.lock(); defer { wholeLock.unlock() }; return haveWhole || wholeBegun }
+    // How many times the whole picture had to be asked for again, for the measuring badge.
+    private(set) var wholeAsks = 0
+    // The stream stopped making sense (a message or encoding this doesn't know, or data that doesn't fit). What follows
+    // can't be read, so nothing more is drawn from it and the owner opens a fresh connection over the last picture.
+    // Before, an unknown message emptied the buffer and carried on, reading the middle of the next one as pixels.
+    private(set) var lostTrack = false
+    private func lose(_ why: String) { print("screen: lost track of the stream (\(why))"); lostTrack = true; stage = .stopped }
+
+    // False when the picture was held back, and so nothing new is there to show.
+    @discardableResult private func finished() -> Bool {
         // Copied here, off the main thread, so the layer gets a picture nothing writes into while it's on screen.
-        let copy = FrameBuffer(width: frame.width, height: frame.height)
+        // Nothing is shown of a first connection until its whole picture has begun: see `holdBack`.
+        if holdBack { return false }
+        let copy = FrameBuffer(width: frame.width, height: frame.height, cleared: false)
         memcpy(copy.bytes, frame.bytes, frame.size)
         lock.lock()
         generation += 1
         ready.append((copy, generation)); latest = (copy, generation)
         if ready.count > Self.queued { ready.removeFirst(ready.count - Self.queued) }
         lock.unlock()
+        return true
     }
     // MARK: Timings
     private let opened = CFAbsoluteTimeGetCurrent()
@@ -713,19 +911,23 @@ final class ScreenDecoder: @unchecked Sendable {
     private var stage = Stage.version
     private var events: [ScreenEvent] = []
     init(socket: URLSessionWebSocketTask, pipeline: Int = 4, deep: Bool = true, seed: FrameBuffer? = nil) {
-        self.socket = socket; self.pipeline = max(1, pipeline); self.deep = deep; self.seed = seed
+        self.current = socket; self.pipeline = max(1, pipeline); self.deep = deep; self.seed = seed
         times.deep = deep
     }
-    func feed(_ data: Data) -> [ScreenEvent] {
+    func feed(_ data: Data, from task: URLSessionWebSocketTask) -> [ScreenEvent] {
         events = []
-        guard stage != .stopped else { return [] }
+        socketLock.lock()
+        let mine = current === task
+        if mine { receivedBytes += data.count }
+        socketLock.unlock()
+        guard mine, stage != .stopped else { return [] }
         buffer.append(data)
         if countingFirst { firstUpdateBytes += data.count }
         parse()
         return events
     }
     private func fail(_ message: String) { stage = .stopped; events.append(.failed(message)) }
-    private func send(_ bytes: [UInt8]) { socket.send(.data(Data(bytes))) { _ in } }
+    private func send(_ bytes: [UInt8]) { socket?.send(.data(Data(bytes))) { _ in } }
     private func take(_ n: Int) -> Data? {
         guard buffer.count >= n else { return nil }
         let out = Data(buffer.prefix(n))
@@ -745,7 +947,7 @@ final class ScreenDecoder: @unchecked Sendable {
             case .stopped: return
             case .version:
                 guard take(12) != nil else { return }
-                socket.send(.data(Data("RFB 003.008\n".utf8))) { _ in }
+                socket?.send(.data(Data("RFB 003.008\n".utf8))) { _ in }
                 stage = .security
             case .security:
                 guard let head = buffer.first, buffer.count >= 1 + Int(head), take(1 + Int(head)) != nil else { return }
@@ -761,8 +963,17 @@ final class ScreenDecoder: @unchecked Sendable {
                 let nameLength = be32(buffer, 20)
                 guard let head = take(24 + nameLength) else { return }
                 width = be16(head, 0); height = be16(head, 2)
+                if videoOn {
+                    // Full colour (the pointer's picture comes that way), no picture memory, and nothing asked of the Mac.
+                    deep = true
+                    lock.lock(); times.deep = true; times.video = true; lock.unlock()
+                    mark { $0.signedIn = $1 }
+                    stage = .messages
+                    events.append(.opened(width, height))
+                    continue
+                }
                 let fresh = FrameBuffer(width: width, height: height)
-                if let seed, seed.width == width, seed.height == height { memcpy(fresh.bytes, seed.bytes, fresh.size) }
+                if let seed, seed.width == width, seed.height == height { memcpy(fresh.bytes, seed.bytes, fresh.size); seeded = true }
                 frame = fresh
                 mark { $0.signedIn = $1 }
                 // 32-bit little-endian BGRX, or 16-bit little-endian 5-6-5. ZRLE first, moved areas next, raw as the
@@ -773,6 +984,11 @@ final class ScreenDecoder: @unchecked Sendable {
                 send([2, 0, 0, 5,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33,  255, 255, 255, 17])
                 // The whole picture first, then a few requests already waiting, so each change on the Mac is sent as
                 // it happens instead of a round trip after the last one arrived.
+                askedFirst = CFAbsoluteTimeGetCurrent()
+                whole {
+                    askedWhole = askedFirst
+                    wholeRequest = [3, 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)]
+                }
                 request(incremental: false)
                 for _ in 1..<pipeline { request(incremental: true) }
                 stage = .messages
@@ -797,7 +1013,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 case 3:
                     guard buffer.count >= 8 else { return }
                     guard take(8 + be32(buffer, 4)) != nil else { return }
-                default: buffer = Data(); return
+                default: lose("message type \(type)"); return
                 }
             }
         }
@@ -810,6 +1026,7 @@ final class ScreenDecoder: @unchecked Sendable {
     // The ZRLE rectangle being streamed: where it is, how much of its compressed data is still to come, which tile is
     // next, and what's been inflated but not yet drawn.
     private struct Streaming { var x, y, w, h: Int; var left: Int; var tileX = 0, tileY = 0 }
+    private var streamingTotal = 1
     private var streaming: Streaming?
     private var inflated: [UInt8] = []
     private var inflatedAt = 0
@@ -830,10 +1047,12 @@ final class ScreenDecoder: @unchecked Sendable {
             case 16:
                 guard buffer.count >= 16 else { return false }
                 let length = be32(buffer, 12)
-                guard x + w <= width, y + h <= height else { fail("Unexpected screen data."); return false }
+                guard x + w <= width, y + h <= height else { lose("a rectangle outside the screen"); return false }
                 drop(16)
                 painted = true; paintedArea += w * h
+                whole { if w * h > 16 { paintedAny = true }; if w * h >= width * height * 3 / 4 { wholeBegun = true; wholeFraction = 0 } }
                 streaming = Streaming(x: x, y: y, w: w, h: h, left: length)
+                streamingTotal = max(length, 1)
                 // The link's speed, from the first big rectangle streaming in: its bytes over the time they took.
                 if countingFirst, w * h >= width * height / 4 { bigStart = (CFAbsoluteTimeGetCurrent(), length) }
                 inflated.removeAll(keepingCapacity: true); inflatedAt = 0; shownRows = 0
@@ -842,6 +1061,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 guard buffer.count >= 12 + length else { return false }
                 painted = true; paintedArea += w * h
                 if w * h >= width * height * 3 / 4 { wholeSeen = true }
+                whole { if w * h > 16 { paintedAny = true }; if w * h >= width * height * 3 / 4 { haveWhole = true; wholeBegun = true } }
                 buffer.withUnsafeBytes { src in
                     let from = src.baseAddress! + 12
                     for row in 0..<h where y + row < height && x + w <= width {
@@ -856,6 +1076,16 @@ final class ScreenDecoder: @unchecked Sendable {
                 painted = true
                 copyRect(fromX: be16(buffer, 12), fromY: be16(buffer, 14), x: x, y: y, w: w, h: h)
                 drop(16); rectsLeft -= 1
+            case ScreenVideoDecoder.encoding:
+                // One picture of video: its number, whether it's a key picture, its length, then the picture.
+                guard buffer.count >= 24 else { return false }
+                let seq = UInt32(truncatingIfNeeded: be32(buffer, 12)), key = buffer[buffer.startIndex + 16] & 1 != 0, length = be32(buffer, 20)
+                guard buffer.count >= 24 + length else { return false }
+                let shown = buffer.withUnsafeBytes { src in video.take(key: key, UnsafeRawBufferPointer(rebasing: src[24..<(24 + length)])) }
+                drop(24 + length); rectsLeft -= 1
+                if shown { videoDrew = true }
+                // This end's word on it, at once: the bridge times it to know what the link is carrying.
+                send(ScreenVideoDecoder.word(seq: seq, needsKey: !shown))
             case -239:
                 // The pointer's picture, x and y being its hotspot: pixels, then a bitmask of which ones show.
                 let length = w * h * bytesPerPixel, maskRow = (w + 7) / 8
@@ -866,19 +1096,41 @@ final class ScreenDecoder: @unchecked Sendable {
             case -223:
                 // The Mac changed resolution: a new picture follows.
                 width = w; height = h
-                frame = FrameBuffer(width: width, height: height)
+                frame = videoOn ? FrameBuffer(width: 0, height: 0) : FrameBuffer(width: width, height: height)
                 events.append(.resized(w, h))
                 resized = true
+                // The new size starts black: its whole picture is asked for until it comes, as on opening.
+                // The picture already up stays until the new size's whole picture is in (3 s at most), rather than the
+                // new size's patches over black: the Mac's display changing size with the Screen open (the bridge
+                // making its own display, a monitor plugged in) looked like the drawing fault all over again.
+                seeded = false; askedFirst = CFAbsoluteTimeGetCurrent()
+                whole {
+                    haveWhole = false; wholeBegun = false; wholeAskGap = 0.3; wholeFraction = nil
+                    wholeRequest = [3, 0, 0, 0, 0, 0, UInt8(w >> 8), UInt8(w & 255), UInt8(h >> 8), UInt8(h & 255)]
+                }
                 drop(12); rectsLeft -= 1
             default:
-                fail("Unexpected screen data."); return false
+                lose("encoding \(encoding)"); return false
             }
         }
         // The whole update is in.
         inUpdate = false
+        if videoOn {
+            // Nothing to copy and nothing to ask: the picture is the decoder's, and the next comes when the bridge sends it.
+            if videoDrew {
+                videoDrew = false
+                lock.lock(); generation += 1; lock.unlock()
+                events.append(.drew)
+                if countingFirst {
+                    countingFirst = false
+                    let bytes = firstUpdateBytes - buffer.count
+                    mark { t, now in t.firstPixels = now; t.firstPicture = now; t.firstBytes = bytes }
+                }
+            }
+            return true
+        }
         // An update that only changed the pointer's picture leaves the screen's picture as it was.
-        if painted || resized || empty {
-            finished()
+        if painted || resized || empty, finished() {
             events.append(.drew)
             if countingFirst, painted { mark { t, now in if t.firstPixels == nil { t.firstPixels = now } } }
             // Whole once the full-screen answer is in: with requests already waiting, the Mac answers small changes (the
@@ -892,8 +1144,10 @@ final class ScreenDecoder: @unchecked Sendable {
                 }
             }
         }
-        // One answered, one more asked for, so the same number always wait. After a resize the whole new picture.
-        request(incremental: !resized)
+        // One answered, one more asked for, so the same number always wait: the whole picture after a resize, and for as
+        // long as this connection hasn't had one.
+        if resized { whole { askedWhole = CFAbsoluteTimeGetCurrent(); updatesSinceAsk = 0 }; request(incremental: false) }
+        else { whole { updatesSinceAsk += 1 }; askNext() }
         return true
     }
 
@@ -907,18 +1161,19 @@ final class ScreenDecoder: @unchecked Sendable {
                 inflated.append(contentsOf: out)
                 return true
             }
-            guard ok else { fail("Unexpected screen data."); return false }
+            guard ok else { lose("data that wouldn't inflate"); return false }
             drop(n); s.left -= n
+            if s.w * s.h >= width * height * 3 / 4 { let f = 1 - Double(s.left) / Double(streamingTotal); whole { if wholeFraction != nil { wholeFraction = f } } }
         }
         let result = inflated.withUnsafeBufferPointer { drawTiles($0, &s) }
-        if result == .bad { fail("Unexpected screen data."); return false }
+        if result == .bad { lose("a tile that doesn't fit"); return false }
         // Drawn data is let go now and then, not on every tile.
         if inflatedAt > 1 << 18 { inflated.removeFirst(inflatedAt); inflatedAt = 0 }
         let done = s.tileY >= s.h
         if done {
-            guard s.left == 0 else { fail("Unexpected screen data."); return false }
+            guard s.left == 0 else { lose("a rectangle longer than its picture"); return false }
             streaming = nil; rectsLeft -= 1
-            if s.w * s.h >= width * height * 3 / 4 { wholeSeen = true }
+            if s.w * s.h >= width * height * 3 / 4 { wholeSeen = true; whole { haveWhole = true } }
             if let big = bigStart {
                 bigStart = nil
                 let span = CFAbsoluteTimeGetCurrent() - big.0
@@ -926,7 +1181,7 @@ final class ScreenDecoder: @unchecked Sendable {
             }
             return true
         }
-        if s.left == 0 { fail("Unexpected screen data."); return false }
+        if s.left == 0 { lose("a rectangle shorter than its picture"); return false }
         streaming = s
         // A big rectangle (the first picture, a page scrolled on a slow link) is shown as it fills in, about 15 times a
         // second, rather than all at once after its last byte.
@@ -934,7 +1189,7 @@ final class ScreenDecoder: @unchecked Sendable {
             let now = CFAbsoluteTimeGetCurrent()
             if now - lastShown >= 0.066 {
                 lastShown = now; shownRows = s.tileY
-                finished()
+                guard finished() else { return false }
                 events.append(.drew)
                 if countingFirst { mark { t, at in if t.firstPixels == nil { t.firstPixels = at } } }
             }

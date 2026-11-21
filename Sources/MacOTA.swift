@@ -117,9 +117,12 @@ struct OTAOffer: ViewModifier {
     @Environment(\.scenePhase) private var phase
     @AppStorage(OTAInstaller.offerKey) private var offerOn = false
 
-    // Changes when there's something new to offer or the Mac first answers.
-    private var trigger: String {
-        "\(model.gotFresh)|" + OTAInstaller.ready(model.status).map { "\($0.id)@\($0.build)" }.joined(separator: ",")
+    // Changes when there's something new to offer or the Mac first answers. Worked out as a status lands (StatusStore), so
+    // the whole app isn't watching every reading for it.
+    @State private var trigger = ""
+    private func retrigger(_ s: Status?) {
+        let t = "\(model.gotFresh)|" + OTAInstaller.ready(s).map { "\($0.id)@\($0.build)" }.joined(separator: ",")
+        if t != trigger { trigger = t }
     }
     func body(content: Content) -> some View {
         content
@@ -136,6 +139,8 @@ struct OTAOffer: ViewModifier {
                 if p == .background { ota.offeredThisVisit = false }
                 if p == .active { consider() }
             }
+            .onReceive(model.statusStore.$status) { retrigger($0) }
+            .onChange(of: model.gotFresh) { retrigger(model.status) }
             .onChange(of: trigger) { consider() }
             .onChange(of: ota.wanted) { consider() }
             .onAppear { consider() }
@@ -171,6 +176,9 @@ struct OTAOfferSheet: View {
     // As tall as what's in it, measured, so it sits low over the page whatever the posture.
     @State private var height: CGFloat = 430
     var body: some View {
+        // In a scroll view that only moves when it must: turned sideways folded (about 400 pt tall) the sheet can't be as
+        // tall as three or four updates make it, and Update, at its foot, was cut off below the screen with no way to it.
+        ScrollView {
         VStack(spacing: 20) {
             Image(systemName: "arrow.down.circle.fill")
                 .font(.system(size: 52)).foregroundStyle(.white, macBlue)
@@ -208,9 +216,13 @@ struct OTAOfferSheet: View {
         }
         .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 8)
         .frame(maxWidth: 520)
-        .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity)
+        }
+        // Centred in the sheet: on its side folded the rail's strip was taken off one side only, and the content sat off
+        // the sheet's middle by its width (designer gate, 2026-11-19). It's 520 pt at most, clear of the rail either way.
+        .ignoresSafeArea(.container, edges: .horizontal)
+        .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.height(height)])
         .presentationDragIndicator(.visible)
     }
@@ -269,7 +281,7 @@ struct UpdatesSection: View {
         // system's button style in the list, so the press is the row's own highlight inside the card's corners.
         // Color.primary, the label colour itself: .primary resolved to the style's tint and turned every line blue.
         Button { model.appHistory = a.file } label: { rowBody(a).foregroundStyle(Color.primary) }
-            .accessibilityHint("Opens its version history")
+            .accessibilityHint(a.isOurs ? "Opens its version history" : "Opens its details")
             .place("update-\(a.id)")
     }
     func rowBody(_ a: Status.SeedApp) -> some View {
@@ -374,9 +386,15 @@ struct NoteLines: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("•").foregroundStyle(.secondary)
-                    Text(n).fixedSize(horizontal: false, vertical: true)
+                // "# " starts a heading over the lines under it, as an App Store or GitHub release groups its notes.
+                if n.hasPrefix("# ") {
+                    // No extra space above it: three lines stay exactly three lines' height, so the cut never slices one.
+                    Text(n.dropFirst(2)).fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•").foregroundStyle(.secondary)
+                        Text(n).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
         }
@@ -409,12 +427,19 @@ struct AppIcon: View {
     let app: Status.SeedApp
     var size: CGFloat = 58
     @State private var image: Image?
+    // No icon to fetch (an app he added that carries none), or the fetch failed: the app's initial on a quiet tile,
+    // never a blank square (gate 3, Delta).
+    @State private var none = false
     private var key: String { IconCache.key(app) }
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
         ZStack {
             // Until its icon is here, a plain square in the icon's place, never a stand-in picture; then it fades in.
             Color(white: 0.2)
+            if none, image == nil {
+                LinearGradient(colors: [Color(white: 0.36), Color(white: 0.2)], startPoint: .top, endPoint: .bottom)
+                Text(app.name.prefix(1).uppercased()).font(.system(size: size * 0.46, weight: .semibold, design: .rounded)).foregroundStyle(.white.opacity(0.92))
+            }
             if let image { image.resizable().interpolation(.high).scaledToFill().transition(.opacity) }
         }
         .frame(width: size, height: size)
@@ -423,7 +448,7 @@ struct AppIcon: View {
         .accessibilityHidden(true)
         .task(id: key) {
             if let known = IconCache.images[key] { image = known; return }
-            guard let api = IconCache.api, let i = await IconCache.fetch(app, api: api) else { return }
+            guard let api = IconCache.api, let i = await IconCache.fetch(app, api: api) else { none = true; return }
             withAnimation(.easeOut(duration: 0.25)) { image = i }
         }
     }
@@ -450,18 +475,6 @@ enum IconCache {
         #else
         return nil
         #endif
-    }
-}
-
-// In Settings: whether the app offers waiting updates as it opens.
-struct OTASettings: View {
-    @AppStorage(OTAInstaller.offerKey) private var offer = false
-    var body: some View {
-        Section {
-            Toggle("Also ask when I open the app", isOn: $offer)
-        } header: { Text("App updates") } footer: {
-            Text("New builds of your apps show as a number on the Apps tab and on the app’s icon, and install over the air from anywhere on Tailscale.")
-        }
     }
 }
 
@@ -573,7 +586,7 @@ struct VersionHistoryView: View {
         ScrollViewReader { proxy in
         List {
             // As a tab's paneTitle: at the cards' edge, the same height in both panes so their first cards start level.
-            Section { PaneHeading(title: "Version History", shown: header) }
+            Section { PaneHeading(title: "Version History", shown: header, nudgeSide: 6) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
             if header, let app {
                 Section {

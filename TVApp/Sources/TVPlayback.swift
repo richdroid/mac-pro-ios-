@@ -1,6 +1,9 @@
 import AVFoundation
 import SwiftUI
 #if canImport(UIKit)
+import UIKit.UIGestureRecognizerSubclass
+#endif
+#if canImport(UIKit)
 import UIKit
 #endif
 #if os(iOS)
@@ -90,9 +93,7 @@ final class SeekQueue: ObservableObject {
                 guard let self, self.generation == gen else { return }
                 if failed {
                     // Back to where the TV really is, at once, with the feel of a no.
-                    #if canImport(UIKit)
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
-                    #endif
+                    Haptic.fire(.fail)
                     self.pending -= n
                     model.say("Couldn’t move it")
                 } else if let ms = (answer?["position"] as? NSNumber)?.doubleValue {
@@ -459,7 +460,7 @@ struct ScrubBar: View {
                 .animation(.easeOut(duration: 0.15), value: scrub == nil)
         }
         .frame(height: 28)
-        .sensoryFeedback(.selection, trigger: scrub.map { Int($0 / tickEvery) })
+        .haptic(.tick, trigger: scrub.map { Int($0 / tickEvery) }, when: { $0 != nil && $1 != nil })
     }
 }
 
@@ -479,6 +480,23 @@ struct ProgressPlaceholder: View {
 }
 
 // A round glass button that does something here, rather than press a key on the TV.
+// The transport's and the pad's keys: glass tinted with the page's own wall colour, one value for every key on the page,
+// so a row reads as one set over any art and belongs to the page (purple glass on Mint, the poster's tone on a film).
+// Clear glass took whatever lay under each key, so over a film ⏮ looked red and ⏭ purple; a neutral charcoal made them
+// dead holes on Mint's purple (gate 276, item 10, the designer's ruling).
+struct KeyGlass: ViewModifier {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var store = AmbienceStore.shared
+    func body(content: Content) -> some View {
+        let wall = model.mood ?? store.band ?? Color(hex: 0x4A1A5C)
+        // 80 %: at half, a wall of several colours still came through each key (third pass, the YouTube wall).
+        // And a solid disc of that colour under the key's face, so no wall, however busy, reaches through (fourth pass).
+        let tone = wall.mix(with: .black, by: 0.45)
+        content.background(Circle().fill(tone))
+            .glassEffect(.regular.tint(tone.opacity(0.8)).interactive(), in: Circle())
+    }
+}
+extension View { func keyGlass() -> some View { modifier(KeyGlass()) } }
 struct GlassButton: View {
     @Environment(TVModel.self) var model
     let icon: String, label: String
@@ -488,7 +506,7 @@ struct GlassButton: View {
         Button { model.tick(); action() } label: {
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
         }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).keyGlass().accessibilityLabel(label)
     }
 }
 
@@ -503,6 +521,12 @@ private struct BackToTop: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
+            // The foot of every scrolling page is the bar's own room plus 16 pt, fixed: it never changes while scrolling.
+            // A page shorter than the screen doesn't scroll or bounce, and so never collapses its title (brief 3.7).
+            .contentMargins(.bottom, 16, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+            // One indicator at most where two panes scroll side by side: none (2026-11-20, "this dual scroll bar").
+            .scrollIndicators(.hidden)
             // How far the page has scrolled, for its title to go up with it.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
                 if let pageScroll, abs(pageScroll.y - y) > 0.25 { pageScroll.y = y }
@@ -578,9 +602,7 @@ enum StremioBack {
                 let d = try await TVBridge.post("player-seek-to", ["ms": 0], timeout: 60)
                 if let ms = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue { q.adopt(ms, for: s) }
             } catch {
-                #if canImport(UIKit)
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
-                #endif
+                Haptic.fire(.fail)
                 model.say("Couldn’t go back to the start")
             }
             await model.load()
@@ -626,6 +648,236 @@ enum SeriesInfo {
     }
 }
 
+extension StremioEpisode {
+    // Its own name, without the "Episode 2" a catalogue puts in front of it or in place of one (gate 276).
+    var ownName: String? { Wording.episodeName(name, number: episode) }
+}
+
+// MARK: - Seasons as a pivot (Richard, 2026-11-14: "swiping between seasons a la zune")
+// How far a finger has pulled the episode list sideways, shared so the headers slide along in step with the rows even where
+// the headers are held apart from them (the sheet over the Remote).
+@Observable @MainActor final class SeasonSwipe {
+    static let shared = SeasonSwipe()
+    var dx: CGFloat = 0
+    // The last moment a finger was pulling sideways: a row lifted at the end of that pull is the pull's, never a tap (a button
+    // fires on any release inside it, however far the finger travelled).
+    var pulledAt = Date.distantPast
+    // The width of the column the rows are in, so a landing can carry the pull across to the new season without a jump.
+    var width: CGFloat = 0
+    // The season has just changed (unanimated): the pull's distance is rebased onto the new one, so headers and rows stay
+    // exactly where they were and then glide home together.
+    func land(forward: Bool) { dx += forward ? width : -width }
+    var justPulled: Bool { Date().timeIntervalSince(pulledAt) < 0.45 }
+}
+// The season headers as a Zune pivot: the one he's on large and bright in the middle, the seasons either side of it
+// peeking in at the edges, dimmed and cut by the edge on purpose. A tap on one moves there; swiping the episodes moves
+// them along (SeasonSwipeRows). Each landing is a tick.
+struct SeasonPivot: View {
+    let seasons: [Int]
+    @Binding var selected: Int
+    // The big title's size; the sheet's header, under a show name, is smaller so it never outranks it.
+    var size: CGFloat = 30
+    var swipe = SeasonSwipe.shared
+    @State private var widths: [Int: CGFloat] = [:]
+    @State private var span: CGFloat = 0
+    static func name(_ s: Int) -> String { s == 0 ? "Specials" : "Season \(s)" }
+    static func move(_ seasons: [Int], _ selected: Binding<Int>, to s: Int) {
+        guard s != selected.wrappedValue, seasons.contains(s) else { return }
+        Haptic.fire(.tick)
+        let from = seasons.firstIndex(of: selected.wrappedValue) ?? 0, to = seasons.firstIndex(of: s) ?? 0
+        // The season changes in one quiet step with the pull carried over, then everything glides home in the next.
+        var q = Transaction(); q.disablesAnimations = true
+        withTransaction(q) { selected.wrappedValue = s; SeasonSwipe.shared.land(forward: to > from) }
+        Task { @MainActor in withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { SeasonSwipe.shared.dx = 0 } }
+    }
+    private let gap: CGFloat = 18, small: CGFloat = 0.62
+    private var height: CGFloat { size * 1.5 }
+    private func width(_ i: Int) -> CGFloat { (widths[seasons[i]] ?? size * 3.2) }
+    // Each title's middle and size with season `k` chosen: it in the middle at full size, the one either side with its
+    // middle near the edge (the edge cuts about a fifth of it), the rest beyond at the small size's own spacing.
+    private func layout(_ k: Int) -> [(x: CGFloat, scale: CGFloat)] {
+        seasons.indices.map { i in
+            if i == k { return (span / 2, 1) }
+            var x = span / 2
+            let step = i > k ? 1 : -1
+            var j = k
+            while j != i {
+                let n = j + step
+                let near = abs(n - k) == 1
+                let a = j == k ? width(j) : width(j) * small, bw = width(n) * small
+                let d = near ? max((a + bw) / 2 + gap, span / 2 - bw * 0.2) : (a + bw) / 2 + gap
+                x += CGFloat(step) * d
+                j = n
+            }
+            return (x, small)
+        }
+    }
+    var body: some View {
+        let k = seasons.firstIndex(of: selected) ?? 0
+        let f = span > 0 ? max(-1, min(1, -swipe.dx / span)) : 0
+        let n = f > 0 ? k + 1 : k - 1
+        let t = seasons.indices.contains(n) ? abs(f) : 0
+        let here = layout(k), there = seasons.indices.contains(n) ? layout(n) : here
+        ZStack {
+            ForEach(Array(seasons.enumerated()), id: \.element) { i, s in
+                let x = here[i].x + (there[i].x - here[i].x) * t
+                let sc = here[i].scale + (there[i].scale - here[i].scale) * t
+                let lit = (sc - small) / (1 - small)
+                Text(Self.name(s)).font(.system(size: size, weight: .bold)).lineLimit(1).fixedSize()
+                    .foregroundStyle(.white.opacity(0.38 + 0.62 * lit))
+                    .scaleEffect(sc)
+                    .background(GeometryReader { g in Color.clear.onAppear { widths[s] = g.size.width }.onChange(of: g.size.width) { _, w in widths[s] = w } })
+                    .padding(.vertical, 12).contentShape(Rectangle())
+                    .position(x: x, y: height / 2)
+                    .accessibilityElement().accessibilityLabel(Self.name(s))
+                    .accessibilityAddTraits(i == k ? [.isButton, .isSelected, .isHeader] : .isButton)
+                    .onTapGesture { Self.move(seasons, $selected, to: s) }
+            }
+        }
+        .frame(maxWidth: .infinity).frame(height: max(height, 44))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { span = $0 }
+        // The edge fades the peeking titles out instead of cutting a letter square.
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.07), .init(color: .black, location: 0.93), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Seasons")
+    }
+}
+// One touch, one owner (brief 8.2, Richard 2026-11-20: "it cant tell if im trying to scroll horizontally or down"). The
+// episode rows are never dragged: any pull on them is the page's scroll, whatever its angle. Seasons change on the header
+// strip alone: a pull there within 30 degrees of level, judged once in its first 10 pt and held until the finger lifts, or a
+// tap on a neighbour's name. The rows only follow the header's change (`swipe.dx`).
+struct SeasonSwipeRows: ViewModifier {
+    let seasons: [Int]
+    @Binding var season: Int
+    // Where the rows ride the header's pull themselves; the phone picker's list stays put.
+    var moves = true
+    // The header strip: the one place that takes the sideways pull.
+    var header = false
+    var swipe = SeasonSwipe.shared
+    func body(content: Content) -> some View {
+        if header {
+            #if canImport(UIKit)
+            content.contentShape(Rectangle()).gesture(SidewaysPull(changed: { pulled($0) }, ended: { let_go($0, $1) }))
+            #else
+            content
+            #endif
+        } else {
+            content
+                .offset(x: moves ? swipe.dx : 0)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if moves { swipe.width = $0 } }
+        }
+    }
+    func pulled(_ dx: CGFloat) {
+        guard seasons.count > 1 else { return }
+        swipe.pulledAt = Date()
+        let k = seasons.firstIndex(of: season) ?? 0
+        // Past either end, it gives, but only a little.
+        let blocked = (dx > 0 && k == 0) || (dx < 0 && k == seasons.count - 1)
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { swipe.dx = blocked ? dx * 0.5 : dx }
+    }
+    func let_go(_ dx: CGFloat, _ vx: CGFloat) {
+        swipe.pulledAt = Date()
+        let k = seasons.firstIndex(of: season) ?? 0
+        let far = abs(dx + vx * 0.2) > 90 || abs(dx) > 45
+        let to = dx < 0 ? k + 1 : k - 1
+        if far, seasons.count > 1, seasons.indices.contains(to) { SeasonPivot.move(seasons, $season, to: seasons[to]) }
+        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipe.dx = 0 } }
+    }
+}
+#if canImport(UIKit)
+// A pan that is sideways or nothing: at 10 pt of travel it either is within 30 degrees of level, and owns the touch until
+// it lifts, or it fails for good and the scroll views around it (which wait on it, and only on it) have the touch. Never
+// both. Each decision is a line in the hand's log: travel, angle, owner.
+final class SidewaysPan: UIPanGestureRecognizer {
+    private var start: CGPoint?
+    private var decided = false
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        if start == nil { start = touches.first?.location(in: nil); decided = false }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if !decided {
+            guard let s = start, let p = touches.first?.location(in: nil) else { return }
+            let dx = p.x - s.x, dy = p.y - s.y, travel = hypot(dx, dy)
+            guard travel >= 10 else { return }
+            decided = true
+            let angle = atan2(abs(dy), abs(dx)) * 180 / .pi
+            let sideways = angle <= 30
+            Task { @MainActor in HandLog.note(String(format: "touch travel=%.1f angle=%.0f owner=%@", travel, angle, sideways ? "season" : "scroll")) }
+            if !sideways { state = .failed; return }
+        }
+        super.touchesMoved(touches, with: event)
+    }
+    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool { other is UIPanGestureRecognizer && other.view is UIScrollView }
+    override func reset() { super.reset(); start = nil; decided = false }
+}
+struct SidewaysPull: UIGestureRecognizerRepresentable {
+    let changed: (CGFloat) -> Void
+    let ended: (CGFloat, CGFloat) -> Void
+    func makeUIGestureRecognizer(context: Context) -> SidewaysPan { let g = SidewaysPan(); g.maximumNumberOfTouches = 1; return g }
+    func handleUIGestureRecognizerAction(_ g: SidewaysPan, context: Context) {
+        let dx = g.translation(in: nil).x
+        switch g.state {
+        case .began, .changed: changed(dx)
+        case .ended: ended(dx, g.velocity(in: nil).x)
+        case .cancelled, .failed: ended(0, 0)
+        default: break
+        }
+    }
+}
+#endif
+final class AxisBox { var sideways: Bool? }
+
+// An episode's row, held anywhere on it, lifts its own still (the very picture in the row, 16:9, from where it sits) and
+// throws it to the TV: the stream he'd most likely pick, as a shelf's card sends. The rest of the row stays; the tap
+// stays as it was. (It lifted a poster made for the hand, another picture in another shape: Richard, 2026-11-14.)
+struct EpisodeFlick: ViewModifier {
+    let item: MediaItem?
+    // The still: its address and how wide the row draws it, 8 pt in from the row's leading edge, centred on its height.
+    var still = ""
+    var width: CGFloat = 112
+    var onThrow: (() -> Void)?
+    var onTap: (() -> Void)?
+    // The build's films: a row that isn't the one playing says where its still is, for a real finger to land on it.
+    var reports = false
+    @State private var place = FrameBox()
+    static func stillRect(_ row: CGRect?, _ width: CGFloat) -> CGRect {
+        guard let r = row else { return .zero }
+        let h = width * 9 / 16
+        return CGRect(x: r.minX + 8, y: r.midY - h / 2, width: width, height: h)
+    }
+    func body(content: Content) -> some View {
+        if let item {
+            content.measured(place)
+                .modifier(ShelfFlick(item: item, source: .stremio, width: width, rect: { [place] in Self.stillRect(place.rect, width) },
+                                     onThrow: onThrow, onTap: onTap, still: still))
+                .task { await report() }
+        } else { content }
+    }
+    @MainActor static var reported = false
+    func report() async {
+        #if canImport(UIKit)
+        guard reports, UserDefaults.standard.string(forKey: "pose") == "episodes" else { return }
+        var last = CGRect.zero
+        for _ in 0..<60 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled || Self.reported { return }
+            guard EpisodesPanel.shared.open, let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
+                  screen.width > 0 else { continue }
+            let r = Self.stillRect(place.rect, width)
+            defer { last = r }
+            guard r == last, r.width > 0 else { continue }
+            let x = r.midX / screen.width, y = r.midY / screen.height
+            guard y > 0.35, y < 0.8 else { continue }
+            Self.reported = true
+            _ = await TVBridge.data(TVBridge.url(String(format: "/api/tv/applied?what=eprow&x=%.3f&y=%.3f&w=%.0f&h=%.0f", x, y, r.width, r.height)), timeout: 3)
+            return
+        }
+        #endif
+    }
+}
+
 // One episode list for everywhere a show is picked from: the series page, and over the Remote and Playing while it's on.
 // Seasons as numbers after the word, then the episodes: a still, its number and name, how long it runs, a tick once
 // watched, and the bar of how far in on the one he's on. The list scrolls itself to that one.
@@ -642,6 +894,10 @@ struct EpisodePicker: View {
     // The row that's on its way to the TV, with the light running round it.
     var busy: String?
     let choose: (StremioEpisode) -> Void
+    // Every row lifts and throws to the TV like a shelf's card: what it sends, and, on the flick page itself, the page's
+    // own throw for it.
+    var flickItem: ((StremioEpisode) -> MediaItem)? = nil
+    var onThrow: ((StremioEpisode) -> Void)? = nil
     // The season chips and the rows, or one of them, for a list whose chips stay put over its scrolling rows.
     enum Part { case all, header, rows }
     var part = Part.all
@@ -654,10 +910,9 @@ struct EpisodePicker: View {
         return (e.season, e.episode) < (c.season, c.episode)
     }
     var header: some View {
-        HStack(spacing: 12) {
-            Text("Season").font(.title3.weight(.bold))
-            Chips(options: seasons.map { ($0, $0 == 0 ? "Specials" : "\($0)") }, selected: $season).rowEdge()
-        }
+        // One season has nothing to swipe to: its name stands alone, still large.
+        SeasonPivot(seasons: seasons, selected: $season, size: part == .header ? 20 : 30)
+            .modifier(SeasonSwipeRows(seasons: seasons, season: $season, header: true))
     }
     // In a narrow pane the still gives way to the name, so a name is never cut to "Episod…" (r19).
     @State private var narrow = false
@@ -666,9 +921,12 @@ struct EpisodePicker: View {
         let on = e.id == current
         let mins = info?.minutes[e.id] ?? e.runtime ?? info?.show
         let about = info?.about[e.id] ?? e.overview
-        return Button { choose(e) } label: {
+        return Button { guard !SeasonSwipe.shared.justPulled, Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35 else { return }; choose(e) } label: {
             HStack(spacing: 12) {
-                Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                // In the hand or in the air, the still is gone from its row: it's the one picture, not a copy of it.
+                HiddenInHand(id: flickItem?(e).id ?? "") {
+                    Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                }
                     .frame(width: thumb, height: thumb * 9 / 16)
                     .overlay(alignment: .bottomLeading) {
                         // How far into it he is, as on Stremio's own cards. The still's width is fixed, so no reader.
@@ -678,8 +936,12 @@ struct EpisodePicker: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
-                    // Whole names: up to three lines, never cut to "Fi…" (r26).
-                    Text(e.title).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
+                    // Which one, always in the same place over its name, as the Apple TV app sets them; the name whole,
+                    // up to three lines, never cut to "Fi…" (r26), or nothing when it has none of its own (gate 276).
+                    // With no name of its own, the number is its title (third pass: a caption alone read as a missing title).
+                    let number = e.season == 0 ? "Special \(e.episode)" : "Episode \(e.episode)"
+                    if e.ownName != nil { Text(number).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                    Text(e.ownName ?? number).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                     // What it's about, in one line, so the row says more than its number.
                     if let about, !about.isEmpty { Text(about).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
@@ -700,16 +962,20 @@ struct EpisodePicker: View {
             .overlay { if busy == e.id { LoadingRing(radius: 14) } }
             .contentShape(Rectangle())
         }
-        .buttonStyle(PressCard())
+        // The press asks for its streams, so the list is on its way before the tap lands.
+        .buttonStyle(PressCard(onPress: { StreamCache.shared.prefetch(episode: e.id) }))
         .disabled(busy != nil)
+        .modifier(EpisodeFlick(item: flickItem?(e), still: e.thumb, width: thumb, onThrow: onThrow.map { f in { f(e) } }, onTap: { choose(e) }, reports: !on))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if part != .rows { header.padding(.bottom, part == .all ? 2 : 0) }
-            if part != .header { ForEach(episodes.filter { $0.season == season }) { e in row(e).id(e.id) } }
+            if part != .header {
+                VStack(alignment: .leading, spacing: 10) { ForEach(episodes.filter { $0.season == season }) { e in row(e).id(e.id) } }
+                    .modifier(SeasonSwipeRows(seasons: seasons, season: $season))
+            }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width < 330 } action: { narrow = $0 }
-        .animation(.easeInOut(duration: 0.2), value: season)
         // The episode the list rests on, still the same a second later: its link is resolved on the TV, so picking it
         // finds it answering rather than paying the cold 7 to 13 s.
         .task(id: restsOn) {
@@ -803,10 +1069,9 @@ struct RunningEdge: Shape {
 struct EpisodesLine: View {
     @Environment(TVModel.self) var model
     @ObservedObject private var nextUp = NextUp.shared
-    @State private var open = false
+    @ObservedObject private var panel = EpisodesPanel.shared
     // How far down the screen the line sits, so the list above it can stop below the page's title: grown to the top, it
     // covered "Remote" all but a sliver of its R, which read as a stray letter (r27, r28).
-    @State private var lineTop: CGFloat = 0
     var body: some View {
         // A start under way: its own episode, read from the start, never the one still reported from before it (2026-11-08:
         // the next episode thrown, and the line under its poster still named the last one until the TV caught up). The
@@ -826,7 +1091,7 @@ struct EpisodesLine: View {
             }
         } else if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
           Group {
-            Button { model.tick(); open = true } label: {
+            Button { model.tick(); withAnimation(.easeOut(duration: 0.22)) { panel.open = true } } label: {
                 // Where the whole line doesn't fit (folded, beside the side bar), the word "Episodes" gives way before the
                 // episode's own name does (r33: "S1 E…  Episod/es").
                 ViewThatFits(in: .horizontal) {
@@ -861,24 +1126,12 @@ struct EpisodesLine: View {
                 .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { lineTop = $0 }
             // Out of the way while a flick's screen moves onto the picture above it, like the bar.
             .opacity(model.flickHandoff ? 0 : 1)
             .transition(.opacity)
-            // Over the page, sized to it, not a page of its own: tap outside or pull it down and it's gone.
-            .popover(isPresented: $open, arrowEdge: .bottom) {
-                EpisodeSheet { open = false }
-                    // Clear of the title and its line under it (about 70 pt from the top, with the arrow), and over the whole
-                    // TV picture beneath, never leaving its top edge peeking out (r30): it always opens upward. Only above
-                    // a line lower than 340 pt was it capped before, and open the line sits at about 330, so the list still
-                    // reached the top and a sliver of "Remote" showed beside it (r29). Folded it's a sheet, where this is ignored.
-                    .frame(idealWidth: 440, idealHeight: min(560, max(220, lineTop - 92)))
-                    .presentationCompactAdaptation(.sheet)
-                    .presentationDetents([.medium, .large])
-            }
           }
           // The build's shot of the episodes over the Remote ("-pose episodes").
-          .task { if UserDefaults.standard.string(forKey: "pose") == "episodes" { try? await Task.sleep(nanoseconds: 3_000_000_000); open = true } }
+          .task { if UserDefaults.standard.string(forKey: "pose") == "episodes" { try? await Task.sleep(nanoseconds: 3_000_000_000); panel.open = true } }
         }
     }
 }
@@ -908,10 +1161,10 @@ struct ShowEpisodes: View {
             busy = e.id
             model.flick(FlickTarget(item: NextUp.item(s, e), source: .stremio, ready: true, autoplay: true))
             Task { try? await Task.sleep(nanoseconds: 250_000_000); busy = nil; picked() }
-        }, part: part)
+        }, flickItem: { NextUp.item(s, $0) }, part: part)
     }
     @ViewBuilder var title: some View {
-        if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2) }
+        if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2).padding(.trailing, pinsHeader ? 56 : 0) }
     }
     @ViewBuilder func rows(_ part: EpisodePicker.Part) -> some View {
         if let meta, let s = nextUp.series { picker(meta, s, part) }
@@ -937,6 +1190,7 @@ struct ShowEpisodes: View {
                             VStack(spacing: 0) {
                                 LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
                                 Color.black
+                                LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 14)
                             }
                         }
                     }
@@ -965,23 +1219,36 @@ struct ShowEpisodes: View {
         }
     }
 }
-// The same, over the Remote: tap outside or pull it down and it's gone.
-struct EpisodeSheet: View {
-    let close: () -> Void
+// The episodes over the Remote: a real surface of the Remote's own page, not a popover. Open flat it takes the whole left
+// column, upright and folded nearly the whole page. It lives in the Remote's layout so a row lifted off it can be thrown
+// to the TV (the shelves' flick); the close key is its own.
+@MainActor
+final class EpisodesPanel: ObservableObject {
+    static let shared = EpisodesPanel()
+    @Published var open = false
+    func close() { withAnimation(.easeOut(duration: 0.22)) { open = false } }
+}
+struct EpisodePanel: View {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var nextUp = NextUp.shared
+    @ObservedObject private var panel = EpisodesPanel.shared
     var body: some View {
-        // An opaque enough backdrop and its own top inset, so nothing of the page under it (the "Remote" title) shows at its
-        // top edge (r20).
-        // The show's name and the seasons held at the top, 28 pt down so the grabber is clear of them, and only the rows
-        // scroll, under them, so no row's words ever sit under the grabber. The same 20 pt each side: the side bar's inset
-        // isn't the sheet's, and kept, it left a 95 pt strip on the right (review of dfd490e, tv-episodes).
-        ShowEpisodes(titled: true, pinsHeader: true, picked: close)
-            .frame(maxWidth: 560).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, 28)
-            .ignoresSafeArea(.container, edges: [.leading, .trailing, .bottom])
-        // Opaque: the material let the Remote's title show through as a stray "F" behind its top, open (r27).
-        .presentationBackground(Color(white: 0.12))
-        // One corner shape all round, whether it's a popover or a sheet (r21: one square corner, one round).
-        .presentationCornerRadius(28)
+        ShowEpisodes(titled: true, pinsHeader: true, picked: { panel.close() })
+            .frame(maxWidth: 640).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 18)
+            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                // The system's own close key (its glyph, its glass, its size), as on a sheet: not one drawn by hand.
+                Button(role: .close) { model.tick(); panel.close() }
+                    .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
+                    .padding(.top, 12).padding(.trailing, 14)
+                    .accessibilityLabel("Close episodes")
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            // Thrown to the TV, or the show gone: nothing left to pick.
+            .onChange(of: model.flicking != nil) { _, on in if on { panel.close() } }
+            .onChange(of: nextUp.series == nil) { _, gone in if gone { panel.close() } }
+            .transition(.opacity)
     }
 }
 
@@ -996,11 +1263,28 @@ struct PlayingVideo: View {
     let ended: Bool
     @State private var still: String?
     @State private var about: String?
+    // The episode's own name from the show's list, when the TV's line has none ("S1 E2" alone) or a placeholder.
+    @State private var ownName: (season: Int, episode: Int, name: String)?
     @State private var pictureCap: CGFloat = 300
     var series: NextUp.Series? { session.pkg == "com.stremio.one" ? nextUp.series : nil }
     var body: some View {
         let name = session.showName
-        let episode = session.episodeLine
+        // An episode: which one in the small line over the title ("Sample Series · S1 E2"), and the episode's own name as
+        // the title, whole (up to three lines, never cut: r26), as its row names it. With no name of its own, the show's
+        // name is the title and "S1 E2" the line over it (gate 276: the hero said "Episode 2", its row "Episode 2: The
+        // One…"; then, joined into one title, the name was cut to "…Long We…").
+        let se = session.seasonEpisode
+        let own: String? = {
+            guard session.episodeLine != nil, let se else { return nil }
+            // Only the name of this very episode: a moment after a change, the list may still be the last one's.
+            if let o = ownName, o.season == se.season, o.episode == se.episode { return o.name }
+            // Else whatever the TV's own line names it, after its "S1 E2 · ".
+            guard let line = session.episodeLine, let r = line.range(of: " · ") else { return nil }
+            return Wording.episodeName(String(line[r.upperBound...]), number: se.episode)
+        }()
+        let which = se.map { "S\($0.season) E\($0.episode)" }
+        let over: String? = session.episodeLine == nil ? nil : own != nil ? [name, which ?? ""].filter { !$0.isEmpty }.joined(separator: " · ") : name.isEmpty ? nil : which
+        let title = session.episodeLine == nil ? name : own ?? (name.isEmpty ? which ?? "" : name)
         VStack(alignment: .leading, spacing: 14) {
             // One 16:9 picture, never taller than about 38 % of the page, so the title, the bar and the keys are all on the
             // first screen (r19: a portrait poster filled the page and pushed everything under the fold). The episode's
@@ -1038,10 +1322,11 @@ struct PlayingVideo: View {
             VStack(alignment: .leading, spacing: 3) {
                 // The show above, the episode as the title; a film is its own title. A video is its own title too, its
                 // channel under it (r35: the channel was the title and the video's name the small line over it).
-                if let episode, !name.isEmpty { Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
-                Text(episode ?? name).font(.title2.weight(.bold)).lineLimit(2)
+                if let over { Text(over).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
+                Text(title).font(.title2.weight(.bold)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 if let channel = session.channel { Text(channel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
-                if let about { Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(panes ? 4 : 3).padding(.top, 4) }
+                // A tap opens the rest of the words in place, and closes them again.
+                if let about { ExpandingText(text: about, lines: panes ? 4 : 3, font: .footnote).padding(.top, 4) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentTransition(.opacity)
@@ -1049,8 +1334,8 @@ struct PlayingVideo: View {
             Transport(ended: ended).padding(.top, 2)
         }
         .task(id: series) {
-            guard let s = series, let m = await NextUp.meta(s.imdb), let e = m.episodes.first(where: { $0.id == s.current }) else { still = nil; about = nil; return }
-            withAnimation(.easeOut(duration: 0.25)) { still = e.thumb }
+            guard let s = series, let m = await NextUp.meta(s.imdb), let e = m.episodes.first(where: { $0.id == s.current }) else { still = nil; about = nil; ownName = nil; return }
+            withAnimation(.easeOut(duration: 0.25)) { still = e.thumb; ownName = e.ownName.map { (e.season, e.episode, $0) } }
             let info = await SeriesInfo.load(s.imdb)
             withAnimation(.easeOut(duration: 0.25)) { about = info?.about[e.id] }
         }

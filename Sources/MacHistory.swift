@@ -27,6 +27,11 @@ struct HistoryMetric: Identifiable, Hashable {
         case .temperature: return "\(Heat.shown(v))°"
         }
     }
+    // An axis figure: whole sizes without a decimal ("0 GB", "100 GB").
+    func axisText(_ v: Double) -> String {
+        if kind == .bytes { let g = v / 1_073_741_824; return abs(g - g.rounded()) < 0.05 ? "\(Int(g.rounded())) GB" : String(format: "%.1f GB", g) }
+        return text(v)
+    }
     func now(_ live: LiveStatus?) -> Double? {
         guard let live else { return nil }
         switch key {
@@ -74,14 +79,19 @@ enum TrendCache {
 }
 
 struct HistoryView: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var store: LiveStore
     @Environment(\.paneLayout) private var panes
     let metric: HistoryMetric
     @State private var points: [TrendPoint]
     @State private var loaded: Bool
     @State private var failed = false
+    @State private var missed = false
     @State private var misses = MissClock()
+    // The Mac has stopped answering (the app's own readings, or this page's): the figure under "Now" and the chart are
+    // the last it sent, said so with their age and dimmed.
+    var stale: Bool { !points.isEmpty && (missed || model.problem != nil || model.pose == "stale") }
+    @ViewBuilder var staleLine: some View { if stale { StaleLine(lastRead: model.pose == "stale" ? Date().addingTimeInterval(-190) : model.pulse.lastFresh) } }
     init(metric: HistoryMetric) {
         self.metric = metric
         let kept = TrendCache.points[metric.key] ?? []
@@ -113,20 +123,34 @@ struct HistoryView: View {
         }
         return out
     }
+    // Round steps up past the highest figure shown, for sizes (whole GB) and speeds (whole KB/s or MB/s).
+    var ticks: [Double]? {
+        guard metric.kind == .bytes || metric.kind == .rate else { return nil }
+        let top = (marks + nowMark).map { max($0.value, $0.peak ?? 0) }.max() ?? 0
+        guard top > 0 else { return nil }
+        let unit: Double = metric.kind == .bytes ? 1_073_741_824 : (top < 1024 ? 1 : top < 1_048_576 ? 1024 : 1_048_576)
+        let raw = top / unit / 3
+        let mag = pow(10, floor(log10(max(raw, 1e-9))))
+        let step = ([1.0, 2, 5, 10].first { $0 * mag >= raw } ?? 10) * mag * unit
+        let count = Int(ceil(top / step))
+        return (0...max(count, 1)).map { Double($0) * step }
+    }
+    // The latest figure for the chart's "now" mark, read without watching the live readings (HistoryReadout does that).
+    // The reading the tile or dial shows, never the last bucket's average when the status has a newer one: a dial at
+    // 111° opened a history saying 44° (designer, 2026-11-12).
+    var current: Double? { metric.now(model.liveStore.live) ?? metric.now(model.status) ?? points.last?.v }
+    var nowMark: [Mark] {
+        guard let c = current, let last = marks.last, Date().timeIntervalSince(last.date) < 900 else { return [] }
+        return [Mark(date: Date(), value: c, run: last.run, peak: nil)]
+    }
     var pickedMark: Mark? {
         guard let picked else { return nil }
         return marks.min { abs($0.date.timeIntervalSince(picked)) < abs($1.date.timeIntervalSince(picked)) }
     }
-    // Never a dash while a figure is known: the live reading, the day's last point, or what Status last showed.
-    var current: Double? { metric.now(store.live) ?? points.last?.v ?? metric.now(model.status) }
-
+    // The figure under the name is its own view, the only part of the page that watches the live readings: the whole page
+    // (its chart included) was worked out again with every reading, a 100 to 200 ms frame each second (gate 3).
     var readout: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(pickedMark.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–")
-                .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
-            Text(pickedMark.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? "Now").font(.footnote).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        HistoryReadout(metric: metric, picked: pickedMark.map { ($0.value, $0.date) }, last: points.last?.v, stale: stale)
     }
     var range: some View {
         Picker("Period", selection: $hours) {
@@ -135,7 +159,8 @@ struct HistoryView: View {
         .pickerStyle(.segmented).labelsHidden()
     }
     var chart: some View {
-        let list = marks, domain = Date().addingTimeInterval(-Double(hours) * 3600)...Date()
+        // The line ends where the header's "Now" is: the live reading, not the last bucket's average (designer, 2026-11-11).
+        let list = marks + nowMark, domain = Date().addingTimeInterval(-Double(hours) * 3600)...Date()
         return Chart {
             ForEach(list) { m in
                 AreaMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", "\(m.run)"), stacking: .unstacked)
@@ -154,7 +179,7 @@ struct HistoryView: View {
             }
         }
         .chartXScale(domain: domain)
-        .chartYScale(domain: .automatic(includesZero: metric.kind != .temperature))
+        .modifier(YScale(top: ticks?.last, zero: metric.kind != .temperature))
         // Not the system's chart selection, which takes every touch and stops the page scrolling.
         .chartOverlay { proxy in
             GeometryReader { g in
@@ -172,22 +197,36 @@ struct HistoryView: View {
             }
         }
         .chartYAxis {
-            AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { v in
-                AxisGridLine().foregroundStyle(.white.opacity(0.1))
-                AxisValueLabel { if let d = v.as(Double.self) { Text(metric.text(d)).font(.caption2).monospacedDigit() } }
+            // 10 pt between the plot and its figures, so the "now" dot never touches one (designer, 2026-11-11).
+            // Round steps for sizes and speeds ("0, 100, 200, 300 GB"), not the chart's own (279, 186, 93) (designer,
+            // 2026-11-11).
+            if let ticks {
+                AxisMarks(position: .trailing, values: ticks) { v in
+                    AxisGridLine().foregroundStyle(.white.opacity(0.1))
+                    // Zero in the axis's own unit: "0 KB/s" under "50 KB/s", not "0 B/s".
+                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(d == 0 && ticks.count > 1 ? "0 " + (metric.axisText(ticks[1]).split(separator: " ").last.map(String.init) ?? "") : metric.axisText(d)).font(.caption2).monospacedDigit() } }
+                }
+            } else {
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { v in
+                    AxisGridLine().foregroundStyle(.white.opacity(0.1))
+                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(metric.text(d)).font(.caption2).monospacedDigit() } }
+                }
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+            AxisMarks(values: .automatic(desiredCount: 4)) { v in
                 AxisGridLine().foregroundStyle(.white.opacity(0.06))
-                AxisValueLabel(format: hours == 1 ? Date.FormatStyle.dateTime.hour().minute() : Date.FormatStyle.dateTime.hour())
+                // None in the last tenth of the period, where a time sat on the value axis's bottom figure.
+                if let d = v.as(Date.self), d < domain.upperBound.addingTimeInterval(-Double(hours) * 360) {
+                    AxisValueLabel(format: hours == 1 ? Date.FormatStyle.dateTime.hour().minute() : Date.FormatStyle.dateTime.hour())
+                }
             }
         }
         .overlay {
             if points.isEmpty {
                 if failed {
                     ContentUnavailableView {
-                        Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark")
+                        Label(Phrase.macAway, systemImage: "wifi.exclamationmark")
                     } actions: {
                         Button("Try again") { Task { await load() } }.buttonStyle(.bordered)
                     }
@@ -227,17 +266,22 @@ struct HistoryView: View {
         if let sort = ProcessSort(metric: metric) { ProcessesLink(sort: sort) }
     }
     var body: some View {
+        let _ = SwipeLog.mark("history body")
         // Opened, turned or closed, the page comes back where he was: the figures scroll to what was at the top.
         ScrollViewReader { proxy in
         Group {
             if panes {
                 // The name first in the left pane, carried unseen in the right so both start level (PaneHeading).
                 FoldSplit {
-                    VStack(spacing: 14) { PaneHeading(title: metric.title); readout; chart.frame(maxHeight: .infinity) }
-                        .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
+                    // 20 pt from the display's edge, on the tabs' title line: the pane's own 14 pt outer air plus 6 (it was
+                    // 20 more, the title at 35; designer gate, 2026-11-19).
+                    // The figure moved to the right pane, where it heads the figures and the period, and gave the chart its
+                    // height: open flat the right pane stood half empty under Processes (designer gate 4, 2026-11-19).
+                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5); staleLine; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
+                        .padding(.leading, 6).padding(.trailing, 20).padding(.top, 4).padding(.bottom, 20)
                 } right: {
                     ScrollView {
-                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false); range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false, nudge: 5); readout; range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
                             .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
                     }
                     .scrollsUnder()
@@ -245,8 +289,9 @@ struct HistoryView: View {
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 14) { PaneHeading(title: metric.title).place("title"); readout.place("readout"); range.place("range"); chart.frame(height: 260).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
-                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5).place("title"); staleLine; readout.place("readout"); range.place("range"); chart.frame(height: 260).opacity(stale ? staleDim : 1).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                        // 20 pt from the display's edge like every list and tab title (16 put the title at 17).
+                        .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
                 }
                 .scrollsUnder()
                 .keepsPlace("history-\(metric.key)", proxy)
@@ -261,23 +306,25 @@ struct HistoryView: View {
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
         .pushedTitle()
         .animation(.easeOut(duration: 0.2), value: hours)
+        .animation(Motion.quick, value: stale)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
-        .navigationDestination(item: $model.processes) { ProcessesView(first: $0, model: model) }
+        .modifier(ProcessesOverHistory(model: model, nav: model.nav))
         .task {
             // A new reading arrives once a minute. Until the first one gets through, it keeps trying every few seconds.
             while !Task.isCancelled {
-                await load()
-                try? await Task.sleep(nanoseconds: points.isEmpty ? 5_000_000_000 : 60_000_000_000)
+                if !model.screenOpen { await load() }
+                // Sooner again after a miss, so the page is back the moment the Mac is.
+                try? await Task.sleep(nanoseconds: points.isEmpty || missed ? 5_000_000_000 : 60_000_000_000)
             }
         }
     }
     func load() async {
-        do { points = try await model.api.trend(metric.key); misses.hit(); failed = false; TrendCache.points[metric.key] = points }
+        do { points = try await model.api.trend(metric.key); misses.hit(); failed = false; missed = false; TrendCache.points[metric.key] = points }
         catch is CancellationError { return }
         catch {
             // Said only after 8 s without an answer; until then the wait shows as waiting, not as "Collecting".
             guard misses.miss() else { return }
-            failed = points.isEmpty
+            failed = points.isEmpty; missed = true
         }
         loaded = true
     }
@@ -298,8 +345,9 @@ struct NowDot: View {
 // Held down like the lock screen's flashlight: a ring fills around it under the finger, it clicks and switches. The
 // glyph and its fill say which way it is; a tap on its own only wiggles it and says "Hold" in place.
 struct DisplayHoldButton: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var store: LiveStore
+    @EnvironmentObject var display: DisplayState
     @State private var pressing = false
     @State private var fill: CGFloat = 0
     @State private var wanted: Bool?    // what was asked for, until the Mac agrees
@@ -308,8 +356,11 @@ struct DisplayHoldButton: View {
     @State private var wiggles = 0
     @State private var failure: String?
     // What was just asked for, briefly; otherwise the Mac's own state, read every second, then every 10 seconds.
-    var reported: Bool? { store.live?.displayOn ?? model.status?.displayOn }
-    var isOn: Bool { wanted ?? reported ?? (model.status?.screen != "display off") }
+    // From the page that holds it: the status isn't watched through the model (StatusStore).
+    var statusOn: Bool?
+    var statusOff = false
+    var reported: Bool? { display.on ?? statusOn }
+    var isOn: Bool { wanted ?? reported ?? !statusOff }
     static let hold = 0.4, settle = 0.12
     var body: some View {
         // Dimmed in its own colours while the Mac can't be reached: an opacity laid over it from outside didn't reach
@@ -417,5 +468,35 @@ struct DisplayHoldButton: View {
             for _ in 0..<12 where reported != next { try? await Task.sleep(nanoseconds: 500_000_000) }
             wanted = nil
         }
+    }
+}
+
+// A history's figure: the picked point's, or else the live reading, the day's last point, or what Status last showed; never a
+// dash while a figure is known.
+struct HistoryReadout: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var store: LiveStore
+    let metric: HistoryMetric
+    let picked: (value: Double, date: Date)?
+    let last: Double?
+    let stale: Bool
+    var current: Double? { metric.now(store.live) ?? metric.now(model.status) ?? last }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(picked.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–")
+                .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
+            Text(picked.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? (stale ? "Last reading" : "Now")).font(.footnote).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(stale ? staleDim : 1)
+    }
+}
+
+// A history chart's value scale: from nothing up to its top round step when it has one, else the chart's own.
+private struct YScale: ViewModifier {
+    let top: Double?
+    let zero: Bool
+    func body(content: Content) -> some View {
+        if let top { content.chartYScale(domain: 0...top) } else { content.chartYScale(domain: .automatic(includesZero: zero)) }
     }
 }

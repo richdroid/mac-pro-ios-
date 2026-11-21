@@ -4,7 +4,7 @@ import UIKit
 #endif
 
 // Mint and Stremio, pared down: what they already show, on the phone, ready to flick to the TV.
-struct MediaItem: Decodable, Identifiable, Hashable {
+struct MediaItem: Codable, Identifiable, Hashable {
     let title: String, subtitle: String, art: String, id: String, kind: String
     var about: String?
     var progress: Double?
@@ -13,7 +13,7 @@ struct MediaItem: Decodable, Identifiable, Hashable {
     var resume: Int?
     var isYouTube: Bool { kind == "youtube" }
 }
-struct MediaRow: Decodable, Identifiable, Hashable {
+struct MediaRow: Codable, Identifiable, Hashable {
     let title: String, items: [MediaItem]
     var id: String { title }
 }
@@ -23,7 +23,6 @@ enum MediaSource: String, CaseIterable, Identifiable {
     var name: String { self == .mint ? "Mint Music" : "Stremio" }
     var pkg: String { self == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
     static func of(pkg: String) -> MediaSource? { allCases.first { $0.pkg == pkg } }
-    var prompt: String { self == .mint ? "Search music" : "Search films and series" }
     var coverAspect: CGFloat { self == .mint ? 1 : 2.0 / 3 }
     // Each app's own colour, for the page behind it.
     var mood: Color { self == .mint ? Color(hex: 0x1F9E78) : Color(hex: 0x6A3FD0) }
@@ -88,6 +87,16 @@ final class BrowseStore: ObservableObject {
     // When the kept list was last fresh, once the Mac has failed to give a newer one: the pages dim it and say so.
     @Published private(set) var keptSince: Date?
     private var keptDate: Date?
+    // Since when asking has failed. The kept list dims and says when it was last seen only once that has gone on about
+    // 25 s, as the app's other reach words do: until then it stays at full strength (a blip leaves no trace).
+    // A miss long after the last one starts the clock again: two blips minutes apart are not 25 s of failure.
+    private var missSince: Date?, lastMiss: Date?
+    private func stillMissing() -> Bool {
+        let now = Date()
+        if missSince == nil || now.timeIntervalSince(lastMiss ?? now) > 60 { missSince = now }
+        lastMiss = now
+        return now.timeIntervalSince(missSince!) >= TVModel.unreachableAfter
+    }
     private static func keptFile(_ name: String) -> URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-rows-\(name).json")
     }
@@ -151,13 +160,13 @@ final class BrowseStore: ObservableObject {
             // Results for some other search aren't an answer to this one.
             // (The list kept from last time stays while the Mac can't be asked for a fresh one.)
             if loadedFor != q, !(fromDisk && q.isEmpty) { if !rows.isEmpty { rows = [] }; loadedFor = nil }
-            if fromDisk, q.isEmpty, keptSince != keptDate { keptSince = keptDate }
+            if fromDisk, q.isEmpty, stillMissing(), keptSince != keptDate { keptSince = keptDate }
             if failed != rows.isEmpty { failed = rows.isEmpty }
             return
         }
         // The same list again (a revisit after a minute) changes nothing on screen, so it isn't set again.
         if decoded != rows { rows = decoded }
-        loadedFor = q; loadedAt = Date(); fromDisk = false
+        loadedFor = q; loadedAt = Date(); fromDisk = false; missSince = nil
         if keptSince != nil { keptSince = nil }
         if q.isEmpty, !decoded.isEmpty { keep(data) }
     }
@@ -182,12 +191,12 @@ final class BrowseStore: ObservableObject {
         guard query.trimmingCharacters(in: .whitespaces).isEmpty && genre.isEmpty else { return }
         guard let decoded else {
             if failed != rows.isEmpty { failed = rows.isEmpty }
-            if fromDisk, keptSince != keptDate { keptSince = keptDate }
+            if fromDisk, stillMissing(), keptSince != keptDate { keptSince = keptDate }
             return
         }
         if failed { failed = false }
         if decoded != rows { rows = decoded }
-        loadedFor = ""; loadedAt = Date(); fromDisk = false
+        loadedFor = ""; loadedAt = Date(); fromDisk = false; missSince = nil
         if keptSince != nil { keptSince = nil }
     }
     // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
@@ -248,6 +257,8 @@ struct MediaCard: View {
     let source: MediaSource
     var width: CGFloat
     var image: Image?   // for a song on this phone, whose cover has no address
+    // Drawn once, as a picture of itself (the card in the hand): nothing to wait for, so no waiting look.
+    var still = false
     // Room for a title on two lines and the line under it, the same on every card, so a row's cards stay even.
     static func band(_ width: CGFloat) -> CGFloat { width > 200 ? 82 : 62 }
     static func height(_ width: CGFloat, _ source: MediaSource) -> CGFloat { width / source.coverAspect + band(width) }
@@ -264,7 +275,7 @@ struct MediaCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let image { image.resizable().scaledToFill() }
-                else if noArt { CoverFallback(title: item.title, tint: shownBand) }
+                else if noArt || still { CoverFallback(title: item.title, tint: shownBand) }
                 else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait().overlay { LoadingRing(radius: 0) } } }
             }
                 .frame(width: cardWidth, height: coverHeight)
@@ -362,7 +373,7 @@ struct MediaList: View {
     var body: some View {
         RowList(title: row.title) {
             ForEach(row.items) { item in
-                Button { FlickCardButton.tap(model, item, source) } label: {
+                FlickRowBox(item: item, source: source, width: 50, label: { place in AnyView(
                     HStack(spacing: 12) {
                         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             // One picture column for every row, so every title starts at the same place and the lines between
@@ -370,6 +381,7 @@ struct MediaList: View {
                             // the posters', a ragged column). In a list the title says what it is; the still fills the poster's
                             // place, its middle kept.
                             .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .measured(place)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title).font(.body.weight(.semibold)).lineLimit(2)
                             if !item.shownSubtitle.isEmpty { Text(item.shownSubtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
@@ -377,8 +389,7 @@ struct MediaList: View {
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                ) })
                 .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             }
         }
@@ -400,19 +411,8 @@ struct BrowseColumn: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 // The app's name leads the page. Unfolded, the other side keeps its room empty, so both sides' rows start level.
                 PageHeading(store.source.name).padding(.horizontal, 20).padding(.bottom, -10).opacity(part == .right ? 0 : 1).accessibilityHidden(part == .right)
-                if part != .right { HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(store.source.prompt, text: $store.query).autocorrectionDisabled().submitLabel(.search)
-                        .focused($searchFocused).hidesTabBar(while: searchFocused, "browse")
-                        .onChange(of: store.query) { _, _ in store.searchSoon() }
-                    if !store.query.isEmpty {
-                        Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
-                            .transition(.opacity)
-                    }
-                }
-                .padding(.horizontal, 16).frame(height: 46)
-                .glassEffect(.regular, in: Capsule())
-                .padding(.horizontal, 20) }
+                // The one search (the Search tab), which finds this app's things among everything else.
+                if part != .right { OpensSearchField().padding(.horizontal, 20) }
                 if store.rows.isEmpty && part != .right {
                     Group {
                         if store.loading { VStack(spacing: 22) { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } } }
@@ -466,9 +466,15 @@ struct FlickCardButton: View {
     @State private var place = FrameBox()
     @Environment(\.openRow) private var openRow
     // A film or show from Stremio's catalogue has its details a tap away, on the "i" at the picture's corner.
-    var hasInfo: Bool { source == .stremio && !item.isYouTube && item.stremioRef != nil }
+    // No badge on the art (2026-11-20: it covered the poster's own lettering): the title's page is the details.
+    var hasInfo: Bool { false }
     // What a tap on a card does; the build's real-data flows tap through here too.
-    @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
+    @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil, held: Bool = false) {
+        // A card picked from anywhere (a search result, Return on the field) takes the keyboard down with it (gate of 0472bce).
+        SearchStore.shared.putKeyboardAway()
+        // The tap iOS reports with the release of a card that was held (thrown, put back, or let go as a tap) is that.
+        // The held card's own release (`held`) is the one that counts.
+        if !held, Date().timeIntervalSince(ShelfHand.shared.handledAt) < 0.35 { return }
         if model.isOnTV(item, source) { model.showOnRemote(); return }
         if item.isYouTube {
             // A YouTube video from Continue watching: thrown like anything else, and on the TV it opens in YouTube where
@@ -488,14 +494,20 @@ struct FlickCardButton: View {
             .buttonStyle(PressCard(onPress: source == .stremio && !item.isYouTube ? { [model] in if !model.isOnTV(item, source) { StreamCache.shared.prefetch(item); Prepare.arm() } } : nil))
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
+            // Held, it lifts off the shelf; thrown up, it goes to the TV (ShelfFlick, the streams page's own hand).
+            .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in place.rect ?? .zero }))
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             // The details are a pushed page with the system's Back, never a sheet (2026-11-08: the sheet sat inset with a
             // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that
             // page's own route, as its rows do; elsewhere by value on the tab's path.
             .overlay(alignment: .topTrailing) {
-                if hasInfo {
-                    if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
-                    else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
+                // Lifts with the card: never left floating over its empty place while the card is in the hand or in the air.
+                // Read in a view of its own: read here, a lift redrew every card on the page.
+                HiddenInHand(id: item.id) {
+                    if hasInfo {
+                        if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
+                        else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
+                    }
                 }
             }
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
@@ -504,16 +516,48 @@ struct FlickCardButton: View {
     }
 }
 final class FrameBox { var rect: CGRect? }
+extension View {
+    // Where a picture is, kept in a box without redrawing anything while the page scrolls.
+    func measured(_ box: FrameBox) -> some View { onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { box.rect = $0 } }
+}
+// Any row or card of a film, show, video or song that isn't a shelf card: held anywhere on it, its picture lifts out and
+// is thrown to the TV, exactly as a shelf's does (ShelfFlick). The tap stays as the row had it.
+struct RowFlick: ViewModifier {
+    let item: MediaItem
+    let source: MediaSource
+    let width: CGFloat
+    let place: FrameBox
+    func body(content: Content) -> some View {
+        content.modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in place.rect ?? .zero }))
+    }
+}
+// One row of a list (a film, a show, a video), flickable and tappable; the picture's place is its own.
+struct FlickRowBox: View {
+    @Environment(TVModel.self) var model
+    let item: MediaItem, source: MediaSource, width: CGFloat
+    @State private var place = FrameBox()
+    var label: (FrameBox) -> AnyView
+    var body: some View {
+        Button { FlickCardButton.tap(model, item, source, origin: place.rect) } label: { label(place) }
+            .buttonStyle(PressCard(onPress: source == .stremio && !item.isYouTube ? { [model] in if !model.isOnTV(item, source) { StreamCache.shared.prefetch(item); Prepare.arm() } } : nil))
+            .modifier(RowFlick(item: item, source: source, width: width, place: place))
+            .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
+    }
+}
 
 // A row of cards that scrolls sideways. It stops where the page's other content stops, fading out there rather than cut
 // square, and fading in at the start too once it's been scrolled. Folded or open, nothing runs on under the clock or the
 // glass side bar.
 private struct RowEdge: ViewModifier {
     @State private var scrolled = false
+    // Something still past the trailing edge: only then does that edge fade (a row of chips that fits, the streams' "720p"
+    // open flat, was cut by a fade with nothing beyond it).
+    @State private var more = true
     func body(content: Content) -> some View {
         content
             .scrollTargetBehavior(FreeScroll())
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 4 } action: { _, s in scrolled = s }
+            .onScrollGeometryChange(for: Bool.self) { $0.contentSize.width - $0.contentOffset.x - $0.containerSize.width > 4 } action: { _, m in more = m }
             // The row's own frame already ends where the page's content does (level with the search field), so the fade
             // ends at that edge and nothing of the row is drawn past it. No reader here: measuring the safe area took it
             // off twice, and laid the page out a frame late on first visit.
@@ -521,10 +565,11 @@ private struct RowEdge: ViewModifier {
                 HStack(spacing: 0) {
                     LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                     Color.black
-                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                    LinearGradient(colors: [.black, .black.opacity(more ? 0 : 1)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                 }
                 // Only the fade eases, so nothing in the row animates with it.
                 .animation(.easeOut(duration: 0.2), value: scrolled)
+                .animation(.easeOut(duration: 0.2), value: more)
             }
     }
 }
@@ -536,80 +581,4 @@ struct FreeScroll: ScrollTargetBehavior {
 // Up and down, a page of rows comes to rest with a row's heading at the top, never half under the bar.
 extension View {
     func restsOnRows() -> some View { scrollTargetBehavior(.viewAligned(limitBehavior: .never)) }
-}
-
-// Stremio and Mint searched together, from the bar on the Apps page. Every result flicks like a card on its own page.
-struct EverywhereSearch: View {
-    @Environment(TVModel.self) var model
-    let text: String
-    // Films and shows from the catalogue's own search, which answers in about a tenth of a second where Stremio's took
-    // about a second (measured on the Mac, 2026-11-10: 0.05–0.2 s against 0.6–1.4 s), each under its own name.
-    @StateObject private var films = BrowseStore(.stremio, base: "/api/tv/discover?type=movie", found: "Films")
-    @StateObject private var shows = BrowseStore(.stremio, base: "/api/tv/discover?type=series", found: "Shows")
-    @StateObject private var music = BrowseStore(.mint)
-    var stores: [BrowseStore] { [films, shows, music] }
-    var foundRows: [MediaRow] { films.answerRows + shows.answerRows + music.answerRows }
-    // Films and shows are shown together once both have answered, or after 2.5 s at most, and music joins under them
-    // when it comes: films never arrive later and push in above the music being looked at (r18). "No results" only once
-    // every store has answered (r19: it showed "No results for 'Heat'" while the films were still coming, because
-    // music's empty answer came first).
-    @State private var settledFor: String?
-    var settled: Bool { settledFor == text }
-    var allAnswered: Bool { films.answered(text) && shows.answered(text) && music.answered(text) }
-    // Films and shows are shown as soon as both have answered (about a fifth of a second); music, which sits under
-    // them, joins when it comes, so nothing ever arrives above what he's looking at.
-    var watchAnswered: Bool { films.answered(text) && shows.answered(text) }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            ForEach(Array(stores.enumerated()), id: \.offset) { _, store in
-                ForEach(settled ? store.answerRows : []) { row in
-                    VStack(alignment: .leading, spacing: 8) {
-                        // The row's own name only: what's in it says whether it's films or music, not the app it's from.
-                        Text(row.title).font(.title3.weight(.bold))
-                            .padding(.leading, 20)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 10) {
-                                ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source.cardWidth) }
-                            }
-                            .padding(.horizontal, 20)
-                        }
-                        .rowEdge()
-                    }
-                    .transition(.opacity.combined(with: .offset(y: 12)))
-                }
-            }
-            if !settled || foundRows.isEmpty {
-                Group {
-                    if settled && allAnswered { ContentUnavailableView.search(text: text) } else { ProgressView() }
-                }
-                .frame(maxWidth: .infinity, minHeight: 220)
-                // Its own ground, so it never reads over whatever the page had under it (r18: over Watch's banners).
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
-                .padding(.horizontal, 20).padding(.top, 10)
-                // In once the page it replaces has faded out, never over it.
-                .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.15)))
-            }
-        }
-        .task(id: text) {
-            settledFor = nil
-            // Films and shows answered for this text, or 2.5 s gone by.
-            for _ in 0..<25 {
-                if watchAnswered { break }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            if !Task.isCancelled { settledFor = text }
-        }
-        // Keyed on the rows shown, not the answers: they changed before `settled` let the rows on, so the rows cut in (tv21 realsearch-open).
-        .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: settled ? foundRows.map(\.id) : [])
-        .onChange(of: text, initial: true) { _, t in
-            for s in stores { s.query = t; s.searchSoon() }
-        }
-        // The first card, as the grid shows it, for the build's search flow to tap.
-        .onChange(of: settled ? foundRows.first?.items.first?.id : nil, initial: true) { _, _ in
-            guard settled, let store = stores.first(where: { !$0.answerRows.isEmpty }), let i = store.answerRows.first?.items.first else { SendDraft.shared.firstResult = nil; return }
-            SendDraft.shared.firstResult = (i, store.source)
-            // The first few films or shows found are the likely picks: their streams asked for now, not on the tap.
-            if store.source == .stremio { for f in store.answerRows[0].items.prefix(3) { StreamCache.shared.prefetch(f) } }
-        }
-    }
 }

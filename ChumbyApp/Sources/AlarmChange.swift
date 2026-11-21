@@ -72,7 +72,24 @@ enum AlarmChange {
         case .toggle(_, let on): return on ? "Couldn’t turn this on" : "Couldn’t turn this off"
         case .volume: return "Couldn’t change the volume"
         case .fade: return "Couldn’t change the fade"
+        // A pick on Sounds changes only what an alarm plays: said as that, not as an alarm missing from the Chumby.
+        case .replace(let old, let new):
+            var x = old; x.type = new.type; x.arg = new.arg; x.param = new.param; x.param_description = new.param_description
+            if x == new { return "Couldn’t change the sound" }
+            var y = old; y.enabled = new.enabled
+            if old.isOn != new.isOn && y == new { return new.isOn ? "Couldn’t turn this on" : "Couldn’t turn this off" }
+            return "Couldn’t save this change"
         default: return "Not on the Chumby yet"
+        }
+    }
+    // Why it failed, matched to what was tried: "full" only ever explains a change that adds an alarm, so a switch, a
+    // delete or a volume the Chumby turned down for its count says it was turned down, not "delete one".
+    func explain(_ e: Error) -> String {
+        let why = AlarmWriter.explain(e)
+        guard why == AlarmWriter.fullText else { return why }
+        switch self {
+        case .add, .replace, .nap, .setNap: return why
+        default: return "The Chumby turned that down. Nothing was changed."
         }
     }
     // Where its mark shows: the alarm's row, or the control it came from.

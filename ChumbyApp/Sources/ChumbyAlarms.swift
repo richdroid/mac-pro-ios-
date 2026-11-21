@@ -12,53 +12,202 @@ struct FailNote: View {
     @Environment(\.colorScheme) private var scheme
     let text: String
     var dismiss: (() -> Void)?
+    // With a way to send it again: the words take the whole row (breaking only between words), and Retry and the ✕ share
+    // the line under them, as a MarkNote's do when they can't fit beside its title.
+    var retry: (() -> Void)?
+    // A title over the reason, laid out as a MarkNote is: the title, "·", Retry and the ✕ on one line when they fit,
+    // else Retry and the ✕ under the reason.
+    var head: String?
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "exclamationmark.circle.fill")
-                Text(text).fixedSize(horizontal: false, vertical: true)
-            }
-            .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-            .accessibilityElement(children: .combine)
-            if let dismiss {
-                Spacer(minLength: 8)
-                Button(action: dismiss) {
-                    Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.secondary)
-                        .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
+        if let head, let retry { titled(head, retry) } else { plain }
+    }
+    private func titled(_ head: String, _ retry: @escaping () -> Void) -> some View {
+        let warn = ChumbyPalette.warn(scheme == .dark)
+        let title = HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(warn)
+            Text(head).fontWeight(.semibold).foregroundStyle(warn)
+        }
+        let retryButton = Button("Retry", action: retry).buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
+        let reason = Text(text).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+        return ViewThatFits(in: .horizontal) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .center, spacing: 6) {
+                    title.fixedSize(); Text("·").foregroundStyle(.secondary); retryButton
+                    Spacer(minLength: 8)
+                    if let dismiss { closeButton(dismiss) }
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Dismiss")
+                reason
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                title.fixedSize(horizontal: false, vertical: true)
+                reason
+                HStack(alignment: .center, spacing: 6) {
+                    retryButton
+                    Spacer(minLength: 8)
+                    if let dismiss { closeButton(dismiss) }
+                }.padding(.top, 4)
             }
         }
+        .font(.subheadline)
     }
-}
-// A change that hasn't reached the Chumby, under the row it belongs to, with a way to send it again.
-// The control beside it shows what the Chumby really holds; this says what couldn't be changed, and why.
-struct MarkNote: View {
-    @EnvironmentObject var model: ChumbyModel
-    @Environment(\.colorScheme) private var scheme
-    let mark: String
-    var body: some View {
-        if case .failed(let head, let why) = model.marks[mark] {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-                    Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-                    Text("·").foregroundStyle(.secondary)
-                    Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
+    @ViewBuilder private var plain: some View {
+        let words = HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+        .accessibilityElement(children: .combine)
+        if let retry {
+            VStack(alignment: .leading, spacing: 4) {
+                words
+                HStack(alignment: .center, spacing: 6) {
+                    Button("Retry", action: retry).buttonStyle(.borderless).font(.subheadline).fontWeight(.semibold).foregroundStyle(.tint)
                     Spacer(minLength: 8)
-                    // Or let it go: the control beside it already shows what the Chumby holds.
-                    Button { model.dismiss(mark) } label: {
-                        Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.secondary)
+                    if let dismiss { closeButton(dismiss) }
+                }
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                words
+                if let dismiss {
+                    Spacer(minLength: 8)
+                    Button(action: dismiss) {
+                        Image(systemName: "xmark.circle.fill").font(.body).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
                             .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Dismiss")
                 }
-                Text(why).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+    // The ✕ as a MarkNote draws it: a 21 pt disc on the trailing margin, a 44 pt target that adds no height.
+    private func closeButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill").font(.system(size: 21)).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
+                .frame(width: 21, height: 21)
+                .frame(width: 44, height: 44, alignment: .trailing).contentShape(Rectangle())
+                .padding(.vertical, -11.5)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Dismiss")
+    }
+}
+// A change that hasn't reached the Chumby, under the row it belongs to, with a way to send it again.
+// The control beside it shows what the Chumby really holds; this says what couldn't be changed, and why.
+// The title never gives up its width: when it, "· Retry" and the ✕ fit on one line they share it; when they don't
+// (folded), the title has the whole row and Retry and the ✕ take their own line under the reason, so the title breaks
+// only between words (11-12: "Could / n't / turn" when the ✕ took its width).
+// Under an alarm it is a list row of its own (`noteRow`), so it springs in and out as a row does, the row above never
+// moving; sent again, it stays in place saying so ("Trying again…") and only goes once the change lands.
+// `open`: a tap on the note (not on Retry or the ✕) does what a tap on its alarm does.
+struct MarkNote: View {
+    @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
+    let mark: String
+    var open: (() -> Void)?
+    // Its words come in once its row has opened (model.arriving) and go before the row closes (model.fading), so the
+    // rows below never slide over them.
+    // The words the title shows, a beat behind the mark: on a swap the old words go out, then the new come in, never
+    // drawn over each other.
+    @State private var showTrying = false
+    @State private var titleOn = true
+    var shown: (head: String, why: String, trying: Bool)? {
+        switch model.marks[mark] {
+        case .failed(let h, let w): return (h, w, false)
+        case .retrying(let h, let w): return (h, w, true)
+        default: return nil
+        }
+    }
+    var body: some View {
+        if let n = shown {
+            ViewThatFits(in: .horizontal) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .center, spacing: 6) {
+                        title(n.head, n.trying).fixedSize()
+                        // Trying, in this form, the dot and Retry give way (their space kept) rather than strand a
+                        // dimmed Retry after the shorter words.
+                        Group {
+                            Text("·").foregroundStyle(.secondary)
+                            retry(n.trying)
+                        }
+                        .opacity(showTrying ? 0 : 1)
+                        Spacer(minLength: 8)
+                        close
+                    }
+                    reason(n.why)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    title(n.head, n.trying).fixedSize(horizontal: false, vertical: true)
+                    reason(n.why)
+                    HStack(alignment: .center, spacing: 6) {
+                        retry(n.trying)
+                        Spacer(minLength: 8)
+                        close
+                    }
+                    .padding(.top, 4)
+                }
             }
             .font(.subheadline)
+            .contentShape(Rectangle())
+            .onTapGesture { open?() }
+            .opacity(model.arriving.contains(mark) || model.fading.contains(mark) ? 0 : 1)
+            .onAppear { showTrying = n.trying }
+            .onChange(of: n.trying) { _, now in
+                withAnimation(.easeOut(duration: 0.12)) { titleOn = false }
+                Task {
+                    try? await Task.sleep(nanoseconds: 130_000_000)
+                    showTrying = now
+                    withAnimation(.easeIn(duration: 0.15)) { titleOn = true }
+                }
+            }
+            .transition(.identity)
         }
+    }
+    // The title keeps the failed words' size while trying again ("Trying again…" drawn over them, they hidden), so the
+    // layout ViewThatFits chose for the failure holds and nothing re-wraps or moves on Retry.
+    private func title(_ head: String, _ trying: Bool) -> some View {
+        let t = showTrying
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: t ? "arrow.clockwise.circle.fill" : "exclamationmark.circle.fill")
+                .foregroundStyle(t ? Color.secondary : ChumbyPalette.warn(scheme == .dark))
+            ZStack(alignment: .topLeading) {
+                Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark)).opacity(t ? 0 : 1)
+                Text("Trying again…").fontWeight(.semibold).foregroundStyle(.secondary).lineLimit(1).opacity(t ? 1 : 0)
+            }
+        }
+        .opacity(titleOn ? 1 : 0)
+    }
+    private func reason(_ why: String) -> some View {
+        // No width of its own to ask for: ViewThatFits measures the title's line, and the reason wraps under either.
+        Text(why).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+    }
+    private func retry(_ trying: Bool) -> some View {
+        Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
+            .disabled(trying).opacity(trying ? 0.4 : 1)
+    }
+    // Or let it go: the control beside it already shows what the Chumby holds. A drawn 21 pt disc on the content's
+    // trailing margin, its target 44 pt square without making the line any taller.
+    private var close: some View {
+        Button { model.dismiss(mark) } label: {
+            Image(systemName: "xmark.circle.fill").font(.system(size: 21)).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
+                .frame(width: 21, height: 21)
+                .frame(width: 44, height: 44, alignment: .trailing).contentShape(Rectangle())
+                .padding(.vertical, -11.5)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Dismiss")
+    }
+}
+extension View {
+    // An alarm's MarkNote as its own list row under the alarm's: lined up with the alarm's text column (`lead`: the
+    // tile's 44 pt and its 12 pt gap), close under the row, and the separator between the two hidden while it shows.
+    func noteRow(lead: CGFloat) -> some View {
+        self.padding(.leading, lead)
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
+            .listRowSeparator(.hidden, edges: .top)
     }
 }
 // Instead of a message: once the Chumby has the change, a small bubble rises off the control and pops.
@@ -185,22 +334,28 @@ struct RingingCard: View {
             // An old reading: what it was doing when last heard from, and no buttons that can't reach it.
             VStack(spacing: 3) {
                 Text("Was \(s.ring.snoozed ? "snoozing" : "ringing")\(s.seen.map { " at " + seenText($0) } ?? "")").font(.custom("Trebuchet MS", size: 22).weight(.bold))
-                Text([name(s.ring), "the Chumby isn’t answering"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Text([name(s.ring), model.reachInline].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(16).frame(maxWidth: .infinity)
         } else if let s = shown {
             let snoozed = s.ring.snoozed
             VStack(spacing: 14) {
                 VStack(spacing: 3) {
-                    // Ringing hands over to Snoozed one at a time: the old title is gone before the new one fades in.
+                    // The title cross-fades in place, as the ringing page's line does: the new word is on its way up as the
+                    // old one goes, so the card is never without one (gate, 11-20: two blank frames between "Snoozed
+                    // until" and "Stopping…").
                     ZStack {
-                        Text(snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing")
-                            .id(snoozed)
-                            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+                        Text(model.ringWorking ?? (snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing"))
+                            .id(model.ringWorking ?? (snoozed ? "s" : "r"))
+                            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.14))))
                     }
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     Text(name(s.ring)).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
                 }
+                // The way back to the full-screen ringing page once it was closed.
+                .frame(maxWidth: .infinity).contentShape(Rectangle())
+                .onTapGesture { model.ringScreen = true }
+                .accessibilityAddTraits(.isButton).accessibilityHint("Opens the ringing alarm full screen")
                 // Snooze narrows to nothing while Stop widens into the room it leaves. Its glass is its own capsule, sized by
                 // the frame, so the glass narrows with it rather than vanishing; the word fades out before the frame reaches
                 // it. Never narrower than "Snooze" until it goes.
@@ -220,11 +375,21 @@ struct RingingCard: View {
                     .buttonStyle(.plain)
                     .frame(minWidth: snoozed ? 0 : snoozeMin, maxWidth: snoozed ? 0 : .infinity)
                     .padding(.trailing, snoozed ? 0 : 14)
-                    .allowsHitTesting(!snoozed).accessibilityHidden(snoozed)
-                    Button { model.ringOff() } label: { Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity, minHeight: 56) }
-                        .buttonStyle(.glassProminent).tint(ChumbyPalette.orange)
+                    .allowsHitTesting(!snoozed && model.ringWorking == nil).accessibilityHidden(snoozed)
+                    // The same capsule as Snooze's, in the app's orange: the system's prominent style padded it taller.
+                    Button { model.ringOff() } label: {
+                        Label("Stop", systemImage: "stop.fill").lineLimit(1).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .contentShape(Capsule())
+                            .glassEffect(.regular.tint(ChumbyPalette.orange).interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
+                // Pressed and not yet confirmed: both keys dim and rest, so the press is seen to have landed (as on the card).
+                // Stop still takes a press while a Snooze is on its way (a Snooze hit by mistake half asleep must never
+                // lock Stop out for the fourteen seconds the Chumby is given); the desk sends it at once.
+                .opacity(model.ringWorking != nil ? 0.45 : 1).allowsHitTesting(!model.ringStopping)
                 if let f = model.failed("ring") { FailNote(text: f) }
             }
             .padding(16)
@@ -236,7 +401,7 @@ struct RingingCard: View {
 extension AnyTransition {
     // Stopped: the card is gone by opacity alone within 0.12 s, before the controls under it start up (ChumbyModel.stopSpring).
     static var ringCard: AnyTransition {
-        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .top)), removal: .opacity.animation(.easeOut(duration: ChumbyModel.stopFade)))
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.2)))
     }
 }
 
@@ -253,6 +418,9 @@ struct NapSection: View {
     @AppStorage("napSetAt") private var napSetAt = 0.0
     @State private var sending: Int?
     static let lengths = [10, 20, 30, 60]
+    // How far what's there fades before the rows change places: not to nothing, so the card is never drawn empty for a
+    // frame as the old rows go and the new ones come (gate, 11-20); faint enough that the two never read as drawn twice.
+    static let floor = 0.12
     // Which rows the list holds, and whether they're drawn, while a nap is set or called off (AlarmsTab.napMoves); `due`
     // is the nap's time, kept while its row fades out.
     let row: Bool
@@ -263,9 +431,9 @@ struct NapSection: View {
     var body: some View {
         Group {
             if row, let due {
-                napRow(due).opacity(faded ? 0 : 1)
+                napRow(due).opacity(faded ? Self.floor : 1)
             } else {
-                chips.opacity(faded ? 0 : 1)
+                chips.opacity(faded ? Self.floor : 1)
                 Button { edit(nil) } label: {
                     Label("Another time or sound", systemImage: "slider.horizontal.3").font(.body.weight(.semibold))
                         .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
@@ -273,7 +441,7 @@ struct NapSection: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Set a nap with another time or sound")
-                .opacity(faded ? 0 : 1)
+                .opacity(faded ? Self.floor : 1)
             }
             if let f = model.failed("nap") { FailNote(text: f) }
         }
@@ -299,12 +467,13 @@ struct NapSection: View {
         let own = nap == nil
         return TimelineView(.periodic(from: .now, by: 30)) { ctx in
             let left = max(due.timeIntervalSince(ctx.date), 0)
-            let minutes = max(Int((left / 60).rounded(.up)), 1)
             // Its whole length, from when this phone set it; set elsewhere, an hour stands in, so the tide still falls.
             let set = Date(timeIntervalSince1970: napSetAt)
             let total = set < due && due.timeIntervalSince(set) < 12 * 3600 ? due.timeIntervalSince(set) : 3600
             AlarmRow(clock: clockParts(due), title: "Nap",
-                     detail: [left < 60 ? "Rings any moment" : "Rings in \(minutes) min", own ? "set on the Chumby" : nap?.soundText ?? ""].filter { !$0.isEmpty }.joined(separator: " · "),
+                     // The hero above counts the time down to the second; this row says only the sound (never a second, rounded
+                     // countdown that disagrees with it), and "Rings any moment" for the last minute.
+                     detail: left < 60 ? "Rings any moment" : own ? "Set on the Chumby" : nap?.soundText ?? "",
                      on: true, mark: "nap",
                      tile: AnyView(NapTile(left: min(left / total, 1))),
                      tap: { if let nap { edit(nap) } },
@@ -314,7 +483,7 @@ struct NapSection: View {
     }
 }
 // The nap's heading: "Nap" stands still, and ", wake me in" fades away with the chips as a nap is set and back in with
-// them when it's called off (it swapped whole in one frame). Timed to NapSection's three moves.
+// them when it's called off (it swapped whole in one frame). Timed to NapSection's two moves.
 struct NapHead: View {
     let set: Bool
     let color: Color
@@ -324,7 +493,7 @@ struct NapHead: View {
             HStack(spacing: 0) {
                 Text("Nap")
                 Text(", wake me in").opacity(set ? 0 : 1)
-                    .animation(set ? .easeOut(duration: AlarmsTab.napFade) : .easeIn(duration: 0.16).delay(AlarmsTab.napFade + AlarmsTab.napSettle), value: set)
+                    .animation(set ? .easeOut(duration: AlarmsTab.napFade) : .easeOut(duration: AlarmsTab.napSettle).delay(AlarmsTab.napFade), value: set)
             }
             .font(.custom("Trebuchet MS", size: 16).weight(.bold))
         }
@@ -356,6 +525,46 @@ struct NapTile: View {
 }
 
 // MARK: - What woke me
+// What this phone saw of each ring for itself, kept: still ringing or snoozing at a moment (and when a snooze rings
+// again), and the moment it saw one end. The Chumby's log keeps only when a ring began, so these are how "Woke up to"
+// knows where a ring it watched ended, and never counts a song he put on after stopping it.
+enum RingSeen {
+    struct Mark: Codable, Equatable { enum Kind: String, Codable { case on, snoozed, ended }; var t: Double; var kind: Kind; var until: Double? }
+    private static let key = "ringSeen"
+    private static let lock = NSLock()
+    private static var kept: [Mark]?
+    static var marks: [Mark] {
+        lock.lock(); defer { lock.unlock() }
+        if kept == nil { kept = UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode([Mark].self, from: $0) } ?? [] }
+        return kept ?? []
+    }
+    private static func save(_ m: [Mark]) {
+        let now = Date().timeIntervalSince1970
+        let m = Array(m.filter { now - $0.t < 21 * 86400 }.suffix(400))
+        lock.lock(); kept = m; lock.unlock()
+        if let d = try? JSONEncoder().encode(m) { UserDefaults.standard.set(d, forKey: key) }
+    }
+    // A fresh reading of a ring or a snooze: one mark per stretch of watching, moved on rather than added to.
+    static func saw(snoozed: Bool, until: Double?, at t: Double = Date().timeIntervalSince1970) {
+        var m = marks
+        let kind: Mark.Kind = snoozed ? .snoozed : .on
+        if let l = m.last, l.kind == kind, t - l.t < 120, l.until == until || until == nil { m[m.count - 1].t = t; m[m.count - 1].until = until ?? l.until }
+        else { m.append(Mark(t: t, kind: kind, until: until)) }
+        save(m)
+    }
+    // A fresh reading with nothing ringing: the ring ended here, but only if this phone was watching just before.
+    static func quiet(at t: Double = Date().timeIntervalSince1970) {
+        var m = marks
+        guard let l = m.last, l.kind != .ended, t - l.t < 90 else { return }
+        m.append(Mark(t: t, kind: .ended, until: nil)); save(m)
+    }
+    // Stopped from the app: the ring ended the moment he tapped.
+    static func stopped(at t: Double) {
+        var m = marks
+        if let l = m.last, l.kind == .ended, abs(l.t - t) < 90 { m[m.count - 1].t = min(l.t, t) } else { m.append(Mark(t: t, kind: .ended, until: nil)) }
+        save(m.sorted { $0.t < $1.t })
+    }
+}
 // Songs Pandora played just after an alarm, each with its cover and a way to it in Apple Music.
 @MainActor
 final class SongArt: ObservableObject {
@@ -371,35 +580,59 @@ final class SongArt: ObservableObject {
     }
     private var links: [String: String] { get { UserDefaults.standard.dictionary(forKey: "songLinks") as? [String: String] ?? [:] } set { UserDefaults.standard.set(newValue, forKey: "songLinks") } }
     static func key(_ s: Song) -> String { s.artist + " – " + s.title }
+    // The title as it's searched for. A title the trim changes is kept under a new name, so the wrong cover found before
+    // the trim (an "'Round Midnight" with another album's art) is never shown again.
+    static func searched(_ s: Song) -> String { s.title.trimmingCharacters(in: CharacterSet(charactersIn: "'‘’\"“” ")) }
+    static func stored(_ s: Song) -> String { searched(s) == s.title ? key(s) : key(s) + " #trimmed" }
     // At launch and on opening Alarms, so the covers are in hand before the row ever scrolls into view.
+    // Every song that may belong to a ring is looked up, as which ones do can turn on a song's length.
     func prefetch(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring] = []) {
-        for w in WokeUpTo.wakings(songs, alarms, rings) { look(w.song) }
+        for s in WokeUpTo.candidates(songs, alarms, rings) { look(s) }
+    }
+    // How long a song runs, from the same lookup as its cover: tells the alarm playing on from a song he put on himself.
+    @Published private(set) var lengths: [String: Double] = UserDefaults.standard.dictionary(forKey: "songLengths") as? [String: Double] ?? [:]
+    func length(_ s: Song) -> Double? { lengths[Self.stored(s)].flatMap { $0 > 0 ? $0 : nil } }
+    private func keepLength(_ k: String, _ ms: Double?) {
+        guard let ms, ms > 0 else { return }
+        lengths[k] = ms / 1000
+        UserDefaults.standard.set(lengths, forKey: "songLengths")
+    }
+    private struct Search: Decodable { struct T: Decodable { let artworkUrl100: String?; let trackViewUrl: String?; let trackTimeMillis: Double? }; let results: [T] }
+    private static func search(_ s: Song) async -> Search? {
+        var c = URLComponents(string: "https://itunes.apple.com/search")!
+        // Quotes trimmed: "'Round Midnight" as written found another album's cover entirely.
+        let title = searched(s)
+        c.queryItems = [.init(name: "term", value: s.artist + " " + title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
+        guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0 else { return nil }
+        return try? JSONDecoder().decode(Search.self, from: d)
     }
     func look(_ s: Song) {
         let k = Self.key(s)
         guard !asked.contains(k) else { return }
         asked.insert(k)
         // Kept from before: shown at once, never fetched again.
-        if let d = try? Data(contentsOf: Self.file(k)), let i = PlatformImage(data: d) {
-            found[k] = Found(image: i, link: links[k].flatMap(URL.init(string:)), tint: Self.tint(d)); return
+        let sk = Self.stored(s)
+        if let d = try? Data(contentsOf: Self.file(sk)), let i = PlatformImage(data: d) {
+            found[k] = Found(image: i, link: links[sk].flatMap(URL.init(string:)), tint: Self.tint(d))
+            // Kept from before lengths were: asked once more, for the length alone.
+            if lengths[sk] == nil { Task { let r = await Self.search(s); if let r { lengths[sk] = 0; keepLength(sk, r.results.first?.trackTimeMillis) } } }
+            return
         }
         Task {
-            var c = URLComponents(string: "https://itunes.apple.com/search")!
-            c.queryItems = [.init(name: "term", value: s.artist + " " + s.title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
-            struct R: Decodable { struct T: Decodable { let artworkUrl100: String?; let trackViewUrl: String? }; let results: [T] }
             // Not reached: asked again next time rather than settling on no cover, but shown meanwhile with the octopus tile,
             // so a song never waits off the strip for a lookup that can't happen.
-            guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0, let r = try? JSONDecoder().decode(R.self, from: d) else {
+            guard let r = await Self.search(s) else {
                 asked.remove(k)
                 if found[k] == nil { withAnimation(.easeOut(duration: 0.2)) { found[k] = Found(image: nil, link: nil, tint: nil) } }
                 return
             }
             var f = Found(image: nil, link: nil, tint: nil)
             if let t = r.results.first {
-                if let link = t.trackViewUrl { links[k] = link }
+                keepLength(sk, t.trackTimeMillis)
+                if let link = t.trackViewUrl { links[sk] = link }
                 f.link = t.trackViewUrl.flatMap(URL.init(string:))
                 if let a = t.artworkUrl100.map({ $0.replacingOccurrences(of: "100x100", with: "300x300") }), let au = URL(string: a), let img = try? await URLSession.shared.data(from: au).0 {
-                    try? img.write(to: Self.file(k), options: .atomic)
+                    try? img.write(to: Self.file(sk), options: .atomic)
                     f.image = PlatformImage(data: img); f.tint = Self.tint(img)
                 }
             }
@@ -420,25 +653,86 @@ struct WokeUpTo: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject private var art = SongArt.shared
     @Environment(\.openURL) private var openURL
-    // For each time an alarm went off, the first song Pandora played in the 45 minutes after it.
-    // From the Chumby's own log of rings when it has one: each ring's first song within 45 minutes, named as the alarm was.
-    // A once-only calendar alarm leaves the alarm list once it fires, so pairing with the list found nothing for it (Richard,
-    // 2026-11-06: "woke up to doesnt work"). The list is the fallback for a Chumby too old to log rings.
-    static func wakings(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring]) -> [(song: Song, alarm: String)] {
-        guard !rings.isEmpty else { return wakings(songs, alarms) }
-        let byTime = songs.sorted(by: { $0.t < $1.t })
-        var out: [(song: Song, alarm: String)] = []
-        for r in rings.sorted(by: { $0.t > $1.t }) {
-            guard let s = byTime.first(where: { $0.t >= r.t && $0.t - r.t < 45 * 60 }), !out.contains(where: { $0.song == s }) else { continue }
+    @State private var width: CGFloat = 0
+    // Every song each ring played, from the ring's start until it ended: stopped, played out, or after its snoozes.
+    // Richard, 2026-11-12: "does the woke up to tab account for multiple songs playing over the course of a single
+    // alarm". It showed only each ring's first song. Rings come from the Chumby's own log (a once-only calendar alarm
+    // leaves the alarm list once it fires: 2026-11-06, "woke up to doesnt work"); the list is the fallback for a Chumby
+    // too old to log rings.
+    struct Waking: Identifiable, Equatable { let t: Double; let alarm: String; var songs: [Song]; var id: Double { t } }
+    static func wakings(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring], marks: [RingSeen.Mark]? = nil,
+                        length: (Song) -> Double? = { _ in nil }, now: Double = Date().timeIntervalSince1970) -> [Waking] {
+        let rs = (rings.isEmpty ? listRings(songs, alarms) : rings).sorted { $0.t < $1.t }
+        let marks = marks ?? RingSeen.marks
+        let byTime = songs.sorted { $0.t < $1.t }
+        var out: [Waking] = []
+        for (i, r) in rs.enumerated() {
+            let next = i + 1 < rs.count ? rs[i + 1].t : .infinity
+            let a = alarms.first { $0.name == r.name }
+            let plays = min(Double(a?.duration ?? "").flatMap { $0 > 0 ? $0 : nil } ?? 30, 240) * 60
+            let snooze = (Double(a?.snooze ?? "").flatMap { $0 > 0 ? $0 : nil } ?? 9) * 60
+            let mine = session(byTime, from: r.t, next: min(next, now + 60), plays: plays, snooze: snooze,
+                               marks: marks.filter { $0.t >= r.t - 30 && $0.t < next }, length: length)
+            guard !mine.isEmpty else { continue }
             let name = r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name
-            out.append((s, name.isEmpty ? "your alarm" : name))
-            if out.count == 8 { break }
+            out.append(Waking(t: r.t, alarm: name, songs: mine))
         }
-        return out
+        return Array(out.reversed().prefix(8))
     }
-    static func wakings(_ songs: [Song], _ alarms: [Alarm]) -> [(song: Song, alarm: String)] {
+    // One ring's songs, oldest first. What the app saw for itself (RingSeen) decides first: a ring it watched end ends
+    // there, and one it saw still ringing or snoozing at a moment holds every song up to then. Otherwise the songs tell:
+    // one following the last as it finished (its length known) or within a song's length (not) is the alarm still
+    // playing; a silence about a snooze long is the re-ring; any other break is the alarm stopped and a song he chose
+    // himself, so the ring ends there. Never past the alarm's own length from its last ring, nor into the next ring.
+    static func session(_ byTime: [Song], from t0: Double, next: Double, plays: Double, snooze: Double,
+                        marks: [RingSeen.Mark], length: (Song) -> Double?) -> [Song] {
+        if let end = marks.first(where: { $0.kind == .ended && $0.t > t0 })?.t {
+            return dedupe(byTime.filter { $0.t >= t0 - 5 && $0.t < min(end, next) })
+        }
+        let seen = marks.filter { $0.kind != .ended }.map(\.t).max() ?? 0
+        var cap = max(t0 + plays, seen)
+        for m in marks where m.kind == .snoozed { if let u = m.until { cap = max(cap, u + plays) } }
+        var got: [Song] = []
+        for s in byTime where s.t >= t0 - 5 && s.t < next {
+            if s.t <= seen { got.append(s); continue }
+            guard s.t < cap else { break }
+            guard let p = got.last else {
+                // The first song: Pandora names it about 12 s into the ring (later when it had to be asked again), or
+                // after a snooze pressed before it came. Anything later is music he put on.
+                let d = s.t - t0
+                guard d <= 180 || (d >= snooze - 30 && d <= snooze + 180) else { break }
+                if d > 180 { cap = max(cap, s.t + plays) }
+                got.append(s); continue
+            }
+            let gap = s.t - p.t, l = length(p)
+            let flowing = l.map { gap >= $0 - 45 && gap <= $0 + 75 } ?? (gap <= 450)
+            // A snooze this phone saw says when it rang again; otherwise it's a silence about a snooze long.
+            let reRing = marks.contains { $0.kind == .snoozed && ($0.until.map { s.t >= $0 - 5 && s.t <= $0 + 180 } ?? false) }
+                || (gap >= snooze && gap <= snooze + (l ?? 450) + 75)
+            if flowing { got.append(s) }
+            else if reRing { got.append(s); cap = max(cap, s.t + plays) }
+            else { break }
+        }
+        return dedupe(got)
+    }
+    // The same song twice in a ring (a Pandora repeat, or a history row logged twice) shows once.
+    static func dedupe(_ s: [Song]) -> [Song] {
+        var keys = Set<String>()
+        return s.filter { keys.insert(SongArt.key($0)).inserted }
+    }
+    // Every song that may belong to a ring, for looking up covers and lengths before the ring is shown.
+    static func candidates(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring]) -> [Song] {
+        let rs = (rings.isEmpty ? listRings(songs, alarms) : rings).sorted { $0.t < $1.t }
+        return songs.filter { s in
+            guard let i = rs.lastIndex(where: { $0.t <= s.t + 5 }) else { return false }
+            return s.t - rs[i].t < 4 * 3600
+        }
+    }
+    // An older Chumby without a ring log: the rings worked out from the alarm list, one for each time an audio alarm
+    // came due that a song followed within 45 minutes.
+    static func listRings(_ songs: [Song], _ alarms: [Alarm]) -> [Ring] {
         let cal = Calendar.current
-        var out: [(song: Song, alarm: String, fire: Date)] = []
+        var out: [Ring] = []
         for s in songs.sorted(by: { $0.t < $1.t }) {
             let t = Date(timeIntervalSince1970: s.t)
             var hit: (Date, String)?
@@ -452,46 +746,141 @@ struct WokeUpTo: View {
                         if a.when == "daily" || (a.when == "weekday" && w > 0 && w < 6) || (a.when == "weekend" && (w == 0 || w == 6)) || a.when == Alarm.dayKeys[w] { fires.append(f) }
                     }
                 }
-                for f in fires where t >= f && t.timeIntervalSince(f) < 45 * 60 { hit = (f, alarmLabel(a)) }
+                for f in fires where t >= f && t.timeIntervalSince(f) < 45 * 60 { hit = (f, a.name.isEmpty ? alarmLabel(a) : a.name) }
             }
-            guard let h = hit, !out.contains(where: { abs($0.fire.timeIntervalSince(h.0)) < 60 }) else { continue }
-            out.append((s, h.1, h.0))
+            guard let h = hit, !out.contains(where: { abs($0.t - h.0.timeIntervalSince1970) < 60 }) else { continue }
+            out.append(Ring(t: h.0.timeIntervalSince1970, name: h.1))
         }
-        return out.reversed().prefix(8).map { ($0.song, $0.alarm) }
+        return out
+    }
+    // What's shown: each ring's songs up to the first whose cover hasn't been looked up yet, so a song arrives with its
+    // art, never as a blank tile, and a ring only once its first song has. (A song's length comes with its cover, so
+    // what joins a ring after it is settled by then.)
+    var shown: [Waking] {
+        Self.wakings(model.songs, model.state.alarms, model.rings, length: { art.length($0) }).compactMap { w in
+            var w = w
+            w.songs = Array(w.songs.prefix { art.found[SongArt.key($0)] != nil })
+            return w.songs.isEmpty ? nil : w
+        }
     }
     var body: some View {
-        let all = Self.wakings(model.songs, model.state.alarms, model.rings)
-        // A song joins the strip only once its cover has been looked up, so a new one arrives with its art, never as a
-        // blank tile, and slides the others along in one spring rather than a frame.
-        let list = all.filter { art.found[SongArt.key($0.song)] != nil }
+        let list = shown
         if !list.isEmpty {
+            // One strip, every song a tile, grouped by ring with its time and alarm over the group (designer, 11-12: the
+            // song he wants later is usually the second or third of the morning, so none is hidden behind a tap).
+            // Richard, 2026-11-13 (build 281, open portrait): "spacing in what played or whatever is horrific". The covers
+            // ran past the card's right edge with 14 pt on the left and none on the right. Now the strip keeps the card's
+            // own 20 pt inset on both sides, like every row and heading: it fits whole inside them when it can, and when
+            // it can't it scrolls with its covers fading out inside the inset line, never cut by the card's edge.
+            let n = CGFloat(list.reduce(0) { $0 + $1.songs.count }), g = CGFloat(list.count)
+            let spacing = (n - g) * Self.gap + (g - 1) * Self.groupGap
+            let avail = width - 2 * Self.inset
+            let fits = width > 0 && n * Self.smallest + spacing <= avail
+            let side = fits ? min(Self.largest, (avail - spacing) / n) : Self.peeking(list, avail: avail)
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(list, id: \.song.id) { w in tile(w.song).transition(.opacity.combined(with: .scale(scale: 0.92))) }
+                    // Not lazy: the card is as tall as its tallest tile always, not the leading group's (a one-song ring
+                    // arriving shrank it and cut the captions under its edge, gate 11-12). At most 8 rings.
+                    HStack(alignment: .top, spacing: Self.groupGap) {
+                        ForEach(list) { w in group(w, side: side).transition(.opacity.combined(with: .scale(scale: 0.92))) }
                     }
-                    .padding(.vertical, 4)
-                    .animation(.snappy, value: list.map(\.song.id))
+                    .onGeometryChange(for: Ends.self) { g in
+                        let f = g.frame(in: .named(Self.space))
+                        return Ends(start: f.minX >= Self.inset - 1, end: f.maxX <= width - Self.inset + 1)
+                    } action: { e in withAnimation(.easeOut(duration: 0.15)) { ends = e } }
+                    .padding(.vertical, Self.vertical)
+                    .animation(.snappy, value: list.map { $0.songs.map(\.id) })
+                    .animation(.snappy, value: side)
                 }
-                .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
-            } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to", color: ChumbyPalette.sub(scheme == .dark)) }
+                .contentMargins(.horizontal, Self.inset, for: .scrollContent)
+                .scrollDisabled(fits)
+                // Which ends have more past them, read from where the covers themselves sit in the strip's visible
+                // bounds (the scroll geometry's own sums left the far end faded with the last cover whole on the line:
+                // gate on 1075bc4).
+                .coordinateSpace(.named(Self.space))
+                // The covers are seen only inside the card's insets; on a side with more to scroll to they fade out over
+                // the last 28 pt before the inset line, so a cover leaving is a fade, never a cut.
+                .mask {
+                    HStack(spacing: 0) {
+                        Color.clear.frame(width: Self.inset)
+                        LinearGradient(colors: [.black.opacity(fits || ends.start ? 1 : 0), .black], startPoint: .leading, endPoint: .trailing).frame(width: Self.fade)
+                        Color.black
+                        LinearGradient(colors: [.black, .black.opacity(fits || ends.end ? 1 : 0)], startPoint: .leading, endPoint: .trailing).frame(width: Self.fade)
+                        Color.clear.frame(width: Self.inset)
+                    }
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+                .listRowInsets(EdgeInsets())
+            } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to") }
         }
     }
-    func tile(_ s: Song) -> some View {
+    struct Ends: Equatable { var start = true, end = true }
+    static let space = "wokeStrip"
+    @State private var ends = Ends()
+    // One spacing system with the rows and headings around it: the card's 20 pt inset on both sides and 16 pt above and
+    // below; 20 pt between rings and 10 pt between a ring's songs; the header 8 pt over its covers, captions 8 pt under.
+    static let gap: CGFloat = 10, groupGap: CGFloat = 20, inset: CGFloat = SoloCard.inset, vertical: CGFloat = 16, fade: CGFloat = 28
+    static let smallest: CGFloat = 92, largest: CGFloat = 200
+    // Scrolling, the cover size (92 to 120 pt) at which the cover met at the inset line shows between a third and
+    // two thirds of itself at rest: a real part of a cover that says "more", never a sliver of letters in the fade.
+    static func peeking(_ list: [Waking], avail: CGFloat) -> CGFloat {
+        for side in stride(from: smallest, through: 120, by: 1) {
+            var x: CGFloat = 0
+            search: for (gi, w) in list.enumerated() {
+                if gi > 0 { x += groupGap - gap }
+                for _ in w.songs {
+                    if x + side > avail {
+                        let shown = (avail - x) / side
+                        if shown >= 0.34 && shown <= 0.67 { return side }
+                        break search
+                    }
+                    x += side + gap
+                }
+            }
+        }
+        return smallest
+    }
+    // A ring: when it rang and which alarm, over its songs in the order they played. One cover wide, the alarm's name
+    // gives way so the time is never clipped.
+    func group(_ w: Waking, side: CGFloat) -> some View {
+        // A week or more back, the date too, so two Saturdays never read alike. An unnamed ring is its time alone.
+        // Each shorter in turn, so one cover wide the header still says the day whole: "Sat, Nov 7" (gate 11-12).
+        let at = Date(timeIntervalSince1970: w.t)
+        let dated = Date().timeIntervalSince(at) >= 6 * 86400
+        let day = at.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+        let when = dated ? day + " · " + at.formatted(.dateTime.hour().minute()) : at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        let wide = CGFloat(w.songs.count) * side + CGFloat(w.songs.count - 1) * Self.gap
+        return VStack(alignment: .leading, spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                if !w.alarm.isEmpty { Text("\(when) · \(w.alarm)").lineLimit(1) }
+                Text(when).lineLimit(1)
+                if dated { Text(day).lineLimit(1) }
+            }
+            .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            .frame(width: wide, alignment: .leading)
+            .accessibilityLabel(w.alarm.isEmpty ? when : "\(w.alarm), \(when)")
+            HStack(alignment: .top, spacing: Self.gap) {
+                ForEach(Array(w.songs.enumerated()), id: \.element.id) { i, s in
+                    tile(s, side: side, time: i > 0).transition(.opacity.combined(with: .scale(scale: 0.92)))
+                }
+            }
+        }
+    }
+    func tile(_ s: Song, side: CGFloat, time: Bool) -> some View {
         let f = art.found[SongArt.key(s)]
         return Button {
             var c = URLComponents(string: "https://music.apple.com/search")!
             c.queryItems = [.init(name: "term", value: s.artist + " " + s.title)]
             if let u = f?.link ?? c.url { openURL(u) }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 ZStack {
                     if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
                     else if f != nil {
                         // Looked for and none found: the octopus on the Chumby's own blue, never a grey box.
                         ZStack {
                             ChumbyPalette.hex(0x2c5bae)
-                            OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).padding(26)
+                            OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).padding(side * 0.23)
                         }
                         .transition(.opacity)
                     } else {
@@ -499,13 +888,17 @@ struct WokeUpTo: View {
                         GlassRow().transition(.opacity)
                     }
                 }
-                .frame(width: 112, height: 112).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                // Two lines, kept even for a short one, so the tiles' artist and time lines stay level across the row.
-                Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(2, reservesSpace: true).multilineTextAlignment(.leading)
-                Text(s.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.footnote).foregroundStyle(.secondary)
+                .frame(width: side, height: side).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.bottom, 6)
+                // Every caption starts 8 pt under its cover, on the covers' one top line, the artist straight under its
+                // title (a grid reserving the tallest title's room left a blank line under every one-line title: CI
+                // 9fb78de). Never cut: a long name takes more lines.
+                Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                Text(s.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                // The song's own time, after the first: the group's line already says when the ring began.
+                if time { Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.hour().minute())).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
             }
-            .frame(width: 112, alignment: .leading)
+            .frame(width: side, alignment: .leading)
         }
         .buttonStyle(.plain)
         .onAppear { art.look(s) }
@@ -517,6 +910,7 @@ struct WokeUpTo: View {
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
+    @State private var turningOn = false
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
     @State private var editing: EditTarget?
@@ -534,6 +928,14 @@ struct AlarmsTab: View {
     @Namespace private var editNS
 
     var dismissed: Set<String> { Set(dismissedRaw.split(separator: "\n").map(String.init)) }
+    // Why, for what's listed: a ring with no sound wasn't the Chumby being frozen or off (designer, 11-12).
+    var missedWhy: String {
+        let silent = missed.contains { $0.silent == true }, other = missed.contains { $0.silent != true }
+        let these = missed.count == 1 ? "it" : "these"
+        if silent && other { return "The Chumby was frozen or off when some came due." }
+        if silent { return "The Chumby rang, but no sound came from \(missed.count == 1 ? "it" : "them")." }
+        return "The Chumby was frozen or off when \(these) came due."
+    }
     var missed: [ChumbyState.Missed] { model.state.missed.filter { Date().timeIntervalSince1970 - $0.at < 86400 && !dismissed.contains($0.id) }.suffix(3).reversed().map { $0 } }
     // A "just this once" standing in for one of these is told on that alarm's row, never listed as an alarm of its own.
     var folded: String? { model.state.justOnce().flatMap { $0.original != nil ? $0.alarm.key : nil } }
@@ -541,6 +943,16 @@ struct AlarmsTab: View {
     // as an alarm that's "off" (11-10: yesterday's one-off and its "just this once" sat in his list as two dead rows).
     var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded && !ChumbyState.isExpired($0, chumby: model.state.chumbyNow) }.sorted { $0.localMinutes < $1.localMinutes } }
     var paneShown: Pane { wide ? pane : .schedule }
+    // Pages that bring their own list and title row (editor, day), shown in the right pane in place of its list.
+    var rightPage: AnyView? {
+        switch paneShown {
+        case .editor(let a): return AnyView(AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new"))
+        case .napEditor(let a): return AnyView(AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new")))
+        case .day(let k): return AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k))
+        case .template: return AnyView(AlarmEditor(calendarTemplate: true, close: { show(paneBack) }))
+        default: return nil
+        }
+    }
     // Pages that bring their own title row (editor, day) have none from here.
     var rightTitle: String? {
         switch paneShown {
@@ -596,7 +1008,7 @@ struct AlarmsTab: View {
     // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
     // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
-        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded)) {
+        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded), rightPage: rightPage) {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
@@ -607,7 +1019,7 @@ struct AlarmsTab: View {
                     ForEach(missed) { m in
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
-                                RowNote(icon: "alarm.waves.left.and.right.fill", text: m.rang ? "Rang late" : "Missed")
+                                RowNote(icon: "alarm.waves.left.and.right.fill", text: m.silent == true ? "Rang with no sound" : m.rang ? "Rang late" : "Missed")
                                 Text([Date(timeIntervalSince1970: m.at).formatted(.dateTime.weekday(.abbreviated).hour().minute()), m.name.hasPrefix(Alarm.calendarPrefix) ? String(m.name.dropFirst(Alarm.calendarPrefix.count)) : m.name].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                             }
                             Spacer(minLength: 0)
@@ -615,7 +1027,7 @@ struct AlarmsTab: View {
                             RowRemove(label: "Dismiss", icon: "xmark.circle.fill") { withAnimation(.snappy) { dismissedRaw = (dismissed.union([m.id])).joined(separator: "\n") } }
                         }
                     }
-                } footer: { Text("The Chumby was frozen or off when these came due.") }
+                } footer: { SectionFoot(missedWhy) }
             }
             yours
         } right: {
@@ -626,10 +1038,7 @@ struct AlarmsTab: View {
                 calendar
                 nap
             case .settings: CalendarSettingsSections()
-            case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
-            case .napEditor(let a): AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new"))
-            case .day(let k): CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)
-            case .template: AlarmEditor(calendarTemplate: true, close: { show(paneBack) })
+            default: EmptyView()
             }
         }
         .seaList()
@@ -638,6 +1047,7 @@ struct AlarmsTab: View {
         .onChange(of: model.napDue) { _, _ in napMoves() }
         // Back on this tab with the rows behind the Chumby (a change that came while it was away): put right at once.
         .onAppear { if napSwap == nil, napRowShown != (model.napDue != nil) { napRows = model.napDue != nil; napFaded = false } }
+        .environment(\.openCalendarSettings, { openSettings() })
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
         .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !wide }, set: { model.alarmsPage = $0 })) {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
@@ -647,6 +1057,7 @@ struct AlarmsTab: View {
         // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
+        .onChange(of: model.openAlarm) { _, k in openAsked(k) }
         // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
         // across everything"): opened flat, what was pushed over the one list (Calendar settings, a day) moves to the
         // right pane, and an editor opened there goes back to a sheet when the phone is folded or turned upright; a
@@ -669,6 +1080,7 @@ struct AlarmsTab: View {
         }
         .onAppear {
             wake.refreshPlan()
+            openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true
             switch ChumbyModel.pose {
@@ -697,6 +1109,8 @@ struct AlarmsTab: View {
             case "calonce": if let w = wake.plan.first { wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(25 * 60).timeIntervalSince1970) }
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
+            // For the build's film: a new alarm made and saved (the editor saves it itself), the list taking it in.
+            case "newalarmdemo": Task { try? await Task.sleep(nanoseconds: 2_500_000_000); edit(nil) }
             // His own alarms and the nap brought on screen, folded, for their shot.
             case "alarmsmine", "napset": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap" }
             // The nap set (the mock's nap scene) opened in its editor.
@@ -736,8 +1150,18 @@ struct AlarmsTab: View {
     // What rings next, first, so it never has to be worked out from the list: what kind it is, the time, when, and Skip.
     @State private var skipping = false
     @ViewBuilder var glance: some View {
-        if !model.stateKnown {
-            HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }.padding(.vertical, 6)
+        if !model.stateKnown && model.unreachable {
+            // Out of reach, no spinner promising an answer that can't come: the Offline row above says why.
+            Text("What rings next shows once the Chumby answers.").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 6)
+        } else if !model.stateKnown {
+            HStack(spacing: 10) {
+                ProgressView()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Reaching the Chumby…").foregroundStyle(.secondary)
+                    Text("What rings next shows once it answers.").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
         } else if let n = model.nextRing() {
             // A "just this once" standing behind the Chumby's skip is that alarm moved for one ring, never a skip: the
             // moved time leads, the usual one is said in words, and "Back to 6:45 AM" takes it back (Richard,
@@ -762,23 +1186,25 @@ struct AlarmsTab: View {
                 SectionHead(icon: fromCalendar ? "calendar" : "alarm.fill",
                             text: (skippedNow && moved == nil ? "Then" : "Next alarm") + " · " + { let k = kindWord(shownAlarm); return k.prefix(1).uppercased() + k.dropFirst() }(),
                             color: fromCalendar ? ChumbyPalette.cal(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
+                // The time opens the alarm it belongs to, as its row below does (Richard, 2026-11-14: "when editing alarms be
+                // able to tap to edit"): the largest thing on the page was the one alarm that couldn't be tapped.
+                // One target for the whole card (below), never a button that could draw itself dimmed.
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
                     Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())
                     Text(c.1).font(.custom("Trebuchet MS", size: 22).weight(.bold)).contentTransition(.numericText())
-                    Spacer(minLength: 8)
-                    Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
-                }
-                // Moved for one ring, the day line says so in few words and "Back to 6:45 AM" has a row of its own:
-                // beside the line, folded, both were cut short (build 218: "Back to 6:45…", "just this once (usual…").
-                if let moved, moved.usual != nil {
-                    Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst) · just this once" + (moved.usual.map { " · usually \($0.formatted(date: .omitted, time: .shortened))" } ?? ""))
-                        .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
+                    Spacer(minLength: 0)
                 }
                 HStack(alignment: .center, spacing: 10) {
-                    if moved == nil {
-                        Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)")
-                            .foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
+                    // How long until it rings sits under the time, with the day: at the time's right, the card's top
+                    // corner, the status bar's clock and Wi-Fi covered it once the page scrolled (gate dd1a, 276).
+                    // Moved for one ring, the day line says so in few words ("Monday · Work · just this once"); the
+                    // button beside it carries the usual time ("Back to 6:45 AM"), so it isn't said twice. Both lines
+                    // keep one pitch, and the button centres on the two as Skip does.
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)" + (moved?.usual != nil ? " · just this once" : ""))
+                            .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
+                        Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                     }
                     Spacer(minLength: 8)
                     if let moved, let u = moved.usual {
@@ -790,7 +1216,7 @@ struct AlarmsTab: View {
                             Group { if skipping { ProgressView() } else { Text("Back to \(u.formatted(date: .omitted, time: .shortened))") } }
                                 .font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize().frame(minHeight: 30).padding(.horizontal, 4)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Back to the usual \(u.formatted(date: .omitted, time: .shortened)) alarm")
                     } else if n.alarm.name == "Nap", model.sys.ringing == nil {
                         // A nap isn't skipped, it's called off: the same as the nap row's switch and its editor (Richard,
@@ -799,10 +1225,10 @@ struct AlarmsTab: View {
                             skipping = true
                             Task { await model.cancelNap(); skipping = false }
                         } label: {
-                            Group { if skipping { ProgressView() } else { Label("Cancel nap", systemImage: "xmark") } }
+                            Group { if skipping { ProgressView() } else { GlassKeyLabel(title: "Cancel nap", symbol: "xmark") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Cancel the nap")
                     } else if model.state.skipKnown && !skippedNow && model.sys.ringing == nil {
                         // The one thing he'd reach for here: let it pass. Only on a Chumby that can skip, and not twice.
@@ -810,10 +1236,10 @@ struct AlarmsTab: View {
                             skipping = true
                             Task { await model.skipNext(); skipping = false }
                         } label: {
-                            Group { if skipping { ProgressView() } else { Label("Skip", systemImage: "forward.end.fill") } }
+                            Group { if skipping { ProgressView() } else { GlassKeyLabel(title: "Skip", symbol: "forward.end.fill") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Skip the \(clockParts(n.at).0) \(clockParts(n.at).1) alarm")
                     }
                 }
@@ -821,6 +1247,11 @@ struct AlarmsTab: View {
                 // No "just this once" door here: Home's card and the alarm's own editor have it (Richard, 2026-11-10).
             }
             .padding(.vertical, 2)
+            // The whole card opens the alarm; Skip, Undo and "Back to" on it keep their own taps.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { openNext(shownAlarm) }
+            .accessibilityAction(named: "Open this alarm") { openNext(shownAlarm) }
             // A nap starting or called off rolls the time over rather than swapping it.
             .animation(.snappy, value: n.at)
         } else {
@@ -849,13 +1280,31 @@ struct AlarmsTab: View {
         }
     }
 
+    // What the hero's alarm opens: his own in its editor, the nap in the nap's, the calendar's in that day's page (where a
+    // calendar alarm is changed). The Chumby's own helpers (the catch-up) have nothing to open.
+    func planned(_ a: Alarm) -> PlannedWake? {
+        wake.plan.first { CalendarWake.alarmName($0) == a.name && CalendarWake.minutes($0.wake) == a.time } ?? wake.plan.first { CalendarWake.alarmName($0) == a.name }
+    }
+    // Asked from another page (model.openAlarm): opened once the tab has come in, so the editor isn't lost to the switch.
+    func openAsked(_ k: String?) {
+        guard let k else { return }
+        model.openAlarm = nil
+        guard let a = model.state.alarms.first(where: { $0.key == k }) ?? (k == "Nap" ? model.napAlarm : nil) else { return }
+        Task { try? await Task.sleep(nanoseconds: 350_000_000); openNext(a) }
+    }
+    func openNext(_ a: Alarm) {
+        if a.name == "Nap" { editNap(model.napAlarm ?? a) }
+        // A calendar alarm the plan doesn't hold (not loaded yet, or an old one): the calendar's own page.
+        else if a.isCalendar { if let w = planned(a) { openDay(w.key) } else { openSettings() } }
+        else if a.name != "Catch-up" && !a.isPlaceholder { edit(a) }
+    }
     // What kind of alarm it is, in a few words, for the hero's heading.
     func kindWord(_ a: Alarm) -> String {
         if a.isCalendar { return "from your calendar" }
         if a.name == "Nap" { return "nap" }
         if a.name == "Catch-up" { return "catch-up" }
         switch a.when {
-        case "once": return "one-off"
+        case "once": return "one time"
         case "daily": return "every day"
         case "weekday": return "weekdays"
         case "weekend": return "weekends"
@@ -865,9 +1314,6 @@ struct AlarmsTab: View {
     // His own alarms: blue alarm tiles, each saying when it repeats and what it plays.
     var yours: some View {
         Section {
-            if model.stateKnown && mine.isEmpty {
-                Text("None of your own yet.").foregroundStyle(.secondary)
-            }
             ForEach(mine, id: \.key) { a in
                 AlarmRow(clock: (a.clock, a.meridiem), title: a.name.isEmpty ? "Alarm" : a.name,
                          detail: [a.whenUnlessNamed, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
@@ -885,31 +1331,26 @@ struct AlarmsTab: View {
                     }
                     // Its one ring moved or changed, said here on the alarm it belongs to (the one-off isn't listed).
                     if let j = model.state.justOnce(), j.original?.key == a.key {
-                        if j.pinned { RowNote(icon: "clock.arrow.circlepath", text: "Just this once: \(dayWord(j.at).lowercased()) at \(j.at.formatted(date: .omitted, time: .shortened)), \(j.alarm.soundText)", color: .secondary) }
-                        else if j.orphan, let u = j.usual { RowNote(icon: "exclamationmark.circle.fill", text: "Both will ring: \(u.formatted(date: .omitted, time: .shortened)) and the one-off at \(j.at.formatted(date: .omitted, time: .shortened))") }
+                        if j.pinned { RowNote(icon: "clock.arrow.circlepath", text: "Just this once: \(chumbyJustDay(j.at)) at \(j.at.formatted(date: .omitted, time: .shortened)), \(j.alarm.soundText)", color: .secondary) }
+                        else if j.orphan, let u = j.usual { RowNote(icon: "exclamationmark.circle.fill", text: "Both will ring: \(u.formatted(date: .omitted, time: .shortened)) and the just-this-once ring at \(j.at.formatted(date: .omitted, time: .shortened))") }
                     }
-                    MarkNote(mark: a.key)
                 }
                 .zoomSource(a.key, in: editNS)
+                MarkNote(mark: a.key, open: { edit(a) }).noteRow(lead: 56)
             }
             // The end of the card: one row, tapped anywhere, as Channels' Add widgets. Nothing floats over the page, so
             // nothing can cover the Nap chips under it (Richard's Alarms shot, 2026-11-05).
-            Button { edit(nil) } label: {
-                Label("Add alarm", systemImage: "plus.circle.fill").font(.body.weight(.semibold))
-                    .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
-                    .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            AddRow("Add alarm", note: model.stateKnown && mine.isEmpty ? "None of your own yet" : nil) { edit(nil) }
             .accessibilityLabel("Add an alarm")
             .zoomSource("new", in: editNS)
         } header: { SectionHead(icon: "alarm", text: "My alarms", color: ChumbyPalette.acc(scheme == .dark)) } footer: {
-            if model.state.pending { Text("The Chumby is putting your last change in place.") }
+            if model.state.pending { SectionFoot("The Chumby is putting your last change in place.") }
         }
     }
 
     // A nap set or called off is three moves, one after the other, never two sets of rows drawn over each other (the
     // list's own row change crossfaded the chips and the nap's row for about a tenth of a second): what's there fades
-    // out, the rows change places while nothing is drawn in them, and what's new fades in. `napRows` is which rows the
+    // out to a trace, the rows change places, and what's new fades in. `napRows` is which rows the
     // list holds; until the first change it's as the Chumby said when the tab was first drawn (`napFirst`), so the rows
     // only ever change inside the three moves; its `due` keeps the row's time while the row fades out.
     final class NapFirst { var row: Bool?; var due: Date? }
@@ -934,9 +1375,11 @@ struct AlarmsTab: View {
             try? await Task.sleep(nanoseconds: UInt64(Self.napFade * 1e9))
             guard !Task.isCancelled else { return }
             withAnimation(.snappy(duration: Self.napSettle)) { napRows = model.napDue != nil }
-            try? await Task.sleep(nanoseconds: UInt64(Self.napSettle * 1e9))
+            // The new rows come up as the card takes their size, a frame behind the old ones going: the card is never
+            // left standing empty (gate, 11-20: it sat empty for a third of a second while it settled first).
+            try? await Task.sleep(nanoseconds: 17_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: 0.16)) { napFaded = false }
+            withAnimation(.easeOut(duration: Self.napSettle)) { napFaded = false }
             napSwap = nil
         }
     }
@@ -1007,17 +1450,18 @@ struct AlarmsTab: View {
             } else if wake.rules.enabled {
                 Text("Chumby can’t see your calendar, so these can’t follow it.").foregroundStyle(.secondary)
             } else {
-                // Off, the row says what it is and that a tap turns it on; a bare label read as a row that opened something.
-                Button { Task { await wake.enable() } } label: {
-                    HStack(spacing: 8) {
-                        Label("Wake me from my calendar", systemImage: "calendar.badge.clock")
-                        Spacer(minLength: 8)
-                        Text("Turn on").font(.subheadline.weight(.semibold)).foregroundStyle(ChumbyPalette.cal(scheme == .dark))
-                            .padding(.horizontal, 12).padding(.vertical, 6).background(ChumbyPalette.cal(scheme == .dark).opacity(0.14), in: Capsule())
-                    }
-                    .contentShape(Rectangle())
+                // Off: the same switch as Calendar settings' (one setting, one look), with what it does on its second line
+                // (designer, 11-11). Turning it on asks for the calendar and starts the plan, as the "Turn on" row did.
+                // The switch holds what he asked for while the calendar's permission is asked and the plan starts, rather
+                // than springing back off under the alert; a refusal lets it go, and the note under the card says why.
+                Toggle(isOn: Binding(get: { wake.rules.enabled || turningOn }, set: { on in
+                    guard on, !turningOn else { return }
+                    turningOn = true
+                    Task { await wake.enable(); withAnimation(.snappy) { turningOn = false } }
+                })) {
+                    TwoLine("Wake me from my calendar", CalendarWake.what)
                 }
-                .buttonStyle(.plain)
+                .padding(.trailing, 2)
             }
             // Left on the Chumby when the plan stopped wanting them (Calendars turned off, an event gone): they still ring.
             ForEach(model.stateConfirmed && !CalendarWake.sample ? wake.strays(in: model.deviceState) : [], id: \.key) { a in
@@ -1044,20 +1488,27 @@ struct AlarmsTab: View {
         } footer: {
             // Only what's wrong or waiting, and what turning it on does. No reassurance (Richard, 2026-11-05: "i dont need
             // this message abt it ringing when my phone isnt on esp not twice").
-            if let n = wake.note { Text(n) }
-            else if !wake.rules.enabled { Text("Wakes you before the first thing each day.") }
+            if let n = wake.note { SectionFoot(n) }
         }
     }
 }
-// A section's heading with its kind's glyph and colour, so the two kinds of alarm can be told apart at a glance.
+// Every section's heading, in every tab and sheet: a glyph and the words in the quiet sub colour. Colour only where it
+// marks an alarm's kind (My alarms in the accent blue, Calendar in coral), so the two kinds can be told apart at a glance.
+// The sheets' plain "When" and "Sound" were a third style (designer, 11-11).
 struct SectionHead: View {
-    let icon: String, text: String, color: Color
+    let icon: String, text: String
+    var color: Color?
+    // A wide glyph (the X widget's two bubbles) drawn small enough to sit in its 22 pt box like the moon and the bell.
+    var small = false
+    @Environment(\.colorScheme) private var scheme
+    init(icon: String, text: String, color: Color? = nil, small: Bool = false) { self.icon = icon; self.text = text; self.color = color; self.small = small }
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).font(.subheadline.weight(.semibold))
+            // One box for every glyph, so every label starts at the same x and the heading is one height.
+            Image(systemName: icon).font(.subheadline.weight(.semibold)).imageScale(small ? .small : .medium).frame(width: 22, height: 20, alignment: .leading)
             Text(text).font(.custom("Trebuchet MS", size: 16).weight(.bold))
         }
-        .foregroundStyle(color).textCase(nil)
+        .foregroundStyle(color ?? ChumbyPalette.sub(scheme == .dark)).textCase(nil)
     }
 }
 // The tile at the head of an alarm row. A calendar alarm's is a little page of a calendar in coral (its weekday over its
@@ -1191,12 +1642,12 @@ struct SoundRows: View {
     var kind: String { closing ?? choice.kind }
     var stations: [NamedID] { model.pandoraStations }
     var body: some View {
-        Picker("Plays", selection: $choice.kind.afterMenu($closing)) {
+        Picker("Plays", selection: $choice.kind.afterMenu($closing).ticking()) {
             Text("Tone").tag("beep"); Text("Radio").tag("stream"); Text("Pandora").tag("pandora"); Text("Silent").tag("none")
             if kind == "keep" { Text("Current").tag("keep") }
         }
         if kind == "beep" {
-            Picker("Tone", selection: $choice.tone) { ForEach(model.state.tones, id: \.self) { Text($0).tag($0) } }
+            Picker("Tone", selection: $choice.tone.ticking()) { ForEach(model.state.tones, id: \.self) { Text($0).tag($0) } }
             Button {
                 Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(choice.tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
             } label: { Label("Play on the Chumby", systemImage: "play.fill") }
@@ -1205,16 +1656,16 @@ struct SoundRows: View {
         }
         if kind == "stream" {
             if model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
-            else { Picker("Station", selection: $choice.streamIndex) { ForEach(model.state.streams.indices, id: \.self) { i in Text(model.state.streams[i].name.isEmpty ? model.state.streams[i].url : model.state.streams[i].name).tag(i) } } }
+            else { Picker("Station", selection: $choice.streamIndex.ticking()) { ForEach(model.state.streams.indices, id: \.self) { i in Text(model.state.streams[i].name.isEmpty ? model.state.streams[i].url : model.state.streams[i].name).tag(i) } } }
         }
         if kind == "pandora" {
             if stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }
-            else { Picker("Station", selection: $choice.pandoraID) { ForEach(stations) { Text($0.name).tag($0.id) } } }
+            else { Picker("Station", selection: $choice.pandoraID.ticking()) { ForEach(stations) { Text($0.name).tag($0.id) } } }
         }
         if kind == "keep" { LabeledContent("Plays", value: alarm.soundText) }
         if kind != "none" {
             let music = choice.isMusic || kind == "keep"
-            Picker("Plays for", selection: playsFor) {
+            Picker("Plays for", selection: playsFor.ticking()) {
                 ForEach(SoundRows.lengths(including: alarm.duration), id: \.0) { Text($0.1).tag($0.0) }
                 Text("Until I stop it").tag("-1")
                 // Only music can end by itself; the Chumby never rings a tone marked that way.
@@ -1225,7 +1676,7 @@ struct SoundRows: View {
                 }
             }
         }
-        Picker("Snooze", selection: $alarm.snooze) {
+        Picker("Snooze", selection: $alarm.snooze.ticking()) {
             ForEach(SoundRows.snoozes(including: alarm.snooze), id: \.self) { Text("\($0) min").tag($0) }
         }
         .background { tail }
@@ -1285,6 +1736,16 @@ struct AlarmEditor: View {
     @State private var problem: String?
     @State private var loaded = false
     @State private var justOnce = false
+    @FocusState private var labelFocused: Bool
+    // The Chumby takes no change to its alarms while one rings or snoozes (a save restarts its alarm panel): said before
+    // Save is pressed, not only after.
+    var ringingNow: Bool { model.sys.ringing != nil && !model.unreachable && !calendarTemplate }
+    // "Work is ringing. Save once it’s stopped."
+    var ringingNote: String {
+        guard let r = model.sys.ringing else { return "" }
+        let n = r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name
+        return "\(n.isEmpty ? "An alarm" : n) is \(r.snoozed ? "snoozed" : "ringing"). Save once it’s stopped."
+    }
 
     var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
@@ -1338,22 +1799,23 @@ struct AlarmEditor: View {
 
     var body: some View {
         if let close {
-            // In the right pane: its own title row with Cancel and Save, then the same sections, clear of the fold.
-            Group {
-                PageTitle(title) {
-                    HStack(spacing: 16) {
-                        Button("Cancel") { stopTest(); close() }.disabled(saving)
-                        if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
-                    }
-                    .foregroundStyle(.tint)
-                }
-                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-                .onDisappear { model.editingAlarm = false }
-                // On this one row, never on the group: inside the pane's list a modifier on the group lands on every
-                // row, and a sheet bound to the same state from many rows presents from none (build 204, open flat).
-                .fillCover(isPresented: $justOnce) { justOnceSheet }
-                sections
+            // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
+            // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
+            let buttons = HStack(spacing: 16) {
+                Button("Cancel") { stopTest(); close() }.disabled(saving)
+                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold).disabled(ringingNow) }
             }
+            .foregroundStyle(.tint)
+            List {
+                PageTitle(title, pins: true) { buttons }
+                sections.listRowBackground(GlassRow())
+            }
+            .pinsTitle { PageTitle(title) { buttons } }
+            // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
+            // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
+            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
+            .onDisappear { model.editingAlarm = false }
+            .fillCover(isPresented: $justOnce) { justOnceSheet }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
             // system's items, each with a glyph, so on the Duo they take the side bar, Cancel at the top where Back goes
@@ -1369,7 +1831,7 @@ struct AlarmEditor: View {
                         Button { stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold) }
+                        if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold).disabled(ringingNow) }
                     }
                 }
                 .interactiveDismissDisabled(saving)
@@ -1394,10 +1856,19 @@ struct AlarmEditor: View {
     var sections: some View {
             Group {
                 // Above everything, beside Save: why it couldn't save, or what saving will do that isn't obvious.
-                if saving || problem != nil || !switchesOff.isEmpty || (original.map { !$0.isOn } ?? false) && !calendarTemplate {
+                if saving || problem != nil || ringingNow || !switchesOff.isEmpty || (original.map { !$0.isOn } ?? false) && !calendarTemplate {
                     Section {
                         if saving { HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) } }
                         if let problem { FailNote(text: problem) }
+                        if ringingNow && !saving && problem == nil {
+                            // Not a dead end: the ringing page (Snooze, Stop) comes up over this one and leaves what
+                            // was typed here as it was.
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                RowNote(icon: "alarm.waves.left.and.right.fill", text: ringingNote)
+                                Spacer(minLength: 4)
+                                Button("Stop it") { model.ringScreen = true }.buttonStyle(.borderless).font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                            }
+                        }
                         let off = switchesOff
                         if !off.isEmpty { RowNote(icon: "alarm", text: "Saving turns off \(Self.list(off)).") }
                         if !calendarTemplate && !nap, let o = original, !o.isOn { RowNote(icon: "alarm.fill", text: "Saving turns this alarm on.", color: .secondary) }
@@ -1407,71 +1878,84 @@ struct AlarmEditor: View {
                     // When it rings, as a time or as a length from now; the two always agree.
                     Section {
                         DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity)
-                        HStack(spacing: 8) {
-                            ForEach(Self.napLengths, id: \.self) { m in
-                                Button { withAnimation(.snappy) { setNapLength(m) } } label: {
-                                    Text("\(m)").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity, minHeight: 34)
-                                }
-                                .buttonStyle(.bordered).tint(napMinutes == m ? ChumbyPalette.acc(scheme == .dark) : nil)
-                                .accessibilityLabel("In \(m) minutes")
+                        // "10 min" … "90 min", never scaled: six across where they fit whole, else three and three.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { ForEach(Self.napLengths, id: \.self) { napChip($0, fixed: true) } }
+                            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                                GridRow { ForEach(Self.napLengths.prefix(3), id: \.self) { napChip($0, fixed: false) } }
+                                GridRow { ForEach(Self.napLengths.dropFirst(3), id: \.self) { napChip($0, fixed: false) } }
                             }
                         }
                         .listRowSeparator(.hidden)
-                        Text(napIn).font(.subheadline).foregroundStyle(.secondary).contentTransition(.numericText())
-                    } header: { Text("Wake me in") } footer: { if nap && original == nil { Text("Rings once, as your other alarms do, and never turns them off.") } }
+                        .listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 0, trailing: 20))
+                        // The length is said only when the wheel is at one no chip holds. The air over it and under it is
+                        // the same (it was 33 pt over and 19 under).
+                        if !Self.napLengths.contains(napMinutes) {
+                            Text(napIn).font(.subheadline).foregroundStyle(.secondary).contentTransition(.numericText())
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 11, trailing: 20))
+                        }
+                    } header: { SectionHead(icon: "timer", text: "Wake me in") } footer: { if nap && original == nil { SectionFoot("Rings once, as your other alarms do, and never turns them off.") } }
                 }
                 if !calendarTemplate && !nap {
                 Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity) }
                 Section {
-                    Picker("Repeat", selection: $repeatMode.afterMenu($repeatClosing)) {
+                    Picker("Repeat", selection: $repeatMode.afterMenu($repeatClosing).ticking()) {
                         Text("Once").tag("once"); Text("Daily").tag("daily"); Text("Weekdays").tag("weekday"); Text("Weekends").tag("weekend"); Text("One day").tag("day")
                     }
                     // The Day and Date rows come and go once Repeat's menu has closed, not under it.
                     let repeatShown = repeatClosing ?? repeatMode
                     if repeatShown == "day" {
-                        Picker("Day", selection: $day) { ForEach(0..<7, id: \.self) { Text(Calendar.current.weekdaySymbols[$0]).tag($0) } }
+                        Picker("Day", selection: $day.ticking()) { ForEach(0..<7, id: \.self) { Text(Calendar.current.weekdaySymbols[$0]).tag($0) } }
                     }
                     if repeatShown == "once" {
                         DatePicker("Date", selection: $date, displayedComponents: .date)
                         Text("Rings \(onceAt.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().hour().minute()))").font(.subheadline).foregroundStyle(.secondary)
                     }
+                    // The whole row is the field: tapped on its name, it still starts typing.
                     HStack {
                         Text("Label")
                         TextField("Optional", text: $alarm.name).multilineTextAlignment(.trailing).foregroundStyle(.secondary)
+                            .focused($labelFocused).submitLabel(.done)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { labelFocused = true }
                 }
                 }
-                Section("Sound") { SoundRows(choice: $sound, alarm: $alarm) }
+                Section { SoundRows(choice: $sound, alarm: $alarm) } header: { SectionHead(icon: "music.note", text: "Sound") }
                 Section {
                     // No Backup beep switch: the Chumby saves every alarm with backup 0 whatever it's sent (do_save, since
                     // 11-05: the stock beeper killed the alarm panel), so turning it on here came back off after Save.
-                    Picker("Then", selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } }
-                } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
+                    // What it's for, said in the row: alone, "Then" was a one-row capsule (designer, 11-11).
+                    // The value stays at the right whatever the width (the system's row stacked it under a long label).
+                    MenuRow(title: "Then", note: "What the screen does once it stops ringing.", selection: $after) {
+                        ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                } header: { SectionHead(icon: "arrow.turn.down.right", text: "Afterwards") }
                 // One of his repeating alarms: later or another sound for its next ring only (the Chumby's skip is pinned by name,
                 // so it needn't be the next alarm to ring).
                 if let original, !calendarTemplate, original.when != "once", original.isOn,
                    let j = model.state.justOnce(), j.original?.key == original.key, j.pinned, let u = j.usual {
                     Section {
-                        RowNote(icon: "clock.arrow.circlepath", text: "Rings \(dayWord(j.at).lowercased()) at \(j.at.formatted(date: .omitted, time: .shortened)) with \(j.alarm.soundText), then as usual.", color: .secondary)
+                        RowNote(icon: "clock.arrow.circlepath", text: "Rings \(chumbyJustDay(j.at)) at \(j.at.formatted(date: .omitted, time: .shortened)) with \(j.alarm.soundText), then as usual.", color: .secondary)
                         Button("Back to \(u.formatted(date: .omitted, time: .shortened))") {
                             saving = true; problem = nil
                             Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
                         }.foregroundStyle(.tint).disabled(saving)
-                    } header: { Text("Just this once") }
+                    } header: { SectionHead(icon: "clock.arrow.circlepath", text: "Just this once") }
                 } else if let original, !calendarTemplate, original.when != "once", original.isOn {
                     switch model.justOnceOffer(for: original) {
                     case .hidden: EmptyView()
-                    case .note(let why): Section { Text(why).font(.subheadline).foregroundStyle(.secondary) } header: { Text("Just this once") }
+                    case .note(let why): Section { Text(why).font(.subheadline).foregroundStyle(.secondary) } header: { SectionHead(icon: "clock.arrow.circlepath", text: "Just this once") }
                     case .ok(_, let due, let warning):
                         Section {
                             Button { justOnce = true } label: {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Later or another sound, just this once").foregroundStyle(.tint)
+                                    Text("Set this ring’s time or sound").foregroundStyle(.tint)
                                     Text("\(dayWord(due)) at \(due.formatted(date: .omitted, time: .shortened)) only. It repeats as usual after.").font(.subheadline).foregroundStyle(.secondary)
                                 }
                             }
                             if let warning { RowNote(icon: "exclamationmark.circle.fill", text: warning) }
-                        } header: { Text("Just this once") }
+                        } header: { SectionHead(icon: "clock.arrow.circlepath", text: "Just this once") }
                     }
                 }
                 // A "just this once" goes back to the usual time rather than just going: deleting it alone would leave the
@@ -1481,7 +1965,9 @@ struct AlarmEditor: View {
                         saving = true; problem = nil
                         Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
                     }.foregroundStyle(.tint).disabled(saving)
-                } footer: { Text("The usual alarm rings again and this one goes.") } }
+                    // The section's only row (the pinned case with its note is the section above), so a solo card.
+                    .soloCard(note: "The usual alarm rings again and this one goes.")
+                } }
                 else if nap, original != nil { Section {
                     // Calling the nap off, from its editor too; it goes without asking, since it was one tap to set.
                     Button("Cancel nap", role: .destructive) { run(.cancelNap) }.foregroundStyle(.red).disabled(saving)
@@ -1501,6 +1987,22 @@ struct AlarmEditor: View {
     var napIn: String {
         let m = napMinutes
         return m >= 60 ? "In \(m / 60) h\(m % 60 > 0 ? " \(m % 60) min" : "")" : "In \(m) min"
+    }
+    // The Just-this-once "When" chip: outlined in the accent, filled with it when chosen. Six equal columns where they fit
+    // whole, else three and three, the same width either way.
+    func napChip(_ m: Int, fixed: Bool) -> some View {
+        let acc = ChumbyPalette.acc(scheme == .dark)
+        let on = napMinutes == m
+        return Button { Haptic.fire(.tick); withAnimation(.snappy) { setNapLength(m) } } label: {
+            Text("\(m) min").font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).fixedSize()
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, minHeight: 34)
+                .foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(acc))
+                .background { Capsule().fill(on ? AnyShapeStyle(acc) : AnyShapeStyle(.clear)) }
+                .overlay { Capsule().stroke(acc, lineWidth: 1) }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("In \(m) minutes")
     }
     func setNapLength(_ m: Int) {
         napLength = m
@@ -1528,7 +2030,8 @@ struct AlarmEditor: View {
             if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { alarm = t }
         } else if let original { alarm = original }
         // The build's shot of a new alarm being set for a new time, so "Saving turns off …" can be seen.
-        if original == nil && !calendarTemplate && ChumbyModel.pose == "editornew" { alarm.time = "330"; alarm.when = "weekday" }
+        if original == nil && !calendarTemplate && ["editornew", "newalarmdemo"].contains(ChumbyModel.pose) { alarm.time = "330"; alarm.when = "weekday" }
+        if original == nil && !calendarTemplate && !nap && ChumbyModel.pose == "newalarmdemo" { Task { try? await Task.sleep(nanoseconds: 3_500_000_000); save() } }
         let m = alarm.localMinutes
         time = Calendar.current.date(bySettingHour: m / 60 % 24, minute: m % 60, second: 0, of: Date()) ?? Date()
         if let d = Alarm.dayKeys.firstIndex(of: alarm.when) { day = d; repeatMode = "day" } else { repeatMode = alarm.when }
@@ -1580,5 +2083,21 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+// A small glass button's word with its symbol: the symbol a size under the word and close beside it. A plain Label
+// drew the symbol as large as a heading with a wide gap, so "Skip" read off-centre (Richard, 2026-11-20: "the skip
+// button … the text looks off").
+struct GlassKeyLabel: View {
+    let title: String
+    let symbol: String
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).imageScale(.small).font(.footnote.weight(.bold))
+            // The app's own face, as Home's Skip is set (gate, 11-20: here it was the system's, beside a Trebuchet time).
+            Text(title).font(.custom("Trebuchet MS", size: 16).weight(.bold))
+        }
+        .padding(.horizontal, 2)
     }
 }
