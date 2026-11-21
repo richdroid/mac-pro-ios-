@@ -193,13 +193,15 @@ struct DashboardTab: View {
     // MARK: Put on the Mac
 
     // A board's key: its sign and name, filled while it is the one on the Mac's screen.
-    func cell(_ name: String, _ symbol: String, on: Bool, busy: Bool) -> some View {
+    func cell(_ name: String, _ symbol: String, on: Bool, busy: Bool, menu: Bool = false) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol).font(.body.weight(.medium)).frame(width: 24).opacity(busy ? 0 : 1)
                 .overlay { if busy { ProgressView().controlSize(.small).tint(on ? .white : macBlue) } }
                 .foregroundStyle(on ? Color.white : macBlue)
             Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(on ? Color.white : Color.primary).lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 0)
+            // A menu, not a board: marked as the system marks one.
+            if menu { Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold)).foregroundStyle(on ? Color.white.opacity(0.8) : Color.secondary) }
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity).frame(height: Space.key)
@@ -228,7 +230,7 @@ struct DashboardTab: View {
                     ForEach(ConsolePlace.pages, id: \.id) { p in
                         Button { remote.send(model, "page", "page", p.id) } label: { Label(p.name, systemImage: page?.id == p.id ? "checkmark" : p.symbol) }
                     }
-                } label: { cell(page?.name ?? "Pages", page?.symbol ?? "square.grid.2x2", on: page != nil, busy: remote.busy == "page") }
+                } label: { cell(page?.name ?? "Pages", page?.symbol ?? "square.grid.2x2", on: page != nil, busy: remote.busy == "page", menu: true) }
                 .accessibilityIdentifier("board.pages")
             }
             .disabled(!ready || !running)
@@ -242,8 +244,9 @@ struct DashboardTab: View {
     func row(_ title: String, _ note: String, _ symbol: String) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).lineLimit(1).minimumScaleFactor(0.85)
-                Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
+                // Whole in the narrowest pane (open flat at his size): short names, and a note that may take a second line.
+                Text(title).fixedSize(horizontal: false, vertical: true)
+                Text(note).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
     }
@@ -253,9 +256,9 @@ struct DashboardTab: View {
                 guard remote.busy == nil else { return }
                 asked["show"] = want
                 remote.send(model, "show", want ? "show" : "hide")
-            })) { row("Show the dashboard", "Full screen on the Mac", "rectangle.inset.filled") }
+            })) { row("On screen", "The dashboard, full screen", "rectangle.inset.filled") }
                 .accessibilityIdentifier("switch.show")
-            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Keep display on", "Until you turn this off", "sun.max") }
+            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Until you turn it off", "sun.max") }
                 .accessibilityIdentifier("switch.display")
             Group {
                 Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "A new board every \(st?.rotateSecs.map { $0 > 0 ? "\(Int($0))" : "45" } ?? "45") s", "arrow.triangle.2.circlepath") }
@@ -263,7 +266,7 @@ struct DashboardTab: View {
                 Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "For across the room", "textformat.size") }
                     .accessibilityIdentifier("switch.text")
                 // Glance in plain words, one switch (Richard, 2026-11-21: "glance is so confusing").
-                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "Just a few huge numbers", "bed.double") }
+                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "A few huge numbers", "eye") }
                     .accessibilityIdentifier("switch.glance")
             }
             .disabled(!running)

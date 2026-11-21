@@ -76,7 +76,7 @@ jobs:
             sleep 2
             perl -e 'alarm 90; exec @ARGV' xcrun simctl launch "$DEVICE" $APP -address http://127.0.0.1:9001 "$@"
             sleep 6
-            ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep 2; done )
+            ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep ${GAP:-2}; done )
             sleep $length
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
             kill -INT $REC; wait $REC
@@ -130,8 +130,14 @@ jobs:
           # a refusal; the dashboard started from off; every tab tapped in turn.
           films() {
             local x=$1 d=$2 sx=$3; shift 3
-            film remote$x $d 3 "tap board.home;tap remote.Next;tap remote.Previous;drag $sx 0.8 $sx 0.3 0.5;tap switch.rotate;tap switch.text;tap switch.glance;tap switch.glance;tap switch.display" -tab 6 -pose consoleboard "$@"
-            film remote-fail$x $d 7 "tap board.media" -tab 6 -pose consolefail "$@"
+            # One press, then left alone 7 s: its answer must stay about 5 s, then the line settles (shots at 1.5 s and 3.5 s).
+            xcrun simctl launch "$DEVICE" $APP -address http://127.0.0.1:9001 -tab 6 -pose consoleboard "$@"; sleep 7
+            $D "$DEVICE" tap board.home; sleep 1.5; xcrun simctl io "$DEVICE" screenshot --display=$d dist/macpro-answer$x-1.5s.png
+            sleep 2; xcrun simctl io "$DEVICE" screenshot --display=$d dist/macpro-answer$x-3.5s.png
+            sleep 4; xcrun simctl io "$DEVICE" screenshot --display=$d dist/macpro-answer$x-7.5s.png
+            xcrun simctl terminate "$DEVICE" $APP
+            GAP=4 film remote$x $d 3 "tap board.home;tap remote.Next;tap remote.Previous;drag $sx 0.8 $sx 0.3 0.5;tap switch.rotate;tap switch.text;tap switch.glance;tap switch.glance;tap switch.display" -tab 6 -pose consoleboard "$@"
+            film remote-fail$x $d 8 "tap board.media" -tab 6 -pose consolefail "$@"
             film remote-start$x $d 3 "tap 'remote.Start the dashboard';tap board.tonight" -tab 6 -pose consoleoff "$@"
             film tabs$x $d 2 "tap tab.Dashboard;tap tab.Control;tap tab.macOS;tap tab.Claude;tap tab.Apps;tap tab.Status;tap tab.Dashboard" -tab 0 "$@"
           }
@@ -143,6 +149,7 @@ jobs:
           returns "" 1
           shot history 1 8 -tab 0 -openHistory cpu
           shot settings 1 8 -tab 9
+          shotdrag status-fans 1 "drag 0.4 0.8 0.4 0.2 0.5;drag 0.4 0.8 0.4 0.45 0.5" -tab 0
           # Folded on its side.
           $D "$DEVICE" rotate 1; sleep 5
           shot tab-status-land 1 8 -tab 0

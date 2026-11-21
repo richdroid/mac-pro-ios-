@@ -56,7 +56,7 @@ enum ConsolePlace {
     }
     static func name(_ s: ConsoleState) -> (String, String) {
         // Glance draws over every page and board on the Mac, so it is what the screen shows while it's on.
-        if s.glance == true { return ("Glance", "bed.double") }
+        if s.glance == true { return ("Glance", "eye") }
         if let b = s.board, let x = boards.first(where: { $0.id == b }) { return (x.name, x.symbol) }
         if let p = s.page, let x = pages.first(where: { $0.id == p }) { return (x.name, x.symbol) }
         if s.page == "boards" { return ("Boards", "rectangle.on.rectangle.angled") }
@@ -119,7 +119,7 @@ final class ConsoleRemote: ObservableObject {
     private func confirm(_ text: String) {
         saidCount += 1; let mine = saidCount
         said = text
-        Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if saidCount == mine { withAnimation(Motion.quick) { said = nil } } }
+        Task { try? await Task.sleep(nanoseconds: 5_000_000_000); if saidCount == mine { withAnimation(Motion.quick) { said = nil } } }
     }
     // What a yes means, in his words; the bridge's own sentence wins where it has one (the display).
     static func done(_ cmd: String, _ arg: String, _ st: ConsoleState?) -> String {
@@ -169,8 +169,6 @@ final class ConsoleRemote: ObservableObject {
                 // The build's shot of a refusal: the Console didn't answer in time, said under the keys, then gone.
                 if model.pose == "consolefail" {
                     withAnimation(Motion.quick) { busy = nil; fail = (key, "The Console didn’t answer."); refused += 1 }
-                    try? await Task.sleep(nanoseconds: 6_000_000_000)
-                    if fail?.key == key { withAnimation(Motion.quick) { fail = nil } }
                     return
                 }
                 withAnimation(Motion.quick) {
@@ -199,11 +197,8 @@ final class ConsoleRemote: ObservableObject {
                 busy = nil
                 if let e { fail = (key, e); refused += 1 } else { answered += 1; confirm(say ?? Self.done(cmd, arg, st)) }
             }
-            // An error is read once: gone after a few seconds, unless a newer one has taken its place.
-            if let e {
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
-                if fail?.text == e, busy == nil { withAnimation(Motion.quick) { fail = nil } }
-            }
+            // A refusal stays until his next press (which clears it): gone by itself after a few seconds, it could be
+            // missed, and the card then read as if the press had worked (designer gate 1, 2026-11-21).
             if e == nil, st == nil { await refresh(model) }
         }
     }

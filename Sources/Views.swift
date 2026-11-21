@@ -601,7 +601,11 @@ struct RootView: View {
                 // 2026-11-19: "never more tabs thing"), so on its side the app draws the rail itself, the system's look
                 // (a glass capsule of icons, the tab in front in the accent colour), all six in it. Every other posture
                 // keeps the system's own bar, which fits all six only where it's wide (open); upright and narrow the app draws a bar too.
-                if railSide {
+                // Open upright too, where the system keeps no strip: the same pill at the foot of the trailing edge, the
+                // page keeping clear of its column. No bar along the foot in any posture (Richard's reference of
+                // 2026-11-21, "this is what iphone duo apps look like": content on the left, one rail on the right with
+                // the tabs as a vertical pill at its foot).
+                if railSide || !Self.systemTabs {
                     SideRailTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
                 } else if narrow || !Self.systemTabs {
                     // Upright and narrow (folded), the system's bar holds five and put Dashboard under "More": the app
