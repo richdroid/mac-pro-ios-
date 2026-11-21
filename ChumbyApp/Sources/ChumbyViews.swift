@@ -2001,13 +2001,24 @@ struct ChannelsTab: View {
     // delete control at each row's start and the grip at its end; the ⊖ that sat at the row's end beside the grip is gone.
     // One tap on the control takes the widget out (Add widgets puts it back): the system's second step, a square Delete
     // sliding in from the row's end, is the half-swiped row he ruled out ("looks fucked", 11-05), so there's no swipe either.
+    func timePill(_ w: EditorRow, _ text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "timer")
+            Text(text).lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+        }
+        .font(.footnote.weight(.medium))
+        .fixedSize()
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(.white.opacity(0.12), in: Capsule())
+    }
     func widgetRow(_ w: EditorRow) -> some View {
         HStack(alignment: .center, spacing: 16) {
             // The app's one remove control while editing (LeadingRemove), sliding in with the name in the same spring.
             LeadingRemove(editing: reordering, label: "Remove \(w.name) from \(pickedTitle)") { remove(w.id) }
                 .padding(.trailing, reordering ? -23 : -16)
             // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
-            Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
             Spacer(minLength: 12)
             // While editing the row is its name alone, between the delete control and the grip, at the same height.
             if !reordering {
@@ -2018,14 +2029,12 @@ struct ChannelsTab: View {
                         ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
                     }
                 } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "timer")
-                        Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto") : timeText(w.secs))
-                        Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                    // Never on two lines (Richard's Channels screenshot, 11-21: "Auto · / 15 sec" stacked beside long names):
+                    // the whole label when it fits, else the time alone, always one line.
+                    ViewThatFits(in: .horizontal) {
+                        timePill(w, w.secs == 0 ? (w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto") : timeText(w.secs))
+                        timePill(w, w.secs == 0 ? (w.own > 0 ? timeText(w.own) : "Auto") : timeText(w.secs))
                     }
-                    .font(.footnote.weight(.medium))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(.white.opacity(0.12), in: Capsule())
                 }
                 .accessibilityLabel("Time on screen")
                 // Crossfades with the grip: out quickly as Edit comes in, back only once the grip has gone on Done.
