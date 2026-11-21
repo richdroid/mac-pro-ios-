@@ -341,11 +341,13 @@ struct RingingCard: View {
             let snoozed = s.ring.snoozed
             VStack(spacing: 14) {
                 VStack(spacing: 3) {
-                    // Ringing hands over to Snoozed one at a time: the old title is gone before the new one fades in.
+                    // The title cross-fades in place, as the ringing page's line does: the new word is on its way up as the
+                    // old one goes, so the card is never without one (gate, 11-20: two blank frames between "Snoozed
+                    // until" and "Stopping…").
                     ZStack {
                         Text(model.ringWorking ?? (snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing"))
                             .id(model.ringWorking ?? (snoozed ? "s" : "r"))
-                            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+                            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.14))))
                     }
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     Text(name(s.ring)).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
@@ -373,7 +375,7 @@ struct RingingCard: View {
                     .buttonStyle(.plain)
                     .frame(minWidth: snoozed ? 0 : snoozeMin, maxWidth: snoozed ? 0 : .infinity)
                     .padding(.trailing, snoozed ? 0 : 14)
-                    .allowsHitTesting(!snoozed).accessibilityHidden(snoozed)
+                    .allowsHitTesting(!snoozed && model.ringWorking == nil).accessibilityHidden(snoozed)
                     // The same capsule as Snooze's, in the app's orange: the system's prominent style padded it taller.
                     Button { model.ringOff() } label: {
                         Label("Stop", systemImage: "stop.fill").lineLimit(1).foregroundStyle(.white)
@@ -385,7 +387,9 @@ struct RingingCard: View {
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                 // Pressed and not yet confirmed: both keys dim and rest, so the press is seen to have landed (as on the card).
-                .opacity(model.ringWorking != nil ? 0.45 : 1).allowsHitTesting(model.ringWorking == nil)
+                // Stop still takes a press while a Snooze is on its way (a Snooze hit by mistake half asleep must never
+                // lock Stop out for the fourteen seconds the Chumby is given); the desk sends it at once.
+                .opacity(model.ringWorking != nil ? 0.45 : 1).allowsHitTesting(!model.ringStopping)
                 if let f = model.failed("ring") { FailNote(text: f) }
             }
             .padding(16)
@@ -397,7 +401,7 @@ struct RingingCard: View {
 extension AnyTransition {
     // Stopped: the card is gone by opacity alone within 0.12 s, before the controls under it start up (ChumbyModel.stopSpring).
     static var ringCard: AnyTransition {
-        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .top)), removal: .opacity.animation(.easeOut(duration: ChumbyModel.stopFade)))
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.2)))
     }
 }
 
@@ -414,6 +418,9 @@ struct NapSection: View {
     @AppStorage("napSetAt") private var napSetAt = 0.0
     @State private var sending: Int?
     static let lengths = [10, 20, 30, 60]
+    // How far what's there fades before the rows change places: not to nothing, so the card is never drawn empty for a
+    // frame as the old rows go and the new ones come (gate, 11-20); faint enough that the two never read as drawn twice.
+    static let floor = 0.12
     // Which rows the list holds, and whether they're drawn, while a nap is set or called off (AlarmsTab.napMoves); `due`
     // is the nap's time, kept while its row fades out.
     let row: Bool
@@ -424,9 +431,9 @@ struct NapSection: View {
     var body: some View {
         Group {
             if row, let due {
-                napRow(due).opacity(faded ? 0 : 1)
+                napRow(due).opacity(faded ? Self.floor : 1)
             } else {
-                chips.opacity(faded ? 0 : 1)
+                chips.opacity(faded ? Self.floor : 1)
                 Button { edit(nil) } label: {
                     Label("Another time or sound", systemImage: "slider.horizontal.3").font(.body.weight(.semibold))
                         .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
@@ -434,7 +441,7 @@ struct NapSection: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Set a nap with another time or sound")
-                .opacity(faded ? 0 : 1)
+                .opacity(faded ? Self.floor : 1)
             }
             if let f = model.failed("nap") { FailNote(text: f) }
         }
@@ -476,7 +483,7 @@ struct NapSection: View {
     }
 }
 // The nap's heading: "Nap" stands still, and ", wake me in" fades away with the chips as a nap is set and back in with
-// them when it's called off (it swapped whole in one frame). Timed to NapSection's three moves.
+// them when it's called off (it swapped whole in one frame). Timed to NapSection's two moves.
 struct NapHead: View {
     let set: Bool
     let color: Color
@@ -486,7 +493,7 @@ struct NapHead: View {
             HStack(spacing: 0) {
                 Text("Nap")
                 Text(", wake me in").opacity(set ? 0 : 1)
-                    .animation(set ? .easeOut(duration: AlarmsTab.napFade) : .easeIn(duration: 0.16).delay(AlarmsTab.napFade + AlarmsTab.napSettle), value: set)
+                    .animation(set ? .easeOut(duration: AlarmsTab.napFade) : .easeOut(duration: AlarmsTab.napSettle).delay(AlarmsTab.napFade), value: set)
             }
             .font(.custom("Trebuchet MS", size: 16).weight(.bold))
         }
@@ -1102,6 +1109,8 @@ struct AlarmsTab: View {
             case "calonce": if let w = wake.plan.first { wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(25 * 60).timeIntervalSince1970) }
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
+            // For the build's film: a new alarm made and saved (the editor saves it itself), the list taking it in.
+            case "newalarmdemo": Task { try? await Task.sleep(nanoseconds: 2_500_000_000); edit(nil) }
             // His own alarms and the nap brought on screen, folded, for their shot.
             case "alarmsmine", "napset": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap" }
             // The nap set (the mock's nap scene) opened in its editor.
@@ -1216,7 +1225,7 @@ struct AlarmsTab: View {
                             skipping = true
                             Task { await model.cancelNap(); skipping = false }
                         } label: {
-                            Group { if skipping { ProgressView() } else { Label("Cancel nap", systemImage: "xmark") } }
+                            Group { if skipping { ProgressView() } else { GlassKeyLabel(title: "Cancel nap", symbol: "xmark") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
                         .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
@@ -1227,7 +1236,7 @@ struct AlarmsTab: View {
                             skipping = true
                             Task { await model.skipNext(); skipping = false }
                         } label: {
-                            Group { if skipping { ProgressView() } else { Label("Skip", systemImage: "forward.end.fill") } }
+                            Group { if skipping { ProgressView() } else { GlassKeyLabel(title: "Skip", symbol: "forward.end.fill") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
                         .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
@@ -1341,7 +1350,7 @@ struct AlarmsTab: View {
 
     // A nap set or called off is three moves, one after the other, never two sets of rows drawn over each other (the
     // list's own row change crossfaded the chips and the nap's row for about a tenth of a second): what's there fades
-    // out, the rows change places while nothing is drawn in them, and what's new fades in. `napRows` is which rows the
+    // out to a trace, the rows change places, and what's new fades in. `napRows` is which rows the
     // list holds; until the first change it's as the Chumby said when the tab was first drawn (`napFirst`), so the rows
     // only ever change inside the three moves; its `due` keeps the row's time while the row fades out.
     final class NapFirst { var row: Bool?; var due: Date? }
@@ -1366,9 +1375,11 @@ struct AlarmsTab: View {
             try? await Task.sleep(nanoseconds: UInt64(Self.napFade * 1e9))
             guard !Task.isCancelled else { return }
             withAnimation(.snappy(duration: Self.napSettle)) { napRows = model.napDue != nil }
-            try? await Task.sleep(nanoseconds: UInt64(Self.napSettle * 1e9))
+            // The new rows come up as the card takes their size, a frame behind the old ones going: the card is never
+            // left standing empty (gate, 11-20: it sat empty for a third of a second while it settled first).
+            try? await Task.sleep(nanoseconds: 17_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: 0.16)) { napFaded = false }
+            withAnimation(.easeOut(duration: Self.napSettle)) { napFaded = false }
             napSwap = nil
         }
     }
@@ -2019,7 +2030,8 @@ struct AlarmEditor: View {
             if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { alarm = t }
         } else if let original { alarm = original }
         // The build's shot of a new alarm being set for a new time, so "Saving turns off …" can be seen.
-        if original == nil && !calendarTemplate && ChumbyModel.pose == "editornew" { alarm.time = "330"; alarm.when = "weekday" }
+        if original == nil && !calendarTemplate && ["editornew", "newalarmdemo"].contains(ChumbyModel.pose) { alarm.time = "330"; alarm.when = "weekday" }
+        if original == nil && !calendarTemplate && !nap && ChumbyModel.pose == "newalarmdemo" { Task { try? await Task.sleep(nanoseconds: 3_500_000_000); save() } }
         let m = alarm.localMinutes
         time = Calendar.current.date(bySettingHour: m / 60 % 24, minute: m % 60, second: 0, of: Date()) ?? Date()
         if let d = Alarm.dayKeys.firstIndex(of: alarm.when) { day = d; repeatMode = "day" } else { repeatMode = alarm.when }
@@ -2071,5 +2083,21 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+// A small glass button's word with its symbol: the symbol a size under the word and close beside it. A plain Label
+// drew the symbol as large as a heading with a wide gap, so "Skip" read off-centre (Richard, 2026-11-20: "the skip
+// button … the text looks off").
+struct GlassKeyLabel: View {
+    let title: String
+    let symbol: String
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).imageScale(.small).font(.footnote.weight(.bold))
+            // The app's own face, as Home's Skip is set (gate, 11-20: here it was the system's, beside a Trebuchet time).
+            Text(title).font(.custom("Trebuchet MS", size: 16).weight(.bold))
+        }
+        .padding(.horizontal, 2)
     }
 }

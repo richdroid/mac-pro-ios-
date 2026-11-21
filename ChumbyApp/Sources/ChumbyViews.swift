@@ -28,6 +28,7 @@ struct ChumbyApp: App {
                     if p == .active { model.start(); RingPresenter.sync(model); if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }; CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true); await model.loadMacPlaying() } } else { model.stop() }
                     #if os(iOS)
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
+                    if p != .active { model.widgetsOnLeaving() }
                     #endif
                 }
                 .onAppear {
@@ -624,11 +625,19 @@ struct RootView: View {
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
         .onAppear {
-            if ChumbyModel.pose == "ringscreen" || ChumbyModel.pose == "ringfail" { model.ringScreen = true }
+            if ["ringscreen", "ringfail", "ringpagedemo"].contains(ChumbyModel.pose) { model.ringScreen = true }
             if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: RingDesk.confirmedNote).receive(on: DispatchQueue.main)) { n in
+            model.ringConfirmedElsewhere(stop: n.userInfo?["stop"] as? Bool ?? true, until: (n.userInfo?["until"] as? Double).flatMap { $0 > 0 ? $0 : nil })
         }
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
         // For the build's film of a second tap on the tab (never on the phone): the tab scrolled down, then tapped again.
+        // For the build's film of the octopus coming back (never on the phone): Home, Alarms, Home, Sounds, Home.
+        .task {
+            guard ChumbyModel.pose == "tabhop" else { return }
+            for t in [2, 0, 3, 0] { try? await Task.sleep(nanoseconds: 3_000_000_000); model.tab = t }
+        }
         .task {
             guard ChumbyModel.pose == "retap" else { return }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -774,6 +783,7 @@ struct LiveOctopus: View {
     @EnvironmentObject var model: ChumbyModel
     let squishedAt: Date?
     var scale: CGFloat = 1
+    @State private var motion = OctoMotion()
     // How far his top edge may ever rise above where he rests, whatever bob, wobble or hop is playing: the wordmark sits just past it.
     var headroom: CGFloat = .infinity
     static let knee: CGFloat = 6
@@ -788,19 +798,25 @@ struct LiveOctopus: View {
         // Only when the Chumby itself has gone quiet: a route this phone can't use says nothing about him (2026-11-11).
         let asleep = model.dead
         let ringing = !model.unreachable && (model.sys.ringing.map { !$0.snoozed } ?? false)
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || model.tab != 0)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        // Every display frame (it was 30 a second, which stepped on a 120 Hz screen).
+        TimelineView(.animation(paused: still || model.tab != 0)) { ctx in
+            // His motion is carried forward frame by frame (OctoMotion), never worked out from the clock: worked out from
+            // the clock he jumped whenever his mood changed (a ring starting, snoozed or stopped; the Chumby going quiet
+            // or coming back), since each mood has its own pace, and again on coming back to Home, having stood still
+            // while the clock ran on (Richard, 11-20: "the octopus sometimes glitches").
+            let m = motion.step(ctx.date.timeIntervalSinceReferenceDate, asleep: asleep, ringing: ringing)
             // The same curves as the web app's CSS: ease-in-out both ways, as a sine.
             // Asleep he bobs less and a little higher, so the tips of his arms stay well clear of the bezel (about 8 pt).
-            let bob = (asleep ? -3 : -7) * scale * (0.5 - 0.5 * cos(2 * .pi * t / (asleep ? 7 : ringing ? 0.9 : 4.2))) - (asleep ? 5 : 0)
-            let swing = 0.5 - 0.5 * cos(2 * .pi * t / (ringing ? 0.32 : 3))
+            let bob = -m.bob * scale * (0.5 - 0.5 * cos(m.bobPhase)) - m.sink
+            let swing = 0.5 - 0.5 * cos(m.swingPhase)
             let wave = swing * 2 - 1
             let lift = swing
-            let cycle = t.truncatingRemainder(dividingBy: 5.3) / 5.3
-            let blink: CGFloat = asleep ? 0.06 : cycle > 0.94 ? (cycle < 0.97 ? 1 - (cycle - 0.94) / 0.03 * 0.94 : 0.06 + (cycle - 0.97) / 0.03 * 0.94) : 1
+            let cycle = m.blinkAt / 5.3
+            let wink: CGFloat = cycle > 0.94 ? (cycle < 0.97 ? 1 - (cycle - 0.94) / 0.03 * 0.94 : 0.06 + (cycle - 0.97) / 0.03 * 0.94) : 1
+            let blink = min(wink, m.lid)
             let (sx, sy, dy0) = squish(at: ctx.date)
             let dy = dy0 * scale
-            let stretch = 1 + (ringing ? 0.08 : 0.035) * lift
+            let stretch = 1 + m.stretch * lift
             // Where his top edge lands after the stretch (anchored 16% down), the squish (anchored 90% down) and the bob;
             // the skew only leans him sideways. Any lift past the headroom is taken back off the offset.
             let h = 92 * scale * ChumbyArt.octBox.height / ChumbyArt.octBox.width
@@ -808,10 +824,10 @@ struct LiveOctopus: View {
             let rise = max(0, -top)
             OctopusMark(color: ChumbyPalette.oct(scheme == .dark), blink: blink)
                 .scaleEffect(x: 1, y: stretch, anchor: UnitPoint(x: 0.5, y: 0.16))
-                .modifier(SkewEffect(skew: CGFloat(wave) * (ringing ? 11 : 4.5) * .pi / 180, anchorY: 0.16))
+                .modifier(SkewEffect(skew: CGFloat(wave) * m.lean * .pi / 180, anchorY: 0.16))
                 .scaleEffect(x: sx, y: sy, anchor: UnitPoint(x: 0.5, y: 0.9))
                 .offset(y: bob + dy + (rise - clamped(rise)))
-                .opacity(asleep ? 0.75 : 1)
+                .opacity(m.ink)
         }
     }
     func squish(at now: Date) -> (CGFloat, CGFloat, CGFloat) {
@@ -823,6 +839,34 @@ struct LiveOctopus: View {
         if p < 0.62 { let k = (p - 0.28) / 0.34; return (mix(1.28, 0.86, k), mix(0.68, 1.2, k), mix(12, -20, k)) }
         let k = (p - 0.62) / 0.38
         return (mix(0.86, 1, k), mix(1.2, 1, k), mix(-20, 0, k))
+    }
+}
+// The octopus's motion, carried from one frame to the next. Each mood has its own pace and reach (calm, ringing,
+// asleep); the phases move on by the time since the last frame at the pace of the moment, and the reaches ease to
+// the mood's over a quarter second, so a change of mood bends his motion and never breaks it. A frame after a pause
+// (another tab, the app in the background) counts as one frame, so he carries on from where he stood.
+final class OctoMotion {
+    struct Pose { var bobPhase = 0.0, swingPhase = 0.0, blinkAt = 0.0; var bob: CGFloat = 7, sink: CGFloat = 0, lean: CGFloat = 4.5, stretch: CGFloat = 0.035, lid: CGFloat = 1; var ink = 1.0 }
+    private var last: TimeInterval?
+    private var pose = Pose()
+    func step(_ t: TimeInterval, asleep: Bool, ringing: Bool) -> Pose {
+        let bob: CGFloat = asleep ? 3 : 7, sink: CGFloat = asleep ? 5 : 0, lean: CGFloat = ringing ? 11 : 4.5, stretch: CGFloat = ringing ? 0.08 : 0.035
+        let lid: CGFloat = asleep ? 0.06 : 1, ink = asleep ? 0.75 : 1.0
+        guard let was = last else {
+            last = t
+            pose.bob = bob; pose.sink = sink; pose.lean = lean; pose.stretch = stretch; pose.lid = lid; pose.ink = ink
+            return pose
+        }
+        let dt = min(max(t - was, 0), 1.0 / 20)
+        last = t
+        pose.bobPhase = (pose.bobPhase + dt * 2 * .pi / (asleep ? 7 : ringing ? 0.9 : 4.2)).truncatingRemainder(dividingBy: 2 * .pi)
+        pose.swingPhase = (pose.swingPhase + dt * 2 * .pi / (ringing ? 0.32 : 3)).truncatingRemainder(dividingBy: 2 * .pi)
+        pose.blinkAt = (pose.blinkAt + dt).truncatingRemainder(dividingBy: 5.3)
+        let k = CGFloat(1 - exp(-dt / 0.25))
+        pose.bob += (bob - pose.bob) * k; pose.sink += (sink - pose.sink) * k
+        pose.lean += (lean - pose.lean) * k; pose.stretch += (stretch - pose.stretch) * k
+        pose.lid += (lid - pose.lid) * k; pose.ink += (ink - pose.ink) * Double(k)
+        return pose
     }
 }
 // Snoozing: a ring of water round the octopus that drains as the snooze runs out.
@@ -1022,6 +1066,15 @@ struct HomeTab: View {
                         try? await Task.sleep(nanoseconds: 3_500_000_000); model.tab = 1
                     }
                 }
+                // For the build's film: Snooze, then Stop, pressed the way the Lock Screen's card, the notification and
+                // Siri press them (ChumbyRingActions, outside this app's own keys), with the app open: Home must follow.
+                if ChumbyModel.pose == "ringdoor" && !demoed {
+                    demoed = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 3_500_000_000); await ChumbyRingActions.snooze(from: "film")
+                        try? await Task.sleep(nanoseconds: 4_000_000_000); await ChumbyRingActions.stop(from: "film")
+                    }
+                }
                 // For the build's film: the alarm rings, is snoozed, then stopped.
                 if ChumbyModel.pose == "ringdemo" && !demoed {
                     demoed = true
@@ -1075,8 +1128,11 @@ struct HomeTab: View {
         GeometryReader { geo in
             ZStack {
                 Color(red: 0.04, green: 0.04, blue: 0.05)
-                if let i = model.shot { Image(platform: i).resizable().interpolation(.medium) }
-                else if !model.unreachable { ProgressView().tint(.white) }
+                // (The still of the waking screen, for the build, holds it there.)
+                if let i = model.shot, ChumbyModel.pose != "waking" { Image(platform: i).resizable().interpolation(.medium) }
+                // Before its first picture, the screen wakes as the Chumby's own does: the octopus, breathing on the dark
+                // glass, where a spinner was.
+                else if !model.unreachable { WakingScreen() }
                 // Gone quiet: soft static for a moment, then the screen goes dark.
                 if let goneAt { ScreenStatic(since: goneAt) }
                 LinearGradient(colors: [.white.opacity(0.17), .clear], startPoint: .topLeading, endPoint: UnitPoint(x: 0.5, y: 0.5)).allowsHitTesting(false)
@@ -1225,7 +1281,7 @@ struct HomeTab: View {
             Section("Channel") {
                 ForEach(model.state.channelNames, id: \.self) { name in
                     Button { model.playChannel(name, id: "homeChannel") } label: {
-                        if name == channelName { Label(name, systemImage: "checkmark") } else { Text(name) }
+                        if name.trimmingCharacters(in: .whitespacesAndNewlines) == channelName.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
                     }
                 }
             }
@@ -1285,9 +1341,25 @@ struct HomeTab: View {
     }
     // The controls under the device, in both layouts and in this order.
     @ViewBuilder var controls: some View {
-        if model.sys.ringing != nil { RingingCard().card().padding(.bottom, Self.underDevice).transition(.ringCard) }
         remote
-        SkipCard().padding(.top, Self.sectionGap)
+        // One slot under the remote, for the alarm: the ringing card while one rings or snoozes, the next alarm's gel
+        // otherwise. They change hands in place, by opacity, and the slot's height moves in the one spring with the
+        // rows below it; it is clipped to that height, so the taller card is uncovered as the rows make room and never
+        // lies over them. Before (gate, 11-20) the ringing card came in above the remote while the gel left below it:
+        // the remote slid down across the card's keys, and the rows under the gel jumped up over it and back.
+        ZStack(alignment: .top) {
+            if model.sys.ringing != nil { RingingCard().card().padding(.top, Self.sectionGap).transition(.ringCard) }
+            // The gel stays in the page through a ring, unseen, and only its opacity moves, over the same fifth of a
+            // second as the ringing card's: the two fades overlap, so the slot is never bare (gate, 11-20). Put back by
+            // a transition instead, it could come back while the ringing page covered Home and stay unseen for good
+            // (film, 11-20: Home with no next alarm after a slide to stop).
+            SkipCard().padding(.top, Self.sectionGap)
+                .opacity(model.sys.ringing == nil ? 1 : 0)
+                .animation(.easeOut(duration: ChumbyModel.slotFade), value: model.sys.ringing == nil)
+                .allowsHitTesting(model.sys.ringing == nil).accessibilityHidden(model.sys.ringing != nil)
+        }
+        // room for the cards' shadows inside the clip
+        .padding(.horizontal, 16).padding(.bottom, 16).clipped().padding(.horizontal, -16).padding(.bottom, -16)
         plainNext
         playing
     }
@@ -1320,7 +1392,7 @@ struct HomeTab: View {
             } else {
                 ScrollViewReader { scroll in
                 ScrollView {
-                    // The wordmark is drawn by the stage itself. The remote sits right under the device, within reach of the thumb; a ringing alarm above even that.
+                    // The wordmark is drawn by the stage itself. The remote sits right under the device, within reach of the thumb; a ringing alarm takes the next alarm's place under it.
                     VStack(spacing: 0) {
                         stage; status
                         VStack(spacing: 0) { controls }
@@ -1360,6 +1432,25 @@ struct HomeTab: View {
 }
 
 // The screen of a Chumby that's gone quiet: grain that fades to black over a second and a half.
+// The device's screen before its first picture arrives: the octopus faint on the dark glass, slowly brightening and
+// dimming, as a Chumby starting up shows him. Still under Reduce Motion.
+struct WakingScreen: View {
+    @Environment(\.accessibilityReduceMotion) private var still
+    var body: some View {
+        GeometryReader { g in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still)) { ctx in
+                let k = still ? 0.5 : 0.5 - 0.5 * cos(2 * .pi * ctx.date.timeIntervalSinceReferenceDate / 2.4)
+                OctopusMark(color: ChumbyPalette.hex(0x79bbff), eyes: Color(red: 0.04, green: 0.04, blue: 0.05), blink: 1)
+                    .frame(height: g.size.height * 0.34)
+                    .opacity(0.35 + 0.4 * k)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityLabel("Waiting for the Chumby's screen")
+    }
+}
+
 struct ScreenStatic: View {
     let since: Date
     @State private var done = false
@@ -1650,6 +1741,7 @@ struct ChannelsTab: View {
     @Environment(\.horizontalSizeClass) private var size
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.scenePhase) private var phase
 
     var channels: [ChannelList.Channel] { model.channelData?.channels ?? [] }
     func title(_ c: ChannelList.Channel) -> String { c.list.first.flatMap { $0.count > 1 ? $0[1] : nil } ?? "Channel" }
@@ -1710,7 +1802,8 @@ struct ChannelsTab: View {
         }
     }
     func openAdd() {
-        flush()
+        // Nothing is sent on the way in: an edit still waiting goes with what's added, in one save, at Done.
+        saveTask?.cancel()
         // Kept as it was on opening, so a row he adds stays under his finger, ticked, rather than leaving the list.
         offered = notHere.map { MoreItem(id: $0[0], name: $0[1], own: $0.count > 2 ? Int($0[2]) ?? 0 : 0) }
         model.tick()
@@ -1719,6 +1812,8 @@ struct ChannelsTab: View {
     func closeAdd(_ scroll: ScrollViewProxy) {
         withAnimation(.snappy) { adding = false }
         reveal(scroll)
+        // Done sends what was added at once (as Edit's Done does), unless the list is still in Edit.
+        if !reordering { flush() }
     }
 
     func pick() {
@@ -1742,12 +1837,15 @@ struct ChannelsTab: View {
         rows = out
     }
     // Each save restarts the channel for about 30 seconds, so edits gather until 5 quiet seconds have passed, or until
-    // the editor is left, whichever comes first.
+    // the editor is left, whichever comes first. In Edit and in the Add widgets picker they gather until Done: five
+    // quiet seconds are nothing while he reads a list, and each save sent under him restarted the channel again, once
+    // per pause (the brief: "batched and never repeated"). Leaving the tab or the app sends them too.
     func changed() {
         guard !switching else { return }
         saveTask?.cancel()
         unsent = (rows, picked)
         edited[picked] = rows
+        guard !reordering, !adding else { return }
         saveTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
@@ -1788,7 +1886,12 @@ struct ChannelsTab: View {
                 // are left as they are (they already show it), so nothing redraws.
                 await model.loadChannels()
                 if unsent == nil || unsent?.id != u.id { edited[u.id] = nil }
-            } catch { model.fail("chedit", "Couldn’t save that. \(AlarmWriter.explain(error))"); edited[u.id] = nil }
+            } catch {
+                model.fail("chedit", "Couldn’t save that. \(AlarmWriter.explain(error))"); edited[u.id] = nil
+                // Not saved: the list goes back to what the Chumby holds, with the note saying why, rather than showing
+                // an order the Chumby doesn't have (unless something newer of his is still waiting to go).
+                if unsent == nil, picked == u.id, !reordering, !adding { withAnimation(.snappy) { pick() } }
+            }
         }
     }
     func decode(_ s: String) -> String {
@@ -1957,15 +2060,23 @@ struct ChannelsTab: View {
     // second chooser to choose.
     var channelSection: some View {
         Section {
-            if shown.isEmpty && !picked.isEmpty { Text("Nothing in this channel yet.").foregroundStyle(.secondary) }
+            // Said as Alarms says it has nothing set: the octopus, quiet, beside the line.
+            if shown.isEmpty && !picked.isEmpty {
+                HStack(spacing: 10) {
+                    OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34).accessibilityHidden(true)
+                    Text("Nothing in this channel yet.").foregroundStyle(.secondary)
+                }
+            }
             // By id, never by index: following the playing channel swaps `rows` under the list.
             ForEach(shown, id: \.id) { widgetRow($0) }
                 .onMove { from, to in
                     var on = shown
                     on.move(fromOffsets: from, toOffset: to)
-                    rows = on + rows.filter { !$0.on }
+                    // The list has already carried the row to its place under the finger: the new order is taken with
+                    // no animation of its own, which redrew the dropped row (blank for a few frames, then back; film, 11-20).
+                    var plain = Transaction(); plain.disablesAnimations = true
+                    withTransaction(plain) { rows = on + rows.filter { !$0.on }; changed() }
                     model.tick()
-                    changed()
                 }
                 .deleteDisabled(true)
             if !picked.isEmpty { addRow }
@@ -2088,7 +2199,9 @@ struct ChannelsTab: View {
             .environment(\.colorScheme, scheme)
         }
         .onChange(of: picked) { _, _ in if adding { withAnimation(.snappy) { adding = false } } }
-        .onChange(of: wide) { _, _ in adding = false }
+        .onChange(of: wide) { _, _ in if adding { adding = false; if !reordering { flush() } } }
+        // Leaving the app with an edit still waiting (Edit or the picker left open): it goes now, never lost.
+        .onChange(of: phase) { _, p in if p == .background { flush() } }
         .onAppear {
             startFromCache()
             guard !posed, ["chsync", "chdemo", "chadd", "chedit", "cheditdemo", "jumpdemo", "jumprow"].contains(ChumbyModel.pose) else { return }
@@ -2141,7 +2254,9 @@ struct ChannelsTab: View {
         .onChange(of: model.state.channel) { _, _ in followPlaying(showing) }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
         .onDisappear { flush() }
-        .refreshable { flush(); edited = [:]; await model.loadChannels(); await model.loadState(); pick() }
+        // A save on its way is waited for first: read before it landed, the Chumby's old list came back over the edit
+        // for a moment and then the edit again.
+        .refreshable { flush(); await saveQueue?.value; if unsent == nil { edited = [:] }; await model.loadChannels(); await model.loadState(); if unsent == nil { withAnimation(.snappy) { pick() } } }
     }
 }
 
@@ -2219,7 +2334,9 @@ struct NowPlaying: View {
                 if starting != nil {
                     // No Stop until there's something to stop: the Mac is still getting it to the Chumby.
                     ProgressView().frame(width: 44, height: 44)
-                } else if playing {
+                } else if playing && (mac != nil || model.sys.ringing == nil) {
+                    // Not under an alarm: what plays then is the alarm, and its Stop is the ringing card's. A second Stop
+                    // here only cut the music off and left the alarm going, silent.
                     Button { if mac != nil { model.stopMacMusic() } else { model.cmd("stopmusic", id: failID) } } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
                         .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Stop")
                 }
@@ -2345,6 +2462,7 @@ struct SoundsTab: View {
     @State private var streamURL = ""
     @State private var streamName = ""
     @State private var pendingRemoval: Stream?
+    @State private var editingStreams = false
     var dark: Bool { scheme == .dark }
 
     var scanNote: String? {
@@ -2566,16 +2684,25 @@ struct SoundsTab: View {
             .animation(.snappy, value: mine.map(\.key))
             Section {
                 ForEach(model.state.streams, id: \.key) { s in
+                    // Taken out as every list's rows are (11-18: "the right side minus sign for delete ... makes no sense"):
+                    // Edit in the heading, the red disc at the row's start. It was the last ⊖ at a row's end.
                     HStack(spacing: 12) {
+                        LeadingRemove(editing: editingStreams, label: "Remove \(s.name.isEmpty ? "this stream" : s.name)") { pendingRemoval = s }
+                            .padding(.trailing, editingStreams ? -19 : -12)
                         Label(s.name.isEmpty ? s.url : s.name, systemImage: "dot.radiowaves.left.and.right").lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        RowRemove(label: "Remove \(s.name.isEmpty ? "this stream" : s.name)") { pendingRemoval = s }
                     }
+                        .frame(minHeight: 30)
                         .padding(.vertical, 4)
+                        .animation(.snappy, value: editingStreams)
                         // The question hangs off the row it came from, so it points at what's going.
                         .confirmationDialog("Remove \(s.name.isEmpty ? "this stream" : s.name)?", isPresented: .init(get: { pendingRemoval?.key == s.key }, set: { if !$0 { pendingRemoval = nil } }), titleVisibility: .visible) {
                             Button("Remove", role: .destructive) {
-                                model.state.streams.removeAll { $0.key == s.key }; Task { await model.saveStreams() }
+                                withAnimation(.snappy) {
+                                    model.state.streams.removeAll { $0.key == s.key }
+                                    if model.state.streams.isEmpty { editingStreams = false }
+                                }
+                                Task { await model.saveStreams() }
                             }
                         }
                 }
@@ -2612,7 +2739,13 @@ struct SoundsTab: View {
                 }) { stationLink = ""; addStation = true }
                     .disabled(model.addingStation || model.unreachable)
                 if let f = model.failed("pandora") { FailNote(text: f, dismiss: model.dismissal("pandora")) }
-            } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { SectionFoot(scanNote) } }
+            } header: { EditHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark), editing: $editingStreams, shown: !model.state.streams.isEmpty)
+                // For the build's film: the stations in Edit (CI scrolls the page to them), then Done.
+                .task {
+                    guard ChumbyModel.pose == "streamsedit" else { return }
+                    try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation(.snappy) { editingStreams = true }
+                    try? await Task.sleep(nanoseconds: 6_000_000_000); withAnimation(.snappy) { editingStreams = false }
+                } } footer: { if let scanNote { SectionFoot(scanNote) } }
         }
         .seaList()
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
@@ -2959,7 +3092,8 @@ struct ScreenRow: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                if let i = model.shot { Image(platform: i).resizable().interpolation(.medium) }
+                // (The still of the waking screen, for the build, holds it there.)
+                if let i = model.shot, ChumbyModel.pose != "waking" { Image(platform: i).resizable().interpolation(.medium) }
                 else {
                     ChumbyPalette.hex(0x2c5bae)
                     OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).frame(width: geo.size.width * 0.28)
@@ -3316,7 +3450,7 @@ struct SkipCard: View {
     }
     var body: some View {
         // Kept on a route failure, showing the kept next alarm with nothing to press; gone only when the Chumby is.
-        if model.stateKnown && model.state.skipKnown && !model.dead && model.sys.ringing == nil,
+        if model.stateKnown && model.state.skipKnown && !model.dead,
            let next = movedOne.flatMap({ j in j.original.map { (j.at, $0.name) } }) ?? skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
             // Moved for one ring, the card stays awake: it isn't a skip.
             let asleep = (shown ?? (skipped != nil)) && moved == nil
@@ -3391,9 +3525,8 @@ struct SkipCard: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000); send(true)
                 try? await Task.sleep(nanoseconds: 4_000_000_000); send(false)
             }
-            // Back after a ring ends: its room opens as the controls above move up, and the card fades in once they have
-            // stopped, so nothing travels through it (gate, 11-18: the pills slid up through the incoming card).
-            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2).delay(ChumbyModel.stopFade + 0.35)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+            // It shares its slot with the ringing card, which hides it by opacity alone (HomeView.controls).
+            .transition(.opacity)
         }
     }
     // A calendar day ringing at its own time goes back to the calendar's rule for it: that day's time is let go and the

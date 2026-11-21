@@ -398,9 +398,9 @@ actor ChumbyAPI {
     static func form(_ pairs: [(String, String)]) -> String { pairs.map { enc($0.0) + "=" + enc($0.1) }.joined(separator: "&") }
 
     @discardableResult
-    func post(_ action: String, extra: String = "", body: String = "") async throws -> [String: Any] {
+    func post(_ action: String, extra: String = "", body: String = "", timeout: TimeInterval = 15) async throws -> [String: Any] {
         let t = try await getToken()
-        var r = URLRequest(url: url("a=\(action)&t=\(t)\(extra)")); r.httpMethod = "POST"; r.timeoutInterval = 15
+        var r = URLRequest(url: url("a=\(action)&t=\(t)\(extra)")); r.httpMethod = "POST"; r.timeoutInterval = timeout
         r.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); r.httpBody = Data(body.utf8)
         let (data, _) = try await URLSession.shared.data(for: r)
         let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -413,6 +413,12 @@ actor ChumbyAPI {
     func cmd(_ c: String, _ v: String? = nil) async throws {
         try await post("cmd", extra: "&c=\(c)" + (v.map { "&v=" + ChumbyAPI.enc($0) } ?? ""))
     }
+    // Stop or Snooze (cmd ringoff / ringsnooze), with the Chumby's own answer kept (chalarm, 11-20): it now waits for
+    // its panel's line to change and says {ok, done, how, ring}, or ok:false "still ringing". It can take 7 s, and the
+    // Mac's relay asks once more itself, so it is given longer than any other command.
+    func ring(_ c: String) async throws -> RingAnswer {
+        RingAnswer(try await post("cmd", extra: "&c=\(c)", timeout: 22))
+    }
     // The one way the Chumby's listening volume (0-100, its /psp/volume) is set, from the app, Shortcuts and Control
     // Center alike. Never under an alarm: the ring sets its own volume and puts his back after, so a level sent then is
     // lost. `checkRing` reads the Chumby first; the app, which already knows, passes false.
@@ -423,6 +429,61 @@ actor ChumbyAPI {
         // The Chumby refuses it too while one rings or snoozes (409 "an alarm is ringing"), said the same way.
         do { try await cmd("volume", String(min(max(v, 0), 100))) }
         catch ChumbyError.message(let m) where m.hasPrefix("an alarm is") { throw ChumbyError.refused("Not while \(m).") }
+    }
+}
+
+// The Chumby's answer to a Stop or Snooze (chalarm since 11-20): `done` true once its panel's own line changed, `how`
+// the way it went (the hook's own stop, the tap, "nothing ringing"), `ring` that line as it now stands. An older
+// Chumby answers a bare ok at once, before anything has happened: all three are then nil.
+struct RingAnswer: Sendable, Equatable {
+    var done: Bool?
+    var how: String?
+    var ring: String?
+    init(done: Bool? = nil, how: String? = nil, ring: String? = nil) { self.done = done; self.how = how; self.ring = ring }
+    init(_ j: [String: Any]) { done = j["done"] as? Bool; how = j["how"] as? String; ring = j["ring"] as? String }
+    enum Read: Equatable {
+        case confirmed(until: Double?), nothingRinging
+        // Not said yet: the Chumby's line is read until it is.
+        case wait
+    }
+    // What the answer says of the press. Only `done` with a line that agrees counts: a Stop whose line still shows the
+    // alarm, or a Snooze whose line still says ringing, is waited on like any other.
+    func read(stop: Bool) -> Read {
+        guard done == true else { return .wait }
+        if how == "nothing ringing" { return .nothingRinging }
+        guard let ring else { return .confirmed(until: nil) }
+        var sys = Sys(); sys.ring = ring
+        guard let r = sys.ringing else { return stop ? .confirmed(until: nil) : .nothingRinging }
+        guard !stop, r.snoozed else { return .wait }
+        let f = ring.components(separatedBy: "\t")
+        return .confirmed(until: f.count > 3 ? Double(f[3]).flatMap { $0 > 0 ? $0 : nil } : nil)
+    }
+    // "still ringing": the Chumby tried and its alarm went on. Asked once more, never a third time.
+    static func stillRinging(_ error: Error) -> Bool {
+        if case ChumbyError.message(let m) = error { return m.lowercased().contains("still ringing") }
+        return false
+    }
+    // How long its line is read for, and how often: each second for 10 s after a `done:false`; an older Chumby, which
+    // answers before anything has happened, in shorter steps for the 14 s it was always given.
+    var step: TimeInterval { done == nil ? 0.6 : 1 }
+    var wait: TimeInterval { done == nil ? 14 : 10 }
+}
+
+// What a reading's ring line is taken to say, given when the Chumby last confirmed a Stop and a Snooze (RingDesk.note).
+// The Mac's copy of the Chumby's status can be ten seconds old, so one taken before a confirmation still says
+// "ringing": believed, it put the ringing card and page back over an alarm just stopped, or "Ringing" and the Snooze
+// key back over a snooze the Chumby had confirmed (11-20). Only a copy taken after the confirmation (and the two
+// seconds the Chumby's own note of it can take) says anything about the ring.
+enum RingReading {
+    static let margin: TimeInterval = 2
+    // `line`: the reading's ring line; `shown`: the one on screen; `takenAt`: when the reading was taken.
+    static func believed(_ line: String, shown: String, takenAt: Date, stoppedAt: Date?, snoozedAt: Date?) -> String {
+        var read = Sys(); read.ring = line
+        guard let r = read.ringing else { return line }
+        if let t = stoppedAt, takenAt < t.addingTimeInterval(margin) { return "" }
+        var now = Sys(); now.ring = shown
+        if !r.snoozed, now.ringing?.snoozed == true, let t = snoozedAt, takenAt < t.addingTimeInterval(margin) { return shown }
+        return line
     }
 }
 

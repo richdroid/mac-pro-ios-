@@ -116,6 +116,7 @@ struct RingScreen: View {
     // Everything the page says, kept while the alarm is there, so its words hold still as it closes.
     struct Shown: Equatable { var name: String; var sound: String; var snoozed: Bool; var until: Date?; var at: Date? }
     @State private var frozen: Shown?
+    @State private var rattle = OctoRattle()
     @State private var sawRing = false
     @State private var stopping = false
     @State private var snoozing = false
@@ -240,6 +241,12 @@ struct RingScreen: View {
                 if model.sys.ringing == nil { close() }
             }
         }
+        // For the build's film: the ringing page itself, snoozed and then stopped, on a stand-in that answers as the Chumby does.
+        .task {
+            guard ChumbyModel.pose == "ringpagedemo" else { return }
+            try? await Task.sleep(nanoseconds: 5_000_000_000); snooze()
+            try? await Task.sleep(nanoseconds: 5_000_000_000); stop()
+        }
         .task(id: model.sys.ringing != nil) {
             // Still going twenty seconds on with no card on the Lock Screen: the app puts one there.
             try? await Task.sleep(nanoseconds: 20_000_000_000)
@@ -256,13 +263,14 @@ struct RingScreen: View {
         let quiet = shown?.snoozed == true || nothing || away
         return VStack(spacing: 4) {
             // He rattles while it rings and sleeps through a snooze.
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || quiet)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
-                let swing = quiet || still ? 0 : sin(2 * .pi * t / 0.32) * 7
-                OctopusMark(color: ChumbyPalette.oct(dark), blink: quiet ? 0.08 : 1)
+            // His rattle dies away over a quarter second when the alarm is snoozed or stopped, and his eyes close with
+            // it: before, he stopped dead at whatever angle he had reached and snapped upright in one frame.
+            TimelineView(.animation(paused: still)) { ctx in
+                let m = rattle.step(ctx.date.timeIntervalSinceReferenceDate, on: !(quiet || still))
+                OctopusMark(color: ChumbyPalette.oct(dark), blink: 0.08 + 0.92 * m.amp)
                     .frame(width: big * 0.8)
-                    .rotationEffect(.degrees(swing), anchor: .bottom)
-                    .offset(y: quiet || still ? 0 : -3 * abs(sin(2 * .pi * t / 0.64)))
+                    .rotationEffect(.degrees(sin(m.phase) * 7 * m.amp), anchor: .bottom)
+                    .offset(y: -3 * abs(sin(m.phase / 2)) * m.amp)
             }
             .frame(height: big * 0.7)
             .accessibilityHidden(true)
@@ -276,10 +284,12 @@ struct RingScreen: View {
                         .id("failure")
                         .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
                 } else {
+                    // The word cross-fades in place: the new one is on its way up as the old one goes, so the line is
+                    // never blank (gate, 11-20: it stood empty for two frames as a Snooze was confirmed).
                     Text(status).id(status)
                         .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                         .foregroundStyle(quiet || stopping || shown == nil ? ChumbyPalette.sub(dark) : ChumbyPalette.warn(dark))
-                        .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
+                        .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.14))))
                 }
             }
             .animation(.easeOut(duration: 0.2), value: status)
@@ -294,16 +304,27 @@ struct RingScreen: View {
                 .lineLimit(1).minimumScaleFactor(0.6)
                 .accessibilityElement(children: .combine)
             }
-            if shown != nil {
-                Text(title).font(.custom("Trebuchet MS", size: 26).weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
-                if !detail.isEmpty {
-                    Text(detail).font(.custom("Trebuchet MS", size: 17)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            // The alarm's two lines keep their room while the first reading is on its way (the page opened with no word
+            // of the ring yet): the card is its full size from the start, so nothing on it moves when they arrive. Before,
+            // the card grew under "Reaching the Chumby…" as it left, and those words crossed the clock for three frames
+            // (film, 11-20).
+            let reaching = shown == nil && !nothing && !away
+            if shown != nil || reaching {
+                Text(reaching ? " " : title).font(.custom("Trebuchet MS", size: 26).weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
+                    .contentTransition(.opacity)
+                if reaching || !detail.isEmpty {
+                    Text(reaching ? " " : detail).font(.custom("Trebuchet MS", size: 17)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                        .contentTransition(.opacity)
                 }
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 22)
         .frame(maxWidth: .infinity)
         .card()
+        // One piece: when the page makes room (the Snooze key leaving as a snooze is confirmed) the card and every
+        // line on it move together. Without it each line found its own way, and for five frames the old status stood
+        // at the old height over the new one, with the alarm's name drawn twice (film, 11-20, folded).
+        .geometryGroup()
     }
 
     @ViewBuilder var keys: some View {
@@ -311,10 +332,18 @@ struct RingScreen: View {
         VStack(spacing: 14) {
             if !snoozed && !nothing && !away {
                 Button { snooze() } label: {
+                    // The symbol and the word are one piece: when the snooze's length arrives beside them they move over
+                    // together (as a Label, the word jumped and the symbol slid across it; film, 11-20).
                     HStack(spacing: 8) {
-                        Label("Snooze", systemImage: "water.waves").labelStyle(.titleAndIcon)
-                        if let m = snoozeLength { Text(m).fontWeight(.regular).foregroundStyle(ChumbyPalette.sub(dark)) }
+                        HStack(spacing: 8) { Image(systemName: "water.waves"); Text("Snooze") }.geometryGroup()
+                        // Its room is kept while the first reading is on its way, as the card's lines are.
+                        if let m = snoozeLength ?? (model.sys.ringing == nil ? "9 min" : nil) {
+                            Text(m).fontWeight(.regular).foregroundStyle(ChumbyPalette.sub(dark)).opacity(snoozeLength == nil ? 0 : 1).transition(.opacity)
+                        }
                     }
+                    .geometryGroup()
+                    .animation(ChumbyModel.ringSpring, value: snoozeLength)
+                    .accessibilityElement(children: .combine)
                     .font(.custom("Trebuchet MS", size: 22).weight(.bold))
                     .frame(maxWidth: .infinity, minHeight: 68)
                     .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
@@ -359,13 +388,18 @@ struct RingScreen: View {
 struct SlideToStop: View {
     var busy = false
     let done: () -> Void
-    @State private var pull: CGFloat = 0
+    // Let go short of the end, or the touch taken away by the system, the key springs back by itself (the gesture's own
+    // reset): set back in the gesture's ending, it was at the start in one frame (film, 11-20).
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.32, dampingFraction: 0.7))) private var pull: CGFloat = 0
     @State private var landed = false
+    @State private var from: CGFloat = 0
     static let height: CGFloat = 76, key: CGFloat = 60, inset: CGFloat = 8
     var body: some View {
         GeometryReader { g in
             let run = max(g.size.width - Self.key - Self.inset * 2, 1)
-            let k = landed ? 1 : min(max(pull / run, 0), 1)
+            // A Stop on its way that wasn't slid here (pressed on the Lock Screen or Home's card, with this page up) takes
+            // the key across all the same: the bar never says "Slide to stop" under a card that says "Stopping…".
+            let k = landed || busy ? 1 : max(min(max(pull / run, 0), 1), from)
             ZStack(alignment: .leading) {
                 ChumbyGel(colors: [0xff8f5e, 0xfc5825, 0xdc4410], rim: 0x9c2c08)
                 Text("Slide to stop").font(.custom("Trebuchet MS", size: 20).weight(.bold)).foregroundStyle(.white)
@@ -379,36 +413,52 @@ struct SlideToStop: View {
                     .overlay {
                         // Landed, it holds the stop mark (the status line says "Stopping…"); a spinner here left the
                         // page with one turning on the key.
-                        if busy && !landed { ProgressView().tint(ChumbyPalette.orange) }
-                        else { Image(systemName: k > 0.02 ? "stop.fill" : "chevron.right.2").font(.system(size: 22, weight: .heavy)).foregroundStyle(ChumbyPalette.orange) }
+                        Image(systemName: k > 0.02 ? "stop.fill" : "chevron.right.2").font(.system(size: 22, weight: .heavy)).foregroundStyle(ChumbyPalette.orange)
                     }
                     .frame(width: Self.key, height: Self.key)
                     .padding(.leading, Self.inset)
                     .offset(x: k * run)
             }
+            .animation(.spring(response: 0.22, dampingFraction: 0.8), value: busy)
             .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .gesture(
                 DragGesture(minimumDistance: 4)
-                    .onChanged { v in if !landed && !busy { pull = v.translation.width } }
+                    .updating($pull) { v, pull, _ in if !landed && !busy { pull = v.translation.width } }
                     .onEnded { v in
                         guard !landed, !busy else { return }
                         // The whole run, or a flick already past halfway that would carry it there.
                         let far = v.translation.width / run, carried = v.predictedEndTranslation.width / run
                         if far >= 0.8 || (far >= 0.45 && carried >= 1) {
+                            // Held where the finger left it, then on to the end: not back to the start and out again.
+                            var keep = Transaction(); keep.disablesAnimations = true
+                            withTransaction(keep) { from = min(max(far, 0), 1) }
                             withAnimation(.spring(response: 0.22, dampingFraction: 0.8)) { landed = true }
                             done()
-                        } else {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { pull = 0 }
                         }
                     }
             )
         }
         .frame(height: Self.height)
         // Back from a Stop the Chumby didn't take: the key returns to its start, ready to be slid again.
-        .onChange(of: busy) { _, b in if !b { withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { landed = false; pull = 0 } } }
+        .onChange(of: busy) { _, b in if !b { withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { landed = false; from = 0 } } }
         .accessibilityElement()
         .accessibilityLabel("Stop the alarm")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { if !busy { done() } }
+    }
+}
+
+// The ringing page's octopus: his rattle's phase carried frame to frame, its reach eased in and out.
+final class OctoRattle {
+    private var last: TimeInterval?
+    private var phase = 0.0, amp = 0.0
+    func step(_ t: TimeInterval, on: Bool) -> (phase: Double, amp: Double) {
+        guard let was = last else { last = t; amp = on ? 1 : 0; return (phase, amp) }
+        let dt = min(max(t - was, 0), 1.0 / 20)
+        last = t
+        if amp > 0.001 || on { phase = (phase + dt * 2 * .pi / 0.32).truncatingRemainder(dividingBy: 4 * .pi) }
+        amp += ((on ? 1 : 0) - amp) * (1 - exp(-dt / 0.25))
+        if !on, amp < 0.001 { amp = 0 }
+        return (phase, amp)
     }
 }

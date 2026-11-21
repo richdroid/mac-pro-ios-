@@ -59,7 +59,10 @@ final class ChumbyModel: ObservableObject {
     // and nothing is ringing".
     @Published private(set) var ringReadings = 0
     private var ringSwept = false
-    private var ringStoppedAt: Date?
+    // When the Chumby last confirmed a Stop and a Snooze, whichever door the press came through (the app's own keys,
+    // the Lock Screen card, the notification, Siri): the desk's own note (RingDesk.note).
+    private var ringStoppedAt: Date? { RingDesk.confirmed(RingDesk.stoppedKey) }
+    private var ringSnoozedAt: Date? { RingDesk.confirmed(RingDesk.snoozedKey) }
     // A Stop or Snooze on its way and not yet confirmed by the Chumby: Home's ringing card and the ringing page say
     // "Stopping…" or "Snoozing…" with their keys dimmed, as the Lock Screen card does. Nil when nothing is pending.
     @Published private(set) var ringWorking: String?
@@ -267,9 +270,9 @@ final class ChumbyModel: ObservableObject {
             let fresh = r.age <= 10
             var s = try JSONDecoder().decode(Sys.self, from: r.data)
             if !fresh { s.ring = sys.ring }
-            // A copy taken before a Stop the Chumby has since taken still says "ringing": it isn't believed (the Mac's
-            // copy can be ten seconds old, twice the hold a Stop puts on readings).
-            if s.ringing != nil, let stopped = ringStoppedAt, Date().addingTimeInterval(-r.age) < stopped.addingTimeInterval(2) { s.ring = "" }
+            // A copy taken before a Stop or a Snooze the Chumby has since confirmed still says "ringing": it isn't
+            // believed (RingReading; the Mac's copy can be ten seconds old).
+            s.ring = RingReading.believed(s.ring, shown: sys.ring, takenAt: Date().addingTimeInterval(-r.age), stoppedAt: ringStoppedAt, snoozedAt: ringSnoozedAt)
             readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
@@ -344,7 +347,10 @@ final class ChumbyModel: ObservableObject {
                 ringReadings += 1
             }
             // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
+            // Day or night changed on the Chumby itself (its own button, its schedule), seen here: the widget is told.
+            let nightChanged = s.night != sys.night && seenAt != nil
             if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
+            if nightChanged { nightChangedAt = Date(); WidgetCenter.shared.reloadAllTimelines() }
             try? data.write(to: Self.cache("sys"), options: .atomic)
         }
     }
@@ -538,11 +544,38 @@ final class ChumbyModel: ObservableObject {
                 try await api?.cmd("night", v)
                 // Ending night mode also brings the screen back up, one after the other so neither gets lost.
                 if v == "off" { try await api?.cmd("screen", "bright") }
+                widgetsFollowNight()
             } catch {
                 fail("remote", "The Chumby didn’t get that. \(AlarmWriter.explain(error))")
                 sys.night = v == "off" ? 1 : 0
             }
         }
+    }
+    // Day or night changed from the app: the Home Screen widget is told, which it never was (Richard, 11-20: the widget
+    // "sometimes doesn't update" after night is switched to day in the app; it only caught up when iOS next refreshed
+    // it by itself). It reads the Mac's copy of the Chumby, which can be from before the change for some seconds, so
+    // it is told now and again once that copy is new, with the app kept awake for it if he has already left for the
+    // Home Screen; leaving the app within two minutes of a change tells it once more.
+    private var nightChangedAt: Date?
+    func widgetsFollowNight() {
+        nightChangedAt = Date()
+        WidgetCenter.shared.reloadAllTimelines()
+        #if canImport(UIKit)
+        var hold = UIBackgroundTaskIdentifier.invalid
+        hold = UIApplication.shared.beginBackgroundTask(withName: "Chumby widget follows night") { UIApplication.shared.endBackgroundTask(hold); hold = .invalid }
+        #endif
+        Task {
+            for wait in [4.0, 8.0] {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            #if canImport(UIKit)
+            if hold != .invalid { UIApplication.shared.endBackgroundTask(hold); hold = .invalid }
+            #endif
+        }
+    }
+    func widgetsOnLeaving() {
+        if let t = nightChangedAt, Date().timeIntervalSince(t) < 120 { WidgetCenter.shared.reloadAllTimelines() }
     }
     // The Chumby's volume, set from the phone (Sounds and Home's Playing card, the mute key): shown at once, held until the
     // Chumby reports it, never sent under an alarm (the ring sets its own volume and puts his back after).
@@ -626,8 +659,18 @@ final class ChumbyModel: ObservableObject {
     // Stopped: the card is gone by opacity in its first 0.12 s, and only then does what was under it move up (a frame later,
     // for a slow one), so no control ever passes under its fading words.
     static let stopFade = 0.12
+    // Home's ringing card and the next alarm's gel change hands over this long, both at once.
+    static let slotFade = 0.2
     static let stopSpring = ringSpring.delay(stopFade + 1.0 / 60)
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
+    // A Stop or Snooze the Chumby has just confirmed, pressed somewhere other than this app's own keys (the Lock
+    // Screen's card, the notification, Siri) while the app is open: shown at once, in the same springs as its own. Its
+    // own presses (ringWorking set) show themselves.
+    func ringConfirmedElsewhere(stop: Bool, until: Double?) {
+        guard ringWorking == nil, let r = sys.ringing else { return }
+        if stop { withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }; ringHint = nil }
+        else if !r.snoozed { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() } }
+    }
     func ringOff() { ringOffTask() }
     // The same, for a page that waits on the answer (the ringing screen): true once the Chumby says it has stopped. It goes
     // through the one desk the card, the notification and Siri use (RingDesk), so a press here and one on the Lock Screen
@@ -637,19 +680,20 @@ final class ChumbyModel: ObservableObject {
         Haptics.medium.impactOccurred(); Haptics.medium.prepare()
         #endif
         let was = sys.ring
-        hold(RingDesk.patience + 2)
+        hold(RingDesk.longest + 2)
         let tapped = Date().timeIntervalSince1970
         withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Stopping…" }
         guard let api else { ringWorking = nil; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
+            let out = await RingDesk.shared.press(.stop, send: { c in try await api.ring(c) }, read: { try await RingDesk.ringLine(api) })
+            // To the Mac's log with the Chumby's own word for how it went, as every other door's press is.
+            Task.detached { await ChumbyRingActions.report("app", "stop", out, since: Date(timeIntervalSince1970: tapped), backup: "the app’s own") }
             hold(0)
             withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
             switch out {
             case .confirmed, .nothingRinging:
                 withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
                 RingSeen.stopped(at: tapped)
-                ringStoppedAt = Date()
                 // the phone's backup alarm for this ring goes with it (ChumbyBackupAlarm)
                 ChumbyBackupAlarm.shared.handled(name: was.components(separatedBy: "\t").dropFirst().first)
                 // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
@@ -677,10 +721,23 @@ final class ChumbyModel: ObservableObject {
         let was = sys.ring
         // "Snoozing…" until the Chumby says so, then its own time: never a guessed "Snoozed until" (gate, 11-18).
         withAnimation(.easeOut(duration: 0.2)) { ringWorking = "Snoozing…" }
-        hold(RingDesk.patience + 2)
+        let began = Date()
+        hold(RingDesk.longest + 2)
         guard let api else { ringWorking = nil; withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await RingDesk.ringLine(api) })
+            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.ring(c) }, read: { try await RingDesk.ringLine(api) })
+            Task.detached { await ChumbyRingActions.report("app", "snooze", out, since: began, backup: "the app’s own") }
+            // A Stop pressed while this Snooze was on its way has the card now ("Stopping…", its own hold on readings):
+            // whatever the Snooze came to, the Stop's answer is the one shown.
+            if ringStopping {
+                if case .confirmed(let until) = out {
+                    let end = until ?? snoozeEnds?.timeIntervalSince1970
+                    ChumbyBackupAlarm.shared.snoozed(name: was.components(separatedBy: "\t").dropFirst().first,
+                                                     until: end.map { Date(timeIntervalSince1970: $0) } ?? Date().addingTimeInterval(9 * 60))
+                    return true
+                }
+                return out == .nothingRinging
+            }
             hold(0)
             // "Snoozing…" giving way and the card turning snoozed are one change in the card's one spring, so Stop widens
             // into Snooze's room with it rather than in a frame (gate, 11-18).
