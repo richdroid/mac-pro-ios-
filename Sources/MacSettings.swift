@@ -7,6 +7,7 @@ struct MacSettings: View {
     @AppStorage("celsius") private var celsius = false
     @AppStorage("haptics") private var haptics = true
     @AppStorage(MacFollow.defaultsKey) private var macFollows = true
+    @ObservedObject private var console = ConsoleRemote.shared
     @AppStorage("naturalScroll") private var naturalScroll = true
     @AppStorage("liveEvery") private var liveEvery = 1.0
     @AppStorage("fullEvery") private var fullEvery = 10.0
@@ -100,6 +101,16 @@ struct MacSettings: View {
             }
             // The Mac's Console turns to the page he's on here, when it's already on screen and free (MacFollow).
             Toggle("Mac follows this iPhone", isOn: $macFollows)
+            // The Console's own two settings, moved here from the Dashboard (ruling 2026-11-11: settings belong in
+            // Settings). They are the Mac's: read from the Console and set on it, greyed while it isn't running.
+            Toggle("Boards take turns on the Mac", isOn: Binding(get: { console.state?.rotate == true }, set: { console.send(model, "rotate", "rotate", $0 ? "on" : "off") }))
+                .disabled(console.state?.running != true)
+            Picker("Animations on the Mac", selection: Binding(get: { console.state?.animations ?? "full" }, set: { console.send(model, "animations", "animations", $0) })) {
+                Text("Full").tag("full"); Text("Gentle").tag("gentle"); Text("Off").tag("off")
+            }
+            .disabled(console.state?.running != true)
+            .task { await console.refresh(model) }
+            if let f = console.fail, ["rotate", "animations"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text) }
             Toggle("Haptics", isOn: $haptics)
             Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
             AlertSettings()

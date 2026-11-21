@@ -164,6 +164,8 @@ final class ConsoleRemote: ObservableObject {
         switch pose {
         case "console", "glancefilm": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
         case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake")
+        // Glance on the Mac's screen, the display awake.
+        case "consoleglance": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: true)
         case "consoleoff", "consolestarting": return ConsoleState(running: false)
         case "consolefail": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: false)
         // Open but not in front (another app is), and the display asleep under Glance, as the Mac was on 2026-11-16.
@@ -252,7 +254,7 @@ enum MacFollow {
             switch p {
             case .health: "everything"
             case .fans: "temps"
-            case .updates: "updates"
+            case .updates, .upgrade: "updates"
             case .storage: "storage"
             case .startup: "startup"
             default: nil

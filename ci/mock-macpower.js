@@ -29,6 +29,13 @@ const feeds = {
     apps: [{ name: 'Tailscale', installed: '1.104.4', latest: null, how: 'Updates itself' }] }),
   '/api/mac/storage': () => ({ t: now(), volumes: [{ name: 'Macintosh HD', mount: '/System/Volumes/Data', total: 250790436864, free: 37826465792, kind: 'APFS', internal: true }],
     home: [['Library', 91e9], ['code', 48e9], ['.cache', 12e9], ['Applications', 9.8e9], ['.local', 6.1e9]].map(([name, bytes]) => ({ path: '/Users/you/' + name, name, bytes })), homeAt: now() - 300e3, cleanup: [] }),
+  // The macOS upgrade as steps (/api/mac/upgrade): an update waiting, short of room (the same disk as
+  // /api/mac/storage's, so the tiles agree), the nightly install failed twice.
+  '/api/mac/upgrade': () => ({ t: now(), current: '26.7.2 (25G332)', target: { label: 'macOS Tahoe 26.7.3', version: '26.7.3', size: null }, free: 37826465792, total: 250790436864, required: 34.53e9, want: 41e9,
+    cleanups: [{ id: 'trash', name: 'Trash', why: 'Things you already threw away', bytes: 1.1e9 }, { id: 'caches', name: 'App caches', why: 'Apps rebuild these when they next run', bytes: 3.8e9 }, { id: 'old-logs', name: 'Old logs', why: 'Rotated logs and crash reports over two weeks old', bytes: 7e6 }],
+    folders: [['Virtual Machines', 69e9], ['Library', 22e9], ['code', 21.5e9], ['Applications', 4.2e9], ['Downloads', 1.6e9]].map(([n, bytes]) => ({ path: '/Users/you/' + n, name: '~/' + n, bytes })),
+    patcher: { installed: '3.0.0', latest: '3.0.0', newer: false, ready: true }, agent: { installed: true, status: 'Update failed: not enough disk space', attempts: 2, max: 4, blocked: false, shortRoom: true, lastTry: '2026-11-20 03:30:04' },
+    download: null, patches: { forBuild: '25G332', thisBuild: '25G332', ok: true }, phase: 'room' }),
   // The TV as the bridge says it (tv.js /api/tv/status): on, an episode playing in Stremio.
   '/api/tv/status': () => ({ online: true, at: now(), screen: 'on', app: 'com.stremio.one', session: { playing: true, description: ['Severance', 'Season 2 · Episode 4'] }, music: null }),
   '/api/mac/startup': () => ({ t: now(), items: [
@@ -76,7 +83,7 @@ module.exports = (q, s) => {
     if (q.method === 'GET') { s.statusCode = 404; s.end(JSON.stringify({ ok: false, command: u.searchParams.get('action') || '', say: 'Not an action the Mac takes from here.' })); return true; }
     let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
       let b = {}; try { b = JSON.parse(body); } catch {}
-      if (b.dryRun) { s.setHeader('X-MP-Nonce', 'c0ffee00c0ffee00c0ffee00c0ffee00'); return s.end(JSON.stringify({ ok: true, command: b.action, dryRun: true, say: 'Dry run: would remove 3.4 GB. Nothing was removed.' })); }
+      if (b.dryRun) { s.setHeader('X-MP-Nonce', 'c0ffee00c0ffee00c0ffee00c0ffee00'); return s.end(JSON.stringify({ ok: true, command: b.action, dryRun: true, say: 'Dry run: would remove 3.5 GB. Nothing was removed.' })); }
       s.end(JSON.stringify({ ok: true, command: b.action, say: b.action === 'fix' ? 'All running; nothing needed fixing.' : 'Done.', rows: [{ part: 'tv', label: 'TV link', state: 'ok', say: 'Connected' }] }));
     });
     return true;

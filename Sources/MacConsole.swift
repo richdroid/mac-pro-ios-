@@ -297,6 +297,7 @@ extension MacPage {
         case "storage": return .storage
         case "startup", "startupconfirm": return .startup
         case "actions": return .actions
+        case let p where p.hasPrefix("upgrade-"): return .upgrade
         default: return nil
         }
     }
@@ -315,6 +316,8 @@ final class ConsoleSummary: ObservableObject {
     let startup = FeedReader<StartupFeed>("/api/mac/startup")
     // The TV, for the Dashboard's tile (Richard, 2026-11-13: "integrate all work into it including chumby and google tv status").
     let tv = FeedReader<TVGlance>("/api/tv/status")
+    // The macOS upgrade as steps, for the Dashboard's card and the Updates tile (MacUpgrade.swift).
+    let upgrade = FeedReader<UpgradeFeed>("/api/mac/upgrade")
     @Published var mp = false
     func readAll(_ api: API) async {
         // Asked again until it answers: a Mac away at the first look mustn't hide Actions for good.
@@ -323,6 +326,8 @@ final class ConsoleSummary: ObservableObject {
             g.addTask { await self.links.read(api) }; g.addTask { await self.fans.read(api) }; g.addTask { await self.temps.read(api) }
             g.addTask { await self.updates.read(api) }; g.addTask { await self.storage.read(api) }; g.addTask { await self.startup.read(api) }
             g.addTask { await self.tv.read(api) }
+            // The build's posed upgrade stands in for the Mac's.
+            g.addTask { if let p = UpgradeFeed.posed(MacConsole.pose) { await self.upgrade.set(p.feed) } else { await self.upgrade.read(api) } }
         }
     }
     func loop(_ model: AppModel) async {

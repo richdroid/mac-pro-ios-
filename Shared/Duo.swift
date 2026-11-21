@@ -401,10 +401,17 @@ struct FoldSplit<L: View, R: View>: View {
                     if open, FoldSeen.bySize[key] != read || FoldSeen.last != read { FoldSeen.last = read; FoldSeen.bySize[key] = read }
                     if held?.key != key || held?.split != read { held = (key, read) }
                 }
+                // Two panes side by side: no scroll indicators in either. Each pane is its own scroll view, and each drew its
+                // own bar, one at the fold and one by the rail (Richard, 2026-11-20, Status open flat: "this dual scroll
+                // bar shit looks awful").
+                let twoPanes = wide
                 ArrangementView {
-                    left.environment(\.paneOuter, use.outer).padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
+                    left.environment(\.paneOuter, use.outer).padding(.leading, use.outer).padding(.trailing, use.gutter)
+                        .scrollIndicators(twoPanes ? .hidden : .automatic, axes: .vertical)
+                        .splitArrangementLayoutRatio(use.ratio)
                 } secondary: {
                     right.padding(.leading, use.gutter)
+                        .scrollIndicators(twoPanes ? .hidden : .automatic, axes: .vertical)
                 }
                 .arrangementViewStyle(.split)
                 .onChange(of: read, initial: true) { _, v in
@@ -425,6 +432,7 @@ struct FoldSplit<L: View, R: View>: View {
             left.frame(maxWidth: .infinity)
             right.frame(maxWidth: .infinity)
         }
+        .scrollIndicators(.hidden, axes: .vertical)
     }
 }
 
@@ -523,17 +531,20 @@ private struct SideRailKey: EnvironmentKey { static let defaultValue: CGFloat = 
 extension EnvironmentValues { var sideRail: CGFloat { get { self[SideRailKey.self] } set { self[SideRailKey.self] = newValue } } }
 // A page clear of the drawn rail: its trailing safe area made up to the rail's column, on top of whatever the system
 // already keeps there (a pushed page's Back strip), never twice.
+// Likewise clear of the bar BottomBarTabs draws along the foot: room given from outside the navigation stack never
+// reached its pages (a list's last row and the session's keys lay under the bar, designer gate 1, 2026-11-20), so each
+// page takes it here, as it does the rail's.
+private struct BottomBarKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues { var bottomBar: CGFloat { get { self[BottomBarKey.self] } set { self[BottomBarKey.self] = newValue } } }
 struct RailRoom: ViewModifier {
     @Environment(\.sideRail) private var rail
+    @Environment(\.bottomBar) private var bar
     @State private var has: CGFloat = 0
     func body(content: Content) -> some View {
-        if rail > 0 {
-            content
-                .safeAreaPadding(.trailing, max(0, rail - has))
-                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
-        } else {
-            content
-        }
+        content
+            .safeAreaPadding(.trailing, rail > 0 ? max(0, rail - has) : 0)
+            .safeAreaPadding(.bottom, bar)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
     }
 }
 extension View { func railRoom() -> some View { modifier(RailRoom()) } }
@@ -551,9 +562,13 @@ struct SideRailTabs<Content: View>: View {
     @State private var shown: Set<Int> = []
     @State private var edge: CGFloat = 0
     @Environment(\.colorScheme) private var scheme
-    static var cell: CGFloat { 44 }
-    static var inset: CGFloat { 5 }
+    // The system's own rail, measured on the build's "before" shot at 859 x 604 pt (CI d8bbee4): 45 pt wide, an icon
+    // every 49 pt, 26 pt clear of the foot, the tab in front on a dark inset capsule (designer gate 1, 2026-11-20).
+    static var cell: CGFloat { 39 }
+    static var cellHeight: CGFloat { 49 }
+    static var inset: CGFloat { 3 }
     static var margin: CGFloat { 10 }
+    static var foot: CGFloat { 26 }
     static var width: CGFloat { cell + inset * 2 }
     private var column: CGFloat { max(edge, Self.margin * 2 + Self.width) }
     var body: some View {
@@ -576,20 +591,21 @@ struct SideRailTabs<Content: View>: View {
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
         .overlay(alignment: .bottomTrailing) {
             // Centred in the strip, measured from the display's edge.
-            rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.margin + 2)
+            rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.foot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .ignoresSafeArea(.container, edges: .trailing)
         }
     }
     private var rail: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 0) {
             ForEach(items) { it in
                 let front = it.value == selection
                 Button { selection = it.value } label: {
                     it.icon
                         .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                        .frame(width: Self.cell, height: Self.cell)
-                        .background { if front { Circle().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)) } }
+                        .frame(width: Self.cell, height: Self.cellHeight)
+                        // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
+                        .background { Capsule().fill(scheme == .dark ? Color.black.opacity(0.38) : Color.primary.opacity(0.08)).opacity(front ? 1 : 0) }
                         .overlay(alignment: .topTrailing) {
                             let n = badge(it.value)
                             if n > 0 {
@@ -599,17 +615,104 @@ struct SideRailTabs<Content: View>: View {
                                     .offset(x: 2, y: 1)
                             }
                         }
-                        .contentShape(Circle())
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(it.title)
+                .accessibilityIdentifier("tab." + it.title)
                 .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
                 .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
             }
         }
         .padding(Self.inset)
         .glassEffect(.regular.interactive(), in: Capsule())
-        .animation(.snappy(duration: 0.25), value: selection)
+    }
+}
+
+// Tabs with the bar drawn along the foot, for an upright phone too narrow for the system's: iOS's own bar there holds
+// five and puts the sixth and the rest under "More" (Richard, 2026-11-20: "i said more never"). All six, one tap away:
+// the system's look, a floating glass capsule of icons over their names, the tab in front in the accent colour on a
+// soft capsule. Pages keep clear of it as they do of the system's bar. Tabs once shown are kept, as TabView keeps them.
+struct BottomBarTabs<Content: View>: View {
+    @Binding var selection: Int
+    let items: [RailItem]
+    let badge: (Int) -> Int
+    @ViewBuilder let content: (Int) -> Content
+    @State private var shown: Set<Int> = []
+    @State private var keyboardUp = false
+    @Environment(\.colorScheme) private var scheme
+    static var height: CGFloat { 54 }
+    static var inset: CGFloat { 4 }
+    var body: some View {
+        ZStack {
+            ForEach(items) { it in
+                let front = it.value == selection
+                if front || shown.contains(it.value) {
+                    content(it.value)
+                        .opacity(front ? 1 : 0)
+                        .allowsHitTesting(front)
+                        .accessibilityHidden(!front)
+                        .zIndex(front ? 1 : 0)
+                }
+            }
+        }
+        // Room for the bar, taken by each page (railRoom). None with the keyboard up: the bar is behind the keyboard
+        // then, and its room would be a band over the keys.
+        .environment(\.bottomBar, keyboardUp ? 0 : Self.height + Self.inset * 2 + 6)
+        #if canImport(UIKit)
+        // Up only when the keyboard really covers the foot: with a hardware keyboard "will show" comes for a bar of a
+        // few points, and the page then lost the bar's room with nothing over the bar (CI 9f706bc, bar-keyboard).
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+            let screen = UIScreen.main.bounds.height
+            keyboardUp = f.height > 120 && f.minY < screen - 120
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        #endif
+        .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        .overlay(alignment: .bottom) {
+            // No wider than the system's own bar is where there's room (open upright): centred, not stretched.
+            bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea(.keyboard)
+        }
+    }
+    private var bar: some View {
+        HStack(spacing: 0) {
+            ForEach(items) { it in
+                let front = it.value == selection
+                Button { selection = it.value } label: {
+                    VStack(spacing: 2) {
+                        it.icon.resizable().scaledToFit().frame(width: 24, height: 22)
+                        Text(it.title).font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+                    }
+                    .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                    // Each cell at least its name and 8 pt of air either side, the rest shared: equal cells left
+                    // "Dashboard" touching its capsule's ends (designer gate 1, 2026-11-20).
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, minHeight: Self.height)
+                    // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
+                    .background { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)).opacity(front ? 1 : 0) }
+                    .overlay(alignment: .top) {
+                        let n = badge(it.value)
+                        if n > 0 {
+                            Text("\(n)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+                                .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
+                                .background(Color.red, in: Capsule())
+                                .offset(x: 14, y: 3)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(it.title)
+                .accessibilityIdentifier("tab." + it.title)
+                .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
+                .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        .padding(Self.inset)
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 
@@ -667,5 +770,102 @@ enum TabTour {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             for t in tabs + tabs { set(t); try? await Task.sleep(nanoseconds: 1_600_000_000) }
         }
+    }
+}
+
+// Whether the system's own tab bar or rail is showing "More" (the "•••" item) right now, read from UIKit itself, never
+// guessed from a size (Richard, 2026-11-20: "never a more thing ever"). His phone open flat showed the system rail with
+// four tabs and "•••" where the build's shots showed six: the rail had kept the split it made at a narrower width (the
+// app opened folded, then unfolded). So the app asks the tab bar what it shows, and wherever it would overflow it draws
+// the rail or bar itself (SideRailTabs, BottomBarTabs) with every tab. Put in the background of a tab's page.
+#if canImport(UIKit)
+struct TabOverflowProbe: UIViewRepresentable {
+    let tabs: Int
+    let report: (Bool) -> Void
+    func makeUIView(context: Context) -> Probe { let v = Probe(); v.isUserInteractionEnabled = false; v.tabs = tabs; v.report = report; return v }
+    func updateUIView(_ v: Probe, context: Context) { v.tabs = tabs; v.report = report }
+    final class Probe: UIView {
+        var tabs = 0
+        var report: (Bool) -> Void = { _ in }
+        private var last: Bool?
+        override func didMoveToWindow() { super.didMoveToWindow(); look() }
+        override func layoutSubviews() { super.layoutSubviews(); look() }
+        private func look() {
+            // After this pass: the bar lays its items out in the same pass as the page.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil, let tbc = self.tabController() else { return }
+                let over = Self.overflows(tbc, tabs: self.tabs)
+                guard over != self.last else { return }
+                self.last = over
+                TabsLog.note("system tabs \(Int(self.window?.bounds.width ?? 0))x\(Int(self.window?.bounds.height ?? 0)): \(over ? "MORE" : "all \(self.tabs)") (items \(tbc.tabBar.items?.count ?? -1), hidden \(tbc.tabBar.isHidden))")
+                self.report(over)
+            }
+        }
+        private func tabController() -> UITabBarController? {
+            var r: UIResponder? = self
+            while let x = r { if let t = x as? UITabBarController { return t }; r = x.next }
+            func find(_ c: UIViewController?) -> UITabBarController? {
+                guard let c else { return nil }
+                if let t = c as? UITabBarController { return t }
+                for k in c.children { if let t = find(k) { return t } }
+                return find(c.presentedViewController)
+            }
+            return find(window?.rootViewController)
+        }
+        // Three ways UIKit can say it: the More item among the bar's items, fewer items than tabs, or a "More" button
+        // anywhere in the tab bar controller's own views (the rail draws it as "•••").
+        static func overflows(_ tbc: UITabBarController, tabs: Int) -> Bool {
+            let items = tbc.tabBar.items ?? []
+            let more = tbc.moreNavigationController.tabBarItem
+            if items.contains(where: { $0 === more }) { return true }
+            if !items.isEmpty, items.count < tabs { return true }
+            func hasMore(_ v: UIView, depth: Int) -> Bool {
+                if depth > 14 { return false }
+                if v.isHidden || v.alpha < 0.01 { return false }
+                if let l = v.accessibilityLabel, l == "More" || l == "•••", v.window != nil { return true }
+                return v.subviews.contains { hasMore($0, depth: depth + 1) }
+            }
+            return hasMore(tbc.tabBar, depth: 0) || tbc.view.subviews.filter { $0 !== tbc.tabBar && !(tbc.selectedViewController?.view.isDescendant(of: $0) ?? false) }.contains { hasMore($0, depth: 0) }
+        }
+    }
+}
+#endif
+// What the tab probe saw, to Caches/tabs-log.txt (rare lines: one per change), for the build's logs.
+enum TabsLog {
+    static func note(_ s: String) {
+        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let url = dir.appendingPathComponent("tabs-log.txt")
+        let line = ISO8601DateFormatter().string(from: Date()) + " " + s + "\n"
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? Data(line.utf8).write(to: url) }
+        SwipeLog.note(s)
+    }
+}
+extension View {
+    // TabOverflowProbe behind a tab's page, where UIKit exists.
+    @ViewBuilder func probesTabOverflow(_ on: Bool, tabs: Int, _ report: @escaping (Bool) -> Void) -> some View {
+        #if canImport(UIKit)
+        self.background { if on { TabOverflowProbe(tabs: tabs, report: report).frame(width: 1, height: 1).allowsHitTesting(false).accessibilityHidden(true) } }
+        #else
+        self
+        #endif
+    }
+}
+
+// The build's shots at a size the simulator hasn't: -windowSize 859x604 makes the app's window that many points, at the
+// display's top left (his phone open flat is 859 x 604 pt, the simulator's 951 x 669; the system's rail holds fewer tabs
+// in the shorter one). Only with the launch argument; never on the phone.
+enum ShotWindow {
+    static var size: CGSize? {
+        guard let p = UserDefaults.standard.string(forKey: "windowSize")?.split(separator: "x").compactMap({ Double($0) }), p.count == 2, p[0] > 100, p[1] > 100 else { return nil }
+        return CGSize(width: p[0], height: p[1])
+    }
+    @MainActor static func apply() {
+        #if canImport(UIKit)
+        guard let size else { return }
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows where w.frame.size != size { w.frame = CGRect(origin: .zero, size: size); w.clipsToBounds = true }
+        }
+        #endif
     }
 }
