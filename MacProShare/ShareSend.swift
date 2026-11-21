@@ -12,7 +12,8 @@ enum ShareAddress {
     // The address the Mac Pro app saved (its Keychain item, readable here when the build's signing shares the team's
     // keychain), else the one baked into this build.
     static var base: URL? {
-        for s in [keychain(shared: true), keychain(), Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String] {
+        // The team-wide unscoped item last: it can hold another app's address (the Chumby's, 11-20).
+        for s in [keychain(shared: true), Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String, keychain()] {
             if let s, !s.isEmpty, let u = URL(string: s), u.host != nil { return u }
         }
         return nil

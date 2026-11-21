@@ -7,7 +7,8 @@ func chumbyRoutes(_ override: String?) -> [URL] {
     let o = (override ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     let list = [o, UserDefaults.standard.string(forKey: "address") ?? "", Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "", Bundle.main.object(forInfoDictionaryKey: "ChumbyFallback") as? String ?? ""]
     var seen = Set<String>()
-    return list.filter { !$0.isEmpty && seen.insert($0).inserted }.compactMap { URL(string: $0) }.filter { $0.host != nil }
+    // Never the Mac's bridge (SavedAddress.isMacBridge): it has no Chumby path, and asking it first cost every press a 404.
+    return list.filter { !$0.isEmpty && !SavedAddress.isMacBridge($0) && seen.insert($0).inserted }.compactMap { URL(string: $0) }.filter { $0.host != nil }
 }
 func chumbyTry<T>(_ work: (ChumbyAPI) async throws -> T) async throws -> T {
     var last: Error = ChumbyError.deviceDown

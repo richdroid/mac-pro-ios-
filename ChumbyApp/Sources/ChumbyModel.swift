@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import WidgetKit
+import Network
 #if canImport(UIKit)
 import UIKit
 typealias PlatformImage = UIImage
@@ -16,6 +17,25 @@ struct Failure: Equatable { let id: String; let text: String; let at: Date }
 // retrying: a failed change sent again, its note kept in place ("Trying again…") so nothing moves unless it lands.
 enum AlarmMark: Equatable { case failed(head: String, why: String), retrying(head: String, why: String), landed(Date) }
 
+// Whether the phone has Wi-Fi at all right now. The Chumby's own address (ChumbyFallback) is on home's Wi-Fi, so off Wi-Fi
+// (cellular, 11-20) it can never answer, and trying it only cost the Tailscale route its turns. Its available interfaces,
+// not the path's own: with Tailscale on, the path is the tunnel, which sits on whichever of the two is under it. Until
+// the first answer it counts as Wi-Fi, so nothing is ruled out on a guess.
+final class WiFiWatch: @unchecked Sendable {
+    static let shared = WiFiWatch()
+    private let monitor = NWPathMonitor()
+    private let lock = NSLock()
+    private var wifi = true
+    var on: Bool { lock.lock(); defer { lock.unlock() }; return wifi }
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] p in
+            let w = p.availableInterfaces.contains { $0.type == .wifi }
+            self?.lock.lock(); self?.wifi = w; self?.lock.unlock()
+        }
+        monitor.start(queue: DispatchQueue(label: "chumby.wifi"))
+    }
+}
+
 
 @MainActor
 final class ChumbyModel: ObservableObject {
@@ -29,7 +49,7 @@ final class ChumbyModel: ObservableObject {
     @Published var offline = false
     @Published var needsAddress = false
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
-    @Published var address: String { didSet { SavedAddress.save(address); api = Self.makeAPI(address); usingFallback = false; troubleSince = nil; triedRoutes = [] } }
+    @Published var address: String { didSet { SavedAddress.save(address); api = Self.makeAPI(address); usingFallback = false; troubleSince = nil; triedRoutes = []; lastMacTry = .distantPast } }
     @Published var failure: Failure?
     @Published var marks: [String: AlarmMark] = [:]
     @Published var dead = false        // the Mac answers, but the Chumby itself has gone quiet
@@ -138,6 +158,7 @@ final class ChumbyModel: ObservableObject {
     private static func cache(_ name: String) -> URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("chumby-" + name) }
 
     init() {
+        _ = WiFiWatch.shared
         let saved = SavedAddress.value
         address = saved
         // Kept in the Keychain from the first launch, so a reinstall finds it even if it was never typed.
@@ -202,6 +223,10 @@ final class ChumbyModel: ObservableObject {
         // Back within five minutes of leaving with a verdict already said, it stands (a frozen Chumby must not look alive
         // for half a minute each time the app is opened, from its own notification say) until a reading clears it.
         let recentlyLeft = Date().timeIntervalSince(left) < 300
+        // Always from the Mac's route: one left on the Wi-Fi route at home was kept into the next opening on cellular,
+        // where every reading went to an address that can't answer there (11-20).
+        if usingFallback, let mac = Self.makeAPI(address) { usingFallback = false; api = mac }
+        lastMacTry = .distantPast
         triedRoutes = []
         troubleSince = recentlyLeft && offline ? .distantPast : nil
         downSince = recentlyLeft && dead ? .distantPast : nil
@@ -248,8 +273,12 @@ final class ChumbyModel: ObservableObject {
     private var staleReadings = 0
 
     func loadSys() async {
-        guard let api else { needsAddress = true; return }
+        guard self.api != nil else { needsAddress = true; return }
         await tryMacRoute()
+        // The route as it is now: tryMacRoute may just have gone back to the Mac's. Taken before, the reading still went
+        // the old way and its failure was put down to the Mac's route, which then switched away from the one that worked.
+        guard let api else { return }
+        let onFallback = usingFallback
         // Trouble is timed from when the first failing request was sent, not from its timeout 8 s later.
         let began = Date()
         do {
@@ -290,12 +319,16 @@ final class ChumbyModel: ObservableObject {
             if now.timeIntervalSince(downSince ?? now) >= Self.patience { set(\.dead, true); staleReadings = 6; set(\.lastSeen, await api.lastSeen()) }
         } catch {
             if Task.isCancelled { return }
+            // Something other than the Chumby's cache answered at the saved address: the address is wrong, not the
+            // network. The build's own one goes back in, and is asked at once.
+            if case ChumbyError.wrongPlace = error, !onFallback, healAddress() { return }
             // No answer on this route: the other one at once, quietly. Only after `patience`, with both tried, is it said.
             let now = Date()
             if troubleSince == nil { troubleSince = began }
             set(\.struggling, true)
-            triedRoutes.insert(usingFallback)
-            switchRoute()
+            triedRoutes.insert(onFallback)
+            // Another reading may already have moved on from the route that failed.
+            if onFallback == usingFallback { switchRoute() }
             if now.timeIntervalSince(troubleSince ?? now) >= Self.patience, fallback.isEmpty || triedRoutes.count == 2 { set(\.offline, true) }
         }
     }
@@ -365,8 +398,18 @@ final class ChumbyModel: ObservableObject {
     }
     // Tailscale off at home: go straight to the Chumby. Back the other way when that stops working.
     private func switchRoute() {
+        // Off Wi-Fi the Chumby's own address can't answer: it counts as tried, and the Mac's route keeps every turn.
+        if !usingFallback, !WiFiWatch.shared.on { triedRoutes.insert(true); return }
         guard !fallback.isEmpty, let next = Self.makeAPI(usingFallback ? address : fallback) else { return }
         usingFallback.toggle(); api = next
+    }
+    // The saved address answered 404 for the Chumby's path (the Mac's bridge, say): the build's own address instead.
+    // False when there's nothing better to go to.
+    private func healAddress() -> Bool {
+        let built = SavedAddress.builtIn
+        guard SavedAddress.usable(built), built != address, Self.makeAPI(built) != nil else { return false }
+        address = built
+        return true
     }
     // False when the answer was an old copy (the Mac is reading a new one), so the caller may ask again soon.
     @discardableResult
@@ -375,6 +418,8 @@ final class ChumbyModel: ObservableObject {
         // Only a recent reading counts: the cache can hand back a list from hours ago, and once a recent one has come in,
         // an older copy (the Mac's, just after a save) is never shown over it.
         let recent = r.age < 30
+        // Any recent answer is the Chumby reached: what was said about not reaching it goes at once, not at the next sys.
+        if recent, offline || troubleSince != nil, !dead { troubleSince = nil; triedRoutes = []; set(\.offline, false); set(\.struggling, false); heard() }
         if !recent && stateConfirmed { return false }
         if r.data == stateBytes { if recent, !stateConfirmed { stateConfirmed = true }; return recent }
         guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return true }
