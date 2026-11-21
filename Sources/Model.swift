@@ -127,7 +127,8 @@ final class AppModel: ObservableObject {
     var processes: ProcessSort? { get { tab == 6 ? nav.dashProcesses : nav.processes } set { if tab == 6 { nav.dashProcesses = newValue } else { nav.processes = newValue } } }
     var sessionScreen: Status.Session? { get { nav.sessionScreen } set { nav.sessionScreen = newValue } }
     var appHistory: String? { get { nav.appHistory } set { nav.appHistory = newValue } }
-    var macPage: MacPage? { get { tab == 6 ? nav.dashPage : nav.macPage } set { if tab == 6 { nav.dashPage = newValue } else { nav.macPage = newValue } } }
+    // The Mac's pages open on Status's own stack from Status (its chip, Fans & heat, Storage), else on Control's.
+    var macPage: MacPage? { get { tab == 0 ? nav.dashPage : nav.macPage } set { if tab == 0 { nav.dashPage = newValue } else { nav.macPage = newValue } } }
     // A page asked for before its tab has been on screen (a launch straight onto a page: a notification tapped, the
     // build's -openHistory) is pushed once the tab has drawn. Pushed at once, the tab underneath was never drawn until
     // Back first showed it, and it arrived late and in pieces, open flat a pane at a time (designer, CI 1b744be).
@@ -160,7 +161,17 @@ final class AppModel: ObservableObject {
     // Counts each ask for the usage, which lives on the Claude tab: the Claude tab scrolls to it.
     @Published var usageAsked = AppModel.firstTab == 3 ? 1 : 0
     var usageShown = 0
-    private static let firstTab: Int = { let d = UserDefaults.standard, start = d.object(forKey: "startTab") as? Int ?? -1; return start >= 0 ? start : d.integer(forKey: "tab") }()
+    // Left a moment ago (under 30 minutes) and started afresh by iOS, the app opens where he left it, whatever "Open on"
+    // says: that setting is for a new visit, and a relaunch behind his back read as the app jumping to another tab
+    // (Richard, 2026-11-21: "everytime i go back to the app it inexplicably goes to another tab").
+    static let leftAtKey = "leftAt"
+    private static let firstTab: Int = {
+        let d = UserDefaults.standard, start = d.object(forKey: "startTab") == nil ? -1 : d.integer(forKey: "startTab")
+        // The build's shots name their tab (-tab N).
+        if d.volatileDomain(forName: UserDefaults.argumentDomain)["tab"] != nil { return d.integer(forKey: "tab") }
+        let justLeft = Date().timeIntervalSince1970 - d.double(forKey: leftAtKey) < 30 * 60
+        return start >= 0 && !justLeft ? start : d.integer(forKey: "tab")
+    }()
     // A tab by number, from a link or the widget. 3 was the Usage tab, which is now part of Claude.
     func show(tab t: Int) {
         if t == 3 { tab = 2; usageAsked += 1 } else { tab = t }

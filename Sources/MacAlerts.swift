@@ -289,7 +289,6 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
             done(); return
         }
         AlertDismissals.restore(id: id)
-        UserDefaults.standard.set(id.hasPrefix("session:") || id.hasPrefix("usage:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
         if id == OTAInstaller.alertID { Task { @MainActor in OTAInstaller.shared.wanted = true } }
         // Kept too, in case the tap launched the app and nothing is listening yet.
         Self.pending = id

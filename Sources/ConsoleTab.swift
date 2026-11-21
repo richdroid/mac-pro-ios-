@@ -18,6 +18,11 @@ struct ConsoleState: Codable, Equatable {
     var glance: Bool?
     // The Console has stepped out of the way while the phone's Screen is open (the bridge says).
     var screenStepAside: Bool?
+    // The display is held on until he turns it off (the bridge's marker; display:on|off).
+    var keepOn: Bool?
+    // The boards' text: "desk", or "room" to read from bed.
+    var text: String?
+    var rotateSecs: Double?
 }
 
 enum ConsolePlace {
@@ -28,12 +33,27 @@ enum ConsolePlace {
         ("startup", "Startup", "power"), ("updates", "Updates", "arrow.down.circle"), ("logs", "Logs", "doc.text.magnifyingglass"),
         ("terminal", "Terminal", "terminal"), ("settings", "Settings", "gearshape"),
     ]
+    // In the Console's own order of turns (its Board cases), with its names and signs.
     static let boards: [(id: String, name: String, symbol: String, about: String)] = [
         ("machine", "The machine", "cpu", "All eight temperatures, the processors, memory, fan, network and disk"),
         ("media", "Playing", "play.tv", "What’s on the TV, music on the Chumby, Stremio’s continue watching"),
         ("home", "The room", "alarm", "The time, the Chumby’s next alarm and the weather"),
         ("work", "Work", "hammer", "Claude sessions, builds, tests and TestFlight"),
+        ("tonight", "Tonight", "moon.stars", "For bed: the time, the next alarm, what’s on the TV and the temperatures, quietly"),
     ]
+    // The boards that read from bed; the dense ones sit out until morning (the Console's rule, macpro-console e18fc99).
+    static let bedBoards: Set<String> = ["tonight", "home", "media"]
+    // Read from bed: he chose text for across the room, or it's 10 PM to 9 AM. The Console decides this by the Mac's
+    // clock and doesn't say which it chose, so the phone works it out the same way (the two share a room and a time).
+    static func fromBed(_ s: ConsoleState?, pose: String = "") -> Bool {
+        if s?.text == "room" { return true }
+        if !pose.isEmpty { return false }
+        let h = Calendar.current.component(.hour, from: Date()); return h >= 22 || h < 9
+    }
+    // Whose turn it can be now, in order.
+    static func turns(_ s: ConsoleState?, pose: String = "") -> [(id: String, name: String, symbol: String, about: String)] {
+        fromBed(s, pose: pose) ? boards.filter { bedBoards.contains($0.id) } : boards
+    }
     static func name(_ s: ConsoleState) -> (String, String) {
         // Glance draws over every page and board on the Mac, so it is what the screen shows while it's on.
         if s.glance == true { return ("Glance", "bed.double") }
@@ -66,17 +86,17 @@ extension API {
         guard code == 200 else { throw SendError.say(MacFiles.reason(code, d)) }
         return try JSONDecoder().decode(ConsoleState.self, from: d)
     }
-    struct ConsoleAnswer: Decodable { let ok: Bool?; let acked: Bool?; let error: String?; let console: ConsoleState? }
+    struct ConsoleAnswer: Decodable { let ok: Bool?; let acked: Bool?; let error: String?; let say: String?; let console: ConsoleState? }
     // What the Console said: ok, or why not, and its state after.
-    func consoleCommand(_ cmd: String, _ arg: String = "") async -> (error: String?, state: ConsoleState?) {
+    func consoleCommand(_ cmd: String, _ arg: String = "") async -> (error: String?, state: ConsoleState?, say: String?) {
         var b = ["cmd": cmd]; if !arg.isEmpty { b["arg"] = arg }
         do {
             let (d, resp) = try await session.data(for: consoleRequest("/api/mac/console/command", body: b, timeout: cmd == "show" ? 35 : 15))
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             let a = try? JSONDecoder().decode(ConsoleAnswer.self, from: d)
-            if code == 200, a?.ok == true { return (nil, a?.console) }
-            return (a?.error ?? MacFiles.reason(code, d), a?.console)
-        } catch { return (MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription, nil) }
+            if code == 200, a?.ok == true { return (nil, a?.console, a?.say) }
+            return (a?.error ?? MacFiles.reason(code, d), a?.console, nil)
+        } catch { return (MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription, nil, nil) }
     }
 }
 
@@ -93,6 +113,30 @@ final class ConsoleRemote: ObservableObject {
     // The button waiting for the Console's answer, and what it said when it said no.
     @Published var busy: String?
     @Published var fail: (key: String, text: String)?
+    // The Console's yes to the last press, in words, for a few seconds: every press is seen to have landed.
+    @Published var said: String?
+    private var saidCount = 0
+    private func confirm(_ text: String) {
+        saidCount += 1; let mine = saidCount
+        said = text
+        Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if saidCount == mine { withAnimation(Motion.quick) { said = nil } } }
+    }
+    // What a yes means, in his words; the bridge's own sentence wins where it has one (the display).
+    static func done(_ cmd: String, _ arg: String, _ st: ConsoleState?) -> String {
+        switch cmd {
+        case "show": return "The dashboard is on the Mac’s screen"
+        case "hide": return "The dashboard is hidden"
+        case "board":
+            if arg == "off" { return "Back to the pages" }
+            return "\(ConsolePlace.boards.first { $0.id == arg }?.name ?? "The board") is on the Mac"
+        case "page": return "\(ConsolePlace.pages.first { $0.id == arg }?.name ?? "The page") is on the Mac"
+        case "rotate": return arg == "on" ? "The boards take turns" : "The boards stay put"
+        case "text": return arg == "room" ? "Large text, to read across the room" : "Desk-size text"
+        case "glance": return arg == "on" ? "Glance is on" : "Glance is off"
+        case "display": return arg == "on" || arg == "wake" ? "The display is on" : "The display is off"
+        default: return "Done"
+        }
+    }
     // Counted when the Console's answer comes: the Dashboard's done and warn haptics (manifesto, haptic vocabulary).
     @Published var answered = 0
     @Published var refused = 0
@@ -117,7 +161,7 @@ final class ConsoleRemote: ObservableObject {
     }
     func send(_ model: AppModel, _ key: String, _ cmd: String, _ arg: String = "") {
         guard busy == nil else { return }
-        withAnimation(Motion.quick) { busy = key; fail = nil }
+        withAnimation(Motion.quick) { busy = key; fail = nil; said = nil }
         Task {
             if Self.posed(model.pose) != nil {
                 // As the stand-in Mac answers: the Console's ack after a moment (Start takes longer), and its state after.
@@ -131,13 +175,17 @@ final class ConsoleRemote: ObservableObject {
                 }
                 withAnimation(Motion.quick) {
                     busy = nil; answered += 1
+                    confirm(cmd == "display" && arg == "on" ? "The display stays on until you turn it off." : Self.done(cmd, arg, state))
                     switch cmd {
                     case "show": state = ConsoleState(running: true, frontmost: true, fullscreen: true, page: state?.page ?? "home", board: state?.board, rotate: state?.rotate ?? false, animations: state?.animations ?? "full", display: "awake", glance: state?.glance ?? false)
                     case "hide": state?.frontmost = false
                     case "glance": state?.glance = arg == "on"
-                    case "display": state?.display = arg == "wake" ? "awake" : "asleep"
+                    case "display":
+                        state?.display = arg == "wake" || arg == "on" ? "awake" : "asleep"
+                        if arg == "on" || arg == "off" { state?.keepOn = arg == "on" }
+                    case "text": state?.text = arg
                     case "page": state?.page = arg; state?.board = nil
-                    case "board": state?.board = arg == "off" ? nil : arg
+                    case "board": state?.board = arg == "off" ? nil : arg; if arg != "off" { state?.page = "boards" }
                     case "rotate": state?.rotate = arg == "on"
                     case "animations": state?.animations = arg
                     default: break
@@ -145,11 +193,11 @@ final class ConsoleRemote: ObservableObject {
                 }
                 return
             }
-            let (e, st) = await model.api.consoleCommand(cmd, arg)
+            let (e, st, say) = await model.api.consoleCommand(cmd, arg)
             withAnimation(Motion.quick) {
                 if let st { state = st }
                 busy = nil
-                if let e { fail = (key, e); refused += 1 } else { answered += 1 }
+                if let e { fail = (key, e); refused += 1 } else { answered += 1; confirm(say ?? Self.done(cmd, arg, st)) }
             }
             // An error is read once: gone after a few seconds, unless a newer one has taken its place.
             if let e {
@@ -163,7 +211,9 @@ final class ConsoleRemote: ObservableObject {
     static func posed(_ pose: String) -> ConsoleState? {
         switch pose {
         case "console", "glancefilm": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
-        case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake")
+        case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "desk")
+        // From bed: Tonight up, large text, the display held on.
+        case "consolebed": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "tonight", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "room")
         // Glance on the Mac's screen, the display awake.
         case "consoleglance": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: true)
         case "consoleoff", "consolestarting": return ConsoleState(running: false)
@@ -262,14 +312,10 @@ enum MacFollow {
         }
         func of(_ h: HistoryMetric?) -> String { h?.kind == .temperature ? "temps" : "overview" }
         switch tab {
-        case 0: return n.processes != nil ? "processes" : of(n.history)
+        case 0: return n.processes != nil ? "processes" : n.dashPage != nil ? of(n.dashPage) : of(n.history)
         case 1, 2: return "activity"
         case 4: return "updates"
         case 5: return of(n.macPage)
-        case 6:
-            if n.dashProcesses != nil { return "processes" }
-            if let h = n.dashHistory { return of(h) }
-            return of(n.dashPage)
         default: return nil
         }
     }
@@ -279,7 +325,7 @@ struct MacFollower: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var nav: NavStore
     @Environment(\.scenePhase) private var phase
-    @AppStorage(MacFollow.defaultsKey) private var on = true
+    @AppStorage(MacFollow.defaultsKey) private var on = false
     @State private var sent: String?
     var body: some View {
         let page = on && phase == .active ? MacFollow.page(tab: model.tab, nav: nav) : nil
@@ -289,7 +335,9 @@ struct MacFollower: View {
             .task(id: page) {
                 // Nowhere to follow to (away, following off, or a page the Console hasn't): the next page is said even if
                 // it's the last one again, since the Mac may have moved meanwhile (the Dashboard's chips, the desk).
-                guard let page else { sent = nil; return }
+                // Coming back to the app is not a move: the page he left is not said again, so returning never turns
+                // the Mac's screen by itself (2026-11-21). Only following switched off forgets it.
+                guard let page else { if !on { sent = nil }; return }
                 guard page != sent else { return }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled else { return }
