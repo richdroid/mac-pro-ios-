@@ -435,6 +435,12 @@ struct ArtWall: View {
         }
         return out
     }
+    @Environment(\.displayScale) private var scale
+    // The whole wall as one picture, drawn off the main thread: the tiles in grey, the tint, the shade toward its foot and
+    // the fade all baked in. Run 47's films with one thing off showed the live version (a drawing group under a
+    // saturation, a colour multiply and a mask) cost about 120 late frames scrolling today with a song on, against 12
+    // with the wall off: the page now moves one plain image.
+    @State private var picture: CGImage?
     var body: some View {
         let refs = Self.covers
         if refs.count >= 6, !Diag.off("wall") {
@@ -443,32 +449,60 @@ struct ArtWall: View {
             // As deep as what's on: the cover and the song's words under it folded; the cover beside its words with room.
             let depth: CGFloat = page >= 560 ? 440 : min(page - S.margin * 2, 440) + 300
             let rows = Int((depth / side).rounded(.up))
-            VStack(spacing: 0) {
-                ForEach(0..<rows, id: \.self) { r in
-                    HStack(spacing: 0) {
-                        // Each row starts further along the list, so a short list doesn't stack the same cover in a column.
-                        ForEach(0..<cols, id: \.self) { c in ArtView(refs[(r * (cols + 2) + c) % refs.count], px: 156, corner: 0).frame(width: side, height: side) }
-                    }
-                }
+            let size = CGSize(width: side * CGFloat(cols), height: side * CGFloat(rows))
+            ZStack {
+                if let picture { Image(decorative: picture, scale: scale).resizable().transition(.opacity) }
             }
-            .saturation(0)
-            .colorMultiply(tint)
-            .opacity(0.42)
-            // Darker toward its foot, where the song's words lie over it, and gone into the ground at the end.
-            .overlay { LinearGradient(stops: [.init(color: S.ground.opacity(0.3), location: 0), .init(color: S.ground.opacity(0.62), location: 0.55), .init(color: S.ground.opacity(0.75), location: 1)], startPoint: .top, endPoint: .bottom) }
-            // Its foot fades out into whatever ground is behind (the page's tint, not always the plain ground), so no
-            // edge of it shows and a word near it is never half on it (run 44, upright: the name straddled a hard edge).
-            // Drawn once with the rest, never per frame.
-            .mask { LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom) }
-            .drawingGroup()
-            .frame(width: width, height: side * CGFloat(rows), alignment: .topLeading)
+            .frame(width: width, height: size.height, alignment: .topLeading)
             .clipped()
             // Laid centred on the page, so moved by half the difference to start at the screen's left edge.
             .offset(x: (bleed.trailing - bleed.leading) / 2)
             // From where the pivot's names fade the page out.
             .offset(y: -S.head - 26)
+            .task(id: "\(tint)|\(cols)|\(rows)|\(side)|\(scale)") {
+                let tintC = tint.resolve(in: EnvironmentValues()).cgColor, ground = S.ground.resolve(in: EnvironmentValues()).cgColor
+                let img = await Task.detached(priority: .userInitiated) {
+                    await Self.render(refs: refs, cols: cols, rows: rows, side: side, scale: scale, tint: tintC, ground: ground)
+                }.value
+                guard !Task.isCancelled, let img else { return }
+                withAnimation(.easeOut(duration: picture == nil ? 0.25 : 0.4)) { picture = img }
+            }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
+    }
+
+    private static func render(refs: [ArtRef], cols: Int, rows: Int, side: CGFloat, scale: CGFloat, tint: CGColor, ground: CGColor) async -> CGImage? {
+        let px = side * scale, w = Int((px * CGFloat(cols)).rounded(.up)), h = Int((px * CGFloat(rows)).rounded(.up))
+        guard w > 0, h > 0, let gray = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        // The tiles in grey (CoreGraphics' y runs up: row 0 is drawn at the top).
+        gray.setFillColor(gray: 0.2, alpha: 1); gray.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        var imgs: [String: CGImage] = [:]
+        for r in 0..<rows {
+            for c in 0..<cols {
+                let ref = refs[(r * (cols + 2) + c) % refs.count]
+                if imgs[ref.key] == nil, let i = await ArtStore.shared.image(ref, px: 156) { imgs[ref.key] = i }
+                guard let i = imgs[ref.key] else { continue }
+                gray.draw(i, in: CGRect(x: CGFloat(c) * px, y: CGFloat(h) - CGFloat(r + 1) * px, width: px, height: px))
+            }
+        }
+        guard let g = gray.makeImage() else { return nil }
+        let all = CGRect(x: 0, y: 0, width: w, height: h)
+        // Tinted and laid at 42 %.
+        ctx.saveGState(); ctx.setAlpha(0.42); ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+        ctx.draw(g, in: all); ctx.setBlendMode(.multiply); ctx.setFillColor(tint); ctx.fill(all)
+        ctx.endTransparencyLayer(); ctx.restoreGState()
+        // Darker toward its foot (top to bottom: 30 %, 62 % at the middle, 75 %), then faded out over its lower half.
+        let space = CGColorSpaceCreateDeviceRGB()
+        func shade(_ a: CGFloat) -> CGColor { ground.copy(alpha: a) ?? ground }
+        if let shadeG = CGGradient(colorsSpace: space, colors: [shade(0.75), shade(0.62), shade(0.3)] as CFArray, locations: [0, 0.45, 1]) {
+            ctx.drawLinearGradient(shadeG, start: .zero, end: CGPoint(x: 0, y: h), options: [])
+        }
+        if let fade = CGGradient(colorsSpace: space, colors: [CGColor(gray: 0, alpha: 0), CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 1)] as CFArray, locations: [0, 0.5, 1]) {
+            ctx.setBlendMode(.destinationIn)
+            ctx.drawLinearGradient(fade, start: .zero, end: CGPoint(x: 0, y: h), options: [])
+        }
+        return ctx.makeImage()
     }
 }
