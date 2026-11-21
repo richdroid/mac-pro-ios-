@@ -157,7 +157,9 @@ struct Pager: View {
                 // under them: what scrolls up fades out beneath the names.
                 // A shade, not a box: it runs out under the side bars too and thins over a long tail, so no edge of it shows
                 // against the cover's colour (run 40: a black rectangle with a hard right edge).
-                LinearGradient(stops: [.init(color: S.ground.opacity(0.92), location: 0), .init(color: S.ground.opacity(0.86), location: (head - 30) / (head + 28)), .init(color: S.ground.opacity(0), location: 1)],
+                // Nearly solid down to where the pages are cut (below the names' descenders), then thinning over 34 pt, so
+                // what scrolls up comes in dim and is never read against a name (run 48 gate, blocker 5).
+                LinearGradient(stops: [.init(color: S.ground.opacity(0.95), location: 0), .init(color: S.ground.opacity(0.93), location: (head - S.head + 6) / (head + 28)), .init(color: S.ground.opacity(0), location: 1)],
                                startPoint: .top, endPoint: .bottom)
                     .frame(width: W, height: head + 28)
                     .allowsHitTesting(false)
@@ -197,8 +199,8 @@ struct Pager: View {
             }
             // The page is cut just under the names, so nothing scrolled up is ever read through them (run 44,
             // scroll-now at 20 s: a row's title under "sam today"); the shade over that line lets it come in soft.
-            .contentMargins(.top, S.head, for: .scrollContent)
-            .padding(.top, head - S.head)
+            .contentMargins(.top, S.head - 6, for: .scrollContent)
+            .padding(.top, head - S.head + 6)
             .contentMargins(.bottom, foot, for: .scrollContent)
             .scrollIndicators(.hidden)
             .environment(\.pageWidth, pw)

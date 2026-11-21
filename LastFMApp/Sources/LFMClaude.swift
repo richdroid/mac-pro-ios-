@@ -62,7 +62,12 @@ struct TasteKept: Codable {
     let mock = LastFM.shared.mock
     var on: Bool { mock || key != nil }
 
+    // What the screens show, and what is kept on disk: a piece written while he's in the app goes to disk and is shown
+    // when he next comes back to it, never landing at the head of a page while he reads it (run 48 gate, blocker 7).
     private(set) var kept = TasteKept()
+    @ObservationIgnored private var store = TasteKept()
+    // Plays of each thread's artists, all time, for the captions under their covers.
+    private(set) var plays: [String: Int] = [:]
     // Covers for the threads' artists, found once they're known so the row draws whole.
     private(set) var art: [String: ArtRef] = [:]
     private(set) var asking = false
@@ -74,16 +79,24 @@ struct TasteKept: Codable {
     }
 
     init() {
-        if mock { kept = Self.sample() } else if let d = try? Data(contentsOf: Self.file), let k = try? JSONDecoder().decode(TasteKept.self, from: d) { kept = k }
+        if mock { store = Self.sample() } else if let d = try? Data(contentsOf: Self.file), let k = try? JSONDecoder().decode(TasteKept.self, from: d) { store = k }
+        kept = store
+        Task { await findArt() }
+    }
+
+    // Back in the app: what was written since is shown now, before he has scrolled anywhere.
+    func show() {
+        guard !mock else { return }
+        kept = store
         Task { await findArt() }
     }
 
     private func save() {
-        guard !mock, let d = try? JSONEncoder().encode(kept) else { return }
+        guard !mock, let d = try? JSONEncoder().encode(store) else { return }
         try? d.write(to: Self.file, options: .atomic)
     }
 
-    var asksLeft: Int { Self.asksADay - (kept.asks.day == LocalDay.today ? kept.asks.n : 0) }
+    var asksLeft: Int { Self.asksADay - (store.asks.day == LocalDay.today ? store.asks.n : 0) }
 
     // MARK: Refresh
 
@@ -98,7 +111,7 @@ struct TasteKept: Codable {
     private func piece(_ name: String, _ model: String, _ run: @escaping () async throws -> Void) async {
         guard !busy.contains(name) else { return }
         // Any try, good or bad, waits six hours before the next.
-        if let t = kept.tried[name], Clock.now.timeIntervalSince(t) < 6 * 3600 { return }
+        if let t = store.tried[name], Clock.now.timeIntervalSince(t) < 6 * 3600 { return }
         busy.insert(name); defer { busy.remove(name) }
         do { try await run() } catch { }
     }
@@ -113,11 +126,11 @@ struct TasteKept: Codable {
     private func writePortrait() async throws {
         let d = await HistoryDB.reader.tasteFacts()
         let sig = Self.sig(d.periods[1].artists.prefix(10).map(\.0).sorted())
-        guard due(kept.portrait?.at, sig, kept.portrait?.sig) else { return }
-        kept.tried["portrait"] = Clock.now; save()
+        guard due(store.portrait?.at, sig, store.portrait?.sig) else { return }
+        store.tried["portrait"] = Clock.now; save()
         var user = d.portraitBlock
-        if let last = kept.portrait?.data { user += "\n\nYOUR LAST PORTRAIT (say what is true now; don't reuse its sentences):\n" + last.joined(separator: "\n") }
-        let text = try await call(Self.sonnet, Prompts.portrait, user, maxTokens: 2500, effort: "medium")
+        if let last = store.portrait?.data { user += "\n\nYOUR LAST PORTRAIT (say what is true now; don't reuse its sentences):\n" + last.joined(separator: "\n") }
+        let text = try await call(Self.sonnet, Prompts.portrait, user, maxTokens: 6000, effort: "medium")
         guard let j = Self.json(text), let lines = (j["lines"] as? [String])?.map(Self.line).filter({ !$0.isEmpty }), (3...4).contains(lines.count), !lines.contains(where: { $0.count > 230 }) else { return }
         let known = Dictionary(d.names.map { ($0.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
         var used = Set<String>(), threads: [TasteThread] = []
@@ -129,25 +142,24 @@ struct TasteKept: Codable {
             if threads.count == 5 { break }
         }
         guard threads.count >= 3 else { return }
-        kept.portrait = .init(data: lines, at: Clock.now, sig: sig); kept.threads = threads; save()
-        await findArt()
+        store.portrait = .init(data: lines, at: Clock.now, sig: sig); store.threads = threads; save()
     }
 
     private func writeWeek() async throws {
         let d = await HistoryDB.reader.weekFacts()
         let sig = Self.sig(d.top)
-        guard !d.top.isEmpty, due(kept.week?.at, sig, kept.week?.sig) else { return }
-        kept.tried["week"] = Clock.now; save()
-        let text = try await call(Self.sonnet, Prompts.week, d.block, maxTokens: 1000, effort: "medium")
+        guard !d.top.isEmpty, due(store.week?.at, sig, store.week?.sig) else { return }
+        store.tried["week"] = Clock.now; save()
+        let text = try await call(Self.sonnet, Prompts.week, d.block, maxTokens: 3000, effort: "medium")
         let note = Self.line(Self.json(text)?["note"] as? String ?? "")
         guard note.count >= 20, note.count <= 260 else { return }
-        kept.week = .init(data: note, at: Clock.now, sig: sig); save()
+        store.week = .init(data: note, at: Clock.now, sig: sig); save()
     }
 
     private func writeDiscovery() async throws {
         let (seeds, facts) = await HistoryDB.reader.discoverySeeds()
         let sig = Self.sig(seeds.sorted())
-        guard seeds.count >= 3, due(kept.discovery?.at, sig, kept.discovery?.sig) else { return }
+        guard seeds.count >= 3, due(store.discovery?.at, sig, store.discovery?.sig) else { return }
         // Last.fm's similar artists for each (kept a month), less everyone he has ever played.
         let have = await HistoryDB.reader.everyArtist()
         var by: [String: (name: String, score: Double, via: [String])] = [:]
@@ -163,8 +175,8 @@ struct TasteKept: Codable {
         }
         let cands = by.values.sorted { $0.score > $1.score }.prefix(50)
         guard cands.count >= 10 else { return }
-        kept.tried["discovery"] = Clock.now; save()
-        let user = facts + "\n\n" + (kept.discovery.map { "SUGGESTED LAST TIME (keep the ones that are still the best; otherwise prefer someone new): " + $0.data.map(\.artist).joined(separator: ", ") + "\n\n" } ?? "")
+        store.tried["discovery"] = Clock.now; save()
+        let user = facts + "\n\n" + (store.discovery.map { "SUGGESTED LAST TIME (keep the ones that are still the best; otherwise prefer someone new): " + $0.data.map(\.artist).joined(separator: ", ") + "\n\n" } ?? "")
             + "CANDIDATES (name | similar to, closest first)\n" + cands.map { "\($0.name) | \($0.via.prefix(4).joined(separator: "; "))" }.joined(separator: "\n")
         let text = try await call(Self.haiku, Prompts.discovery, user, maxTokens: 1500, thinkingOff: true)
         let known = Dictionary(cands.map { ($0.name.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
@@ -180,7 +192,7 @@ struct TasteKept: Codable {
             if picks.count == 15 { break }
         }
         guard picks.count >= 8 else { return }
-        kept.discovery = .init(data: picks, at: Clock.now, sig: sig); save()
+        store.discovery = .init(data: picks, at: Clock.now, sig: sig); save()
     }
 
     // MARK: Ask
@@ -189,28 +201,31 @@ struct TasteKept: Codable {
         let q = Self.line(question).prefix(Self.askMax).description
         guard q.count >= 3, !asking else { return }
         askError = nil
-        if let same = kept.asked.first(where: { $0.day == LocalDay.today && $0.q.lowercased() == q.lowercased() }) {
-            kept.asked.removeAll { $0 == same }; kept.asked.insert(same, at: 0); return
+        if let same = store.asked.first(where: { $0.day == LocalDay.today && $0.q.lowercased() == q.lowercased() }) {
+            store.asked.removeAll { $0 == same }; store.asked.insert(same, at: 0)
+            withAnimation(.smooth) { kept.asked = store.asked }; return
         }
         if mock {
-            withAnimation(.smooth) { kept.asked.insert(TasteAsked(q: q, answer: "You have played Nadia Sorel 2,790 times, most of it this year, and first played them in February 2019.", day: LocalDay.today), at: 0) }
+            store.asked.insert(TasteAsked(q: q, answer: "You have played Nadia Sorel 2,790 times, most of it this year, and first played them in February 2019.", day: LocalDay.today), at: 0)
+            withAnimation(.smooth) { kept.asked = store.asked }
             return
         }
         guard key != nil else { return }
         guard asksLeft > 0 else { askError = "That's the \(Self.asksADay) questions for today."; return }
         asking = true; defer { asking = false }
         // Counted before the call: a question that fails still used one of the day's.
-        kept.asks = (LocalDay.today, Self.asksADay - asksLeft + 1); save()
+        store.asks = (LocalDay.today, Self.asksADay - asksLeft + 1); save()
         do {
             let data = await HistoryDB.reader.askFacts(q)
             let text = try await call(Self.haiku, Prompts.ask, "QUESTION: \(q)\n\nDATA\n" + data, maxTokens: 400, thinkingOff: true)
             let answer = Self.line(Self.json(text)?["answer"] as? String ?? "")
             guard !answer.isEmpty else { askError = "No answer came back. Try asking another way."; return }
-            withAnimation(.smooth) { kept.asked.insert(TasteAsked(q: q, answer: answer, day: LocalDay.today), at: 0) }
-            kept.asked = Array(kept.asked.prefix(3)); save()
+            store.asked.insert(TasteAsked(q: q, answer: answer, day: LocalDay.today), at: 0)
+            store.asked = Array(store.asked.prefix(3)); save()
+            withAnimation(.smooth) { kept.asked = store.asked }
         } catch let e as TasteError {
             askError = e.say
-        } catch { askError = "Couldn't reach Claude just now." }
+        } catch { askError = "Couldn't answer just now. Try again in a while." }
     }
 
     // MARK: One call
@@ -218,8 +233,8 @@ struct TasteKept: Codable {
     enum TasteError: Error { case cap, http(Int), shape
         var say: String {
             switch self {
-            case .cap: return "That's today's allowance used. It's back tomorrow."
-            case .http(let c): return c == 429 || c >= 500 ? "Claude is busy. Try again in a while." : "Claude didn't take that (\(c))."
+            case .cap: return "That's all the questions for today. More tomorrow."
+            case .http(let c): return c == 429 || c >= 500 ? "Couldn't answer just now. Try again in a while." : "Couldn't answer that one. Try asking another way."
             case .shape: return "No answer came back. Try asking another way."
             }
         }
@@ -234,11 +249,11 @@ struct TasteKept: Codable {
         guard let key else { throw TasteError.shape }
         // The worst case reserved before the call (a token is about 2.7 characters here; counted at 2 to be safe).
         let worst = cost(model, (system.count + user.count) / 2, maxTokens)
-        if kept.spend.day != LocalDay.today { kept.spend = (LocalDay.today, 0) }
-        guard kept.spend.dollars + worst <= Self.cap else { throw TasteError.cap }
-        kept.spend.dollars += worst; save()
+        if store.spend.day != LocalDay.today { store.spend = (LocalDay.today, 0) }
+        guard store.spend.dollars + worst <= Self.cap else { throw TasteError.cap }
+        store.spend.dollars += worst; save()
         var spent = worst
-        defer { kept.spend.dollars += spent - worst; save() }
+        defer { store.spend.dollars += spent - worst; save() }
 
         var body: [String: Any] = ["model": model, "max_tokens": maxTokens, "system": system, "messages": [["role": "user", "content": user]]]
         if let effort { body["output_config"] = ["effort": effort] }
@@ -258,7 +273,8 @@ struct TasteKept: Codable {
             let tin = (u["input_tokens"] as? Int ?? 0) + (u["cache_creation_input_tokens"] as? Int ?? 0) + (u["cache_read_input_tokens"] as? Int ?? 0)
             spent = cost(model, tin, u["output_tokens"] as? Int ?? maxTokens)
         } else { spent = worst }
-        guard o["stop_reason"] as? String != "refusal" else { throw TasteError.shape }
+        // Refused, or cut off by its token limit (thinking counts toward it): no half answer is kept.
+        guard o["stop_reason"] as? String == "end_turn" else { throw TasteError.shape }
         let text = ((o["content"] as? [[String: Any]]) ?? []).filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
         guard !text.isEmpty else { throw TasteError.shape }
         return text
@@ -269,9 +285,9 @@ struct TasteKept: Codable {
     private func findArt() async {
         let names = Set(kept.threads.flatMap(\.artists)).subtracting(art.keys)
         guard !names.isEmpty else { return }
-        var found: [String: ArtRef] = [:]
-        for n in names { found[n] = await ArtistArt.ref(n) }
-        withAnimation(.smooth) { art.merge(found) { a, _ in a } }
+        var found: [String: ArtRef] = [:], counts: [String: Int] = [:]
+        for n in names { found[n] = await ArtistArt.ref(n); counts[n] = await HistoryDB.reader.plays(of: n, from: 0, to: Int.max) }
+        withAnimation(.smooth) { art.merge(found) { a, _ in a }; plays.merge(counts) { a, _ in a } }
     }
 
     private static func sig(_ s: [String]) -> String {
@@ -306,6 +322,7 @@ struct TasteKept: Codable {
             TastePick(artist: "North Pier", like: "Glass Harbor", why: "colder, drier edges"),
             TastePick(artist: "Saint Lune", like: "Cassio Vale", why: "hazier, chopped and underground"),
         ], at: Clock.now, sig: "")
+        k.asked = [TasteAsked(q: "How much Nadia Sorel have I played this year?", answer: "You have played Nadia Sorel 2,790 times in all, 912 of them this year, and first played them in February 2019.", day: LocalDay.today)]
         return k
     }
 }
@@ -505,17 +522,15 @@ struct TastePortrait: View {
                     ForEach(lines, id: \.self) { l in
                         Text(l).font(.system(size: 24, weight: .light)).foregroundStyle(.white.opacity(0.94)).fixedSize(horizontal: false, vertical: true)
                     }
-                    if let at = t.kept.portrait?.at, !t.mock {
-                        Text("written \(at.formatted(.dateTime.weekday(.wide)))").font(.subheadline).foregroundStyle(S.soft)
-                    }
                 }
                 .padding(.horizontal, S.margin)
+                .id("portrait")
                 ForEach(t.kept.threads, id: \.self) { th in
                     VStack(alignment: .leading, spacing: S.pair) {
                         Panorama(title: th.name, items: th.artists.map { a in
                             let r = t.art[a]
-                            return Entry(kind: .artists, artist: a, album: r?.album ?? "", track: "", plays: 0, image: r?.url)
-                        }) { _ in "" }
+                            return Entry(kind: .artists, artist: a, album: r?.album ?? "", track: "", plays: t.plays[a] ?? 0, image: r?.url)
+                        }, tiles: true) { e in e.plays > 0 ? "\(number(e.plays)) \(e.plays == 1 ? "play" : "plays")" : " " }
                         Text(th.note).font(.subheadline).foregroundStyle(S.soft).padding(.horizontal, S.margin).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -538,32 +553,6 @@ struct TasteWeekNote: View {
     }
 }
 
-// Artists to hear next: the name large, which of his it's near, and how it sounds beside that one.
-struct TastePicks: View {
-    private var t: Taste { Taste.shared }
-    var body: some View {
-        if t.on, let picks = t.kept.discovery?.data, !picks.isEmpty {
-            VStack(alignment: .leading, spacing: S.head) {
-                SectionHead(text: "to hear next")
-                VStack(alignment: .leading, spacing: S.inner) {
-                    ForEach(picks, id: \.self) { p in
-                        Opens(route: .artist(p.artist)) {
-                            VStack(alignment: .leading, spacing: S.pair) {
-                                Text(p.artist).font(.system(size: 26, weight: .light)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
-                                Text("because you play \(p.like)").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft).lineLimit(1)
-                                if !p.why.isEmpty { Text(p.why).font(.subheadline).foregroundStyle(S.soft).lineLimit(1) }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, S.margin)
-            .transition(.opacity)
-        }
-    }
-}
-
 // A question about his own listening, at the foot of his page: one field, what's left today, the answers inline.
 struct TasteAsk: View {
     private var t: Taste { Taste.shared }
@@ -572,7 +561,7 @@ struct TasteAsk: View {
     var body: some View {
         if t.on {
             VStack(alignment: .leading, spacing: S.head) {
-                SectionHead(text: "ask", trailing: t.mock ? nil : "\(t.asksLeft) left today")
+                SectionHead(text: "ask", trailing: "\(t.asksLeft) left today")
                 HStack(spacing: S.gap) {
                     TextField("", text: $q, prompt: Text("How much did I play this year?").foregroundStyle(S.soft), axis: .vertical)
                         .lineLimit(1...3)
@@ -603,6 +592,7 @@ struct TasteAsk: View {
                 }
             }
             .padding(.horizontal, S.margin)
+            .id("ask")
         }
     }
     private func send() {

@@ -142,9 +142,12 @@ struct Panorama: View {
     var trailing: String? = nil
     let items: [Entry]
     var ranks = false
+    // Tiles whatever the count (a thread of two artists is the same thing as one of five).
+    var tiles = false
     var caption: (Entry) -> String = { "\(number($0.plays)) \($0.plays == 1 ? "play" : "plays")" }
+    @Environment(\.pageBleed) private var bleed
     var body: some View {
-        if !items.isEmpty && items.count < 3 {
+        if !items.isEmpty && items.count < 3 && !tiles {
             // One or two: rows, never a sparse panorama.
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: title, trailing: trailing)
@@ -159,11 +162,15 @@ struct Panorama: View {
                         ForEach(Array(items.enumerated()), id: \.element.id) { k, e in tile(k, e) }
                     }
                     .scrollTargetLayout()
-                    .padding(.horizontal, S.margin)
+                    .padding(.leading, S.margin + bleed.leading)
+                    .padding(.trailing, S.margin + bleed.trailing)
                 }
                 .scrollIndicators(.hidden)
                 .scrollTargetBehavior(.viewAligned)
+                // To the screen's edge, under the side bar (run 48 gate, blocker 4: comebacks cut short of the rail).
                 .clipped()
+                .padding(.leading, -bleed.leading)
+                .padding(.trailing, -bleed.trailing)
             }
         }
     }
@@ -376,6 +383,11 @@ struct Page<C: View>: View {
                 .scrollIndicators(.hidden)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
                 .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
+                // A build's pose scrolled to (open flat, his page's foot is in this pane).
+                .task {
+                    guard let a = Pose.anchor else { return }
+                    for _ in 0..<3 { try? await Task.sleep(nanoseconds: 2_000_000_000); withAnimation(.smooth) { proxy.scrollTo(a, anchor: .top) } }
+                }
             }
             .environment(\.pageWidth, g.size.width)
         }

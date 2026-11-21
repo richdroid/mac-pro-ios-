@@ -299,9 +299,11 @@ struct WeekHub: View {
                 .scrollTargetBehavior(.viewAligned)
                 // Runs under the side bar to the screen's edge, as Zune's strips run off it (run 44: cut mid-name at an
                 // invisible line short of the rail), and clipped there.
+                // Clipped first, at the scroll's own (widened) frame: clipped after the padding it was cut back to the
+                // page's width, short of the rail (run 48 gate, blocker 4).
+                .clipped()
                 .padding(.leading, -bleed.leading)
                 .padding(.trailing, -bleed.trailing)
-                .clipped()
             }
         }
     }

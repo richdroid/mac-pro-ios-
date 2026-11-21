@@ -95,6 +95,9 @@ jobs:
             shot name$x $d 9 -tab 0 -mockName midnightsignal
             shot name-story$x $d 9 -tab 0 -panel 3 -mockName midnightsignal
             shot scrub$x $d 9 -tab 0 -panel 1 -pose scrub
+            # Claude's pieces at the foot of his page (mock samples): the portrait and its threads, then ask with an answer.
+            shot portrait$x $d 12 -tab 0 -panel 0 -pose portrait
+            shot ask$x $d 12 -tab 0 -panel 0 -pose ask
             # Last.fm gone: every call fails and nothing kept is used; -mockDown also dates the failures 30 s back, so
             # the note is up from the first failed call.
             shot down$x $d 20 -tab 0 -mockDown YES

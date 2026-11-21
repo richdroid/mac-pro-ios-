@@ -12,7 +12,9 @@ struct LastFMApp: App {
         WindowGroup {
             RootView()
                 .preferredColorScheme(.dark)
-                .onChange(of: phase) { _, p in if p == .active { Store.shared.start() } else { Store.shared.stop() } }
+                .onChange(of: phase) { _, p in
+                    if p == .active { Store.shared.start(); Taste.shared.show(); Task { await Taste.shared.refresh() } } else { Store.shared.stop() }
+                }
                 .onAppear {
                     LaunchLog.mark("root appeared"); Store.shared.start()
                     #if canImport(UIKit)

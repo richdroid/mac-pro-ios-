@@ -97,13 +97,13 @@ struct DiscoverTab: View {
         Group {
             if pane {
                 FoldSplit {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); TastePicks(); artists }.padding(.top, S.head) }
+                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists }.padding(.top, S.head) }
                 } right: {
                     Page(top: top) { VStack(alignment: .leading, spacing: S.section) { comebacks; tracks }.padding(.top, S.section) }
                 }
             } else {
                 Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); TastePicks(); artists; comebacks; tracks }.padding(.top, S.head)
+                    VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists; comebacks; tracks }.padding(.top, S.head)
                 }
             }
         }
@@ -128,7 +128,20 @@ struct DiscoverTab: View {
     }
 
     @ViewBuilder private var artists: some View {
-        if m.recs.isEmpty && m.failed {
+        // Claude's picks, when there are any, are the list: each with its cover and how it sounds beside his artist (one
+        // list for one question, not a text list over the covered one; run 48 gate, blocker 6).
+        if let picks = Taste.shared.on ? Taste.shared.kept.discovery?.data : nil, !picks.isEmpty {
+            VStack(alignment: .leading, spacing: S.head) {
+                SectionHead(text: "artists for you")
+                VStack(spacing: S.figures) {
+                    ForEach(picks, id: \.self) { p in
+                        let r = m.recs.first { $0.id == p.artist.lowercased() }
+                        ArtistRec(r: Rec(name: p.artist, because: [p.like], score: 0, plays: 0, album: r?.album ?? "", image: r?.image), say: false, why: p.why)
+                    }
+                }
+            }
+            .padding(.horizontal, S.margin)
+        } else if m.recs.isEmpty && m.failed {
             VStack(spacing: S.inner) {
                 Text("Last.fm isn't answering, so there's nothing to suggest yet.").font(.body).foregroundStyle(.white).multilineTextAlignment(.center)
                 Button("Try again") { m.appear() }
@@ -175,6 +188,8 @@ struct ArtistRec: View {
     let r: Rec
     // Said only when it tells one from another: on a page where every artist is new it's the same words on every card.
     var say = true
+    // How it sounds beside his artist, in a few words (Claude's picks).
+    var why: String? = nil
     var body: some View {
         // The way out sits under the words, in line with them: beside them it squeezed the reason to a sliver folded.
         VStack(alignment: .leading, spacing: S.gap) {
@@ -184,6 +199,7 @@ struct ArtistRec: View {
                     VStack(alignment: .leading, spacing: S.pair) {
                         Text(r.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
                         Text("Because you play \(r.because.joined(separator: " and "))").font(.subheadline).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
+                        if let why, !why.isEmpty { Text(why).font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85)).fixedSize(horizontal: false, vertical: true) }
                         if say { Text(r.plays == 0 ? "New to you" : "You: \(plays(r.plays))").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85)) }
                     }
                     Spacer(minLength: 0)
