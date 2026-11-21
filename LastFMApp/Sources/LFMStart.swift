@@ -37,6 +37,8 @@ struct StartTab: View {
             }
         }
         .onChange(of: links.panel) { _, p in if let p { page = p; links.panel = nil } }
+        // Claude's pieces that are due, once his whole history is in (each at most daily, only when it has moved).
+        .task(id: sync.complete) { await Taste.shared.refresh() }
     }
 
     private func stats(wide: Bool, strip: Bool = false) -> some View {
@@ -65,6 +67,9 @@ struct StartTab: View {
             PaceCard().padding(.horizontal, S.margin)
             MilestoneCard().padding(.horizontal, S.margin)
             TimeCard()
+            // What his listening says, in words, and a question about it.
+            TastePortrait()
+            TasteAsk()
         }
     }
 
@@ -105,6 +110,7 @@ struct StartTab: View {
     private var lately: Panel {
         Panel(2, "lately") {
             VStack(alignment: .leading, spacing: S.section) {
+                TasteWeekNote()
                 WeekHub(title: "on repeat", list: store.insights.week)
                 RisingCard().padding(.horizontal, S.margin)
                 CanonCard().padding(.horizontal, S.margin)

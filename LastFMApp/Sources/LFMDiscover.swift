@@ -97,13 +97,13 @@ struct DiscoverTab: View {
         Group {
             if pane {
                 FoldSplit {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists }.padding(.top, S.head) }
+                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); TastePicks(); artists }.padding(.top, S.head) }
                 } right: {
                     Page(top: top) { VStack(alignment: .leading, spacing: S.section) { comebacks; tracks }.padding(.top, S.section) }
                 }
             } else {
                 Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists; comebacks; tracks }.padding(.top, S.head)
+                    VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); TastePicks(); artists; comebacks; tracks }.padding(.top, S.head)
                 }
             }
         }

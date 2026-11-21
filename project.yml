@@ -223,6 +223,8 @@ targets:
         CFBundleDisplayName: Rotation
         LastFMKey: ""
         LastFMUser: ""
+        # Claude's key for the taste writing (portrait, week note, picks, ask), set at signing; empty, those hide.
+        AnthropicKey: ""
         # The widgets' links into the app (rotation://you, /now, /artist?name=…; LinkScheme).
         CFBundleURLTypes: [{ CFBundleURLName: rotation, CFBundleURLSchemes: [rotation] }]
         CADisableMinimumFrameDurationOnPhone: true
