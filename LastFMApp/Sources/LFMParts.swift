@@ -11,13 +11,21 @@ extension EnvironmentValues {
 
 // Anything that opens a page: an artist, album or track, from anywhere. With a cover to grow out of, the page zooms
 // from it; else it slides in like any page.
+// The cover a row showed for an artist as it was pressed: the artist's page opens on it in its first frame, never on a
+// stand-in that the real cover replaces a moment later (run 44, tap-artist at 18.4 s).
+@MainActor enum Seed { static var art: [String: ArtRef] = [:] }
+
 struct Opens<C: View>: View {
     let route: Route
     var zoom: String? = nil
+    var seed: ArtRef? = nil
     @ViewBuilder let label: () -> C
     @Environment(\.openRoute) private var open
     var body: some View {
-        Button { open(Go(route: route, zoom: zoom)) } label: { label().contentShape(Rectangle()) }
+        Button {
+            if case .artist(let a) = route, let seed { Seed.art[a] = seed }
+            open(Go(route: route, zoom: zoom))
+        } label: { label().contentShape(Rectangle()) }
             .buttonStyle(Press())
     }
 }
@@ -30,7 +38,7 @@ struct CoverButton: View {
     var px = 300
     var corner: CGFloat = 8
     var body: some View {
-        Opens(route: route, zoom: source) { ArtView(ref, px: px, corner: corner).zoomSource(source) }
+        Opens(route: route, zoom: source, seed: ref) { ArtView(ref, px: px, corner: corner).zoomSource(source) }
             .accessibilityLabel(label)
     }
     private var label: String {
@@ -85,7 +93,7 @@ struct EntryRow: View {
     var trailing: String? = nil       // replaces the plays on the right (a date, when sorted by one)
     var peak: Int? = nil              // the list's most played: with it, each row draws its plays as a bar against that
     var body: some View {
-        Opens(route: e.route, zoom: "\(context)|\(e.id)") {
+        Opens(route: e.route, zoom: "\(context)|\(e.id)", seed: e.art) {
             HStack(spacing: S.gap) {
                 if showRank {
                     VStack(spacing: S.pair) {
@@ -348,7 +356,11 @@ struct FigureLayout: Layout {
 private struct PageWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 390 }
 extension EnvironmentValues {
     var pageWidth: CGFloat { get { self[PageWidthKey.self] } set { self[PageWidthKey.self] = newValue } }
+    // How far past the page's sides the screen runs, under the side bars (a pivot's page): a wall or a strip that
+    // should reach the screen's true edge runs on by this much instead of stopping short at an invisible line (run 44).
+    var pageBleed: EdgeInsets { get { self[PageBleedKey.self] } set { self[PageBleedKey.self] = newValue } }
 }
+private struct PageBleedKey: EnvironmentKey { static let defaultValue = EdgeInsets() }
 
 // A page's scroll: content, the bottom air, and back to the top when its tab is tapped again.
 struct Page<C: View>: View {

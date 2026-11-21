@@ -291,7 +291,10 @@ struct ChartsTab: View {
 
     // One stretch's chart: its figures and its collage (the list follows, or sits on the right open flat).
     @ViewBuilder private func content(_ p: Period, onlyLeft: Bool, collage withCollage: Bool = true) -> some View {
-        let hit = p == m.period ? (m.entries, m.summary) : (m.cache[m.key(p, m.kind)] ?? ([], nil))
+        // The kept chart first, for the stretch on screen too: between the chart being worked out and it being handed
+        // to the page, the page's own list was still empty and read "Nothing played in this stretch." over a full list
+        // for a moment (run 44, tap-artist at 11 s).
+        let hit = m.cache[m.key(p, m.kind)] ?? (p == m.period ? (m.entries, m.summary) : ([], nil))
         // A spinner only while it's being worked out: a stretch with nothing in it (a quiet past week) or a chart
         // Last.fm didn't send says so, instead of spinning for ever.
         if hit.0.isEmpty {

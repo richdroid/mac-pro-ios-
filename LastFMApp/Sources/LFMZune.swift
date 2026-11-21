@@ -421,7 +421,10 @@ struct MixView: View {
 // it. Drawn once into one picture (it is still: nothing here moves by the frame), from covers already on the phone.
 struct ArtWall: View {
     let tint: Color
-    @Environment(\.pageWidth) private var width
+    @Environment(\.pageWidth) private var page
+    @Environment(\.pageBleed) private var bleed
+    // To the screen's edges, under the side bars (run 44: a hard edge and a strip of other ground under the rail).
+    private var width: CGFloat { page + bleed.leading + bleed.trailing }
     // His week's albums, then what he's played lately: gathered once a launch, there in the first frame.
     private static let covers: [ArtRef] = gather(Store.shared.recent)
     static func gather(_ recent: [Scrobble]) -> [ArtRef] {
@@ -435,10 +438,10 @@ struct ArtWall: View {
     var body: some View {
         let refs = Self.covers
         if refs.count >= 6, !Diag.off("wall") {
-            let cols = width >= 560 ? 8 : 5
+            let cols = page >= 560 ? 8 : 5
             let side = (width / CGFloat(cols)).rounded(.up)
             // As deep as what's on: the cover and the song's words under it folded; the cover beside its words with room.
-            let depth: CGFloat = width >= 560 ? 440 : min(width - S.margin * 2, 440) + 300
+            let depth: CGFloat = page >= 560 ? 440 : min(page - S.margin * 2, 440) + 300
             let rows = Int((depth / side).rounded(.up))
             VStack(spacing: 0) {
                 ForEach(0..<rows, id: \.self) { r in
@@ -452,10 +455,16 @@ struct ArtWall: View {
             .colorMultiply(tint)
             .opacity(0.42)
             // Darker toward its foot, where the song's words lie over it, and gone into the ground at the end.
-            .overlay { LinearGradient(stops: [.init(color: S.ground.opacity(0.3), location: 0), .init(color: S.ground.opacity(0.62), location: 0.55), .init(color: S.ground, location: 1)], startPoint: .top, endPoint: .bottom) }
+            .overlay { LinearGradient(stops: [.init(color: S.ground.opacity(0.3), location: 0), .init(color: S.ground.opacity(0.62), location: 0.55), .init(color: S.ground.opacity(0.75), location: 1)], startPoint: .top, endPoint: .bottom) }
+            // Its foot fades out into whatever ground is behind (the page's tint, not always the plain ground), so no
+            // edge of it shows and a word near it is never half on it (run 44, upright: the name straddled a hard edge).
+            // Drawn once with the rest, never per frame.
+            .mask { LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom) }
             .drawingGroup()
             .frame(width: width, height: side * CGFloat(rows), alignment: .topLeading)
             .clipped()
+            // Laid centred on the page, so moved by half the difference to start at the screen's left edge.
+            .offset(x: (bleed.trailing - bleed.leading) / 2)
             // From where the pivot's names fade the page out.
             .offset(y: -S.head - 26)
             .allowsHitTesting(false)

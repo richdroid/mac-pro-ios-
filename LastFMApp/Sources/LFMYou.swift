@@ -282,6 +282,7 @@ struct RisingCard: View {
 struct WeekHub: View {
     let title: String
     let list: [ArtistCount]
+    @Environment(\.pageBleed) private var bleed
     var body: some View {
         if !list.isEmpty {
             VStack(alignment: .leading, spacing: S.head) {
@@ -291,11 +292,15 @@ struct WeekHub: View {
                         ForEach(Array(list.enumerated()), id: \.element.id) { k, a in tile(k, a) }
                     }
                     .scrollTargetLayout()
-                    .padding(.horizontal, S.margin)
+                    .padding(.leading, S.margin + bleed.leading)
+                    .padding(.trailing, S.margin + bleed.trailing)
                 }
                 .scrollIndicators(.hidden)
                 .scrollTargetBehavior(.viewAligned)
-                // Kept to the page: a scroll draws past its frame into the safe area, under the side bar's buttons.
+                // Runs under the side bar to the screen's edge, as Zune's strips run off it (run 44: cut mid-name at an
+                // invisible line short of the rail), and clipped there.
+                .padding(.leading, -bleed.leading)
+                .padding(.trailing, -bleed.trailing)
                 .clipped()
             }
         }

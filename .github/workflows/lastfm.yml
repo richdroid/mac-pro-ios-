@@ -194,6 +194,10 @@ jobs:
           Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pivot-charts 1 26 -tab 1
           Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-library 1 24 -tab 2
           STEPS="slow:10 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 26 -tab 0 -panel 1
+          # Today scrolled with one thing off at a time (the cover wall, the drifting name): which one costs the frames
+          # that scroll-now-idle does not lose (run 44 gate, blocker 6).
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-now-nowall 1 18 -tab 0 -panel 1 -off wall
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-now-nodrift 1 18 -tab 0 -panel 1 -off drift
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 slow:2 shot:2" film scroll-now-idle 1 20 -tab 0 -panel 1 -playing NO
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 30 -tab 0
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-story 1 34 -tab 0 -panel 3

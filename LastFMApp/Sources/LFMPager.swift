@@ -195,10 +195,14 @@ struct Pager: View {
                     .padding(.leading, side.leading)
                     .padding(.trailing, side.trailing)
             }
-            .contentMargins(.top, head, for: .scrollContent)
+            // The page is cut just under the names, so nothing scrolled up is ever read through them (run 44,
+            // scroll-now at 20 s: a row's title under "sam today"); the shade over that line lets it come in soft.
+            .contentMargins(.top, S.head, for: .scrollContent)
+            .padding(.top, head - S.head)
             .contentMargins(.bottom, foot, for: .scrollContent)
             .scrollIndicators(.hidden)
             .environment(\.pageWidth, pw)
+            .environment(\.pageBleed, EdgeInsets(top: 0, leading: side.leading, bottom: 0, trailing: side.trailing))
             .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
             .onChange(of: top) { _, _ in if page == p.id { withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } } }
             .task {
@@ -279,7 +283,7 @@ private struct PivotHeaders: View {
         // The names run on to the right and fade out before the page's edge: never a word cut at the side bar, or
         // showing again beyond it under the camera (run 40). A mask of this one row, not a patch of colour over it.
         .mask {
-            LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 1 - 44 / max(pw, 88)), .init(color: .clear, location: 1)],
+            LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 1 - 96 / max(pw, 192)), .init(color: .clear, location: 1)],
                            startPoint: .leading, endPoint: .trailing)
         }
         .onAppear { pos.scrollTo(x: Self.at(f, rests)) }

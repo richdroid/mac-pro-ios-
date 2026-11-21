@@ -217,6 +217,13 @@ struct ArtistPage: View {
     @State private var story: Story?
     @State private var info: ArtistInfo?
     @State private var cover: ArtRef?
+    init(name: String) {
+        self.name = name
+        // What the row he pressed showed, and what this page found the last time it opened: there in the first frame.
+        _cover = State(initialValue: Self.kept[name]?.cover ?? Seed.art[name])
+        _story = State(initialValue: Self.kept[name]?.story)
+    }
+    @MainActor static var kept: [String: (cover: ArtRef?, story: Story?)] = [:]
     @State private var apple: URL?
     @State private var similar: [Entry] = []
     @State private var theirs: [Entry] = []
@@ -278,7 +285,10 @@ struct ArtistPage: View {
         async let st = HistoryDB.reader.story(artist: name, median: median)
         async let c = ArtistArt.ref(name)
         story = await st
-        cover = await c
+        // Changed only if it's really another cover, so the seeded one isn't drawn again.
+        let cv = await c
+        if cv.key != cover?.key { cover = cv }
+        Self.kept[name] = (cover, story)
         let i = await ArtistInfo.load(name)
         info = i
         // Last.fm's top tracks, each with his own plays of it, and covers from his history where he has them.
