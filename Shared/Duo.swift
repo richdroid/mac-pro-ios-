@@ -670,6 +670,18 @@ struct BottomBarTabs<Content: View>: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         #endif
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        // Under the bar the page fades into the ground, the system's soft edge: a card's words read through the glass,
+        // doubled and cut off, where the page ran on beneath it (Richard, 2026-11-21, Status).
+        .overlay(alignment: .bottom) {
+            if !keyboardUp {
+                let ground = scheme == .dark ? Color.black : Color.white
+                LinearGradient(stops: [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: 0.4), .init(color: ground, location: 1)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Self.height + Self.inset * 2 + 52)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .ignoresSafeArea(.container, edges: .bottom)
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay(alignment: .bottom) {
             // No wider than the system's own bar is where there's room (open upright): centred, not stretched.
             bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)

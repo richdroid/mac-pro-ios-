@@ -20,7 +20,7 @@ struct MacProApp: App {
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
-                    if p == .active { Reach.shared.cameForward(); model.start(); PushToken.share(model.api) } else { model.stop() }
+                    if p == .active { Reach.shared.cameForward(); model.start(); PushToken.share(model.api) } else { model.stop(); UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: AppModel.leftAtKey) }
                     #if os(iOS)
                     if p == .background { AlertWatch.shared.scheduleRefresh(); WidgetCenter.shared.reloadAllTimelines() }
                     #endif
@@ -499,6 +499,7 @@ struct RootView: View {
         if let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow ?? ($0 as? UIWindowScene)?.windows.first }).first {
             _sideways = State(initialValue: Self.isSideways(w.bounds.size))
             _window = State(initialValue: w.bounds.size)
+            _strip = State(initialValue: w.safeAreaInsets.right)
         }
         #endif
     }
@@ -507,6 +508,13 @@ struct RootView: View {
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     // Folded on its side: wider than tall and short (466 pt; open flat is 669 pt, whose system rail holds all six).
     @State private var sideways = false
+    // The strip the system keeps down the trailing edge on the cover display and open flat (the clock, the camera, its
+    // Back and the gear). Wherever it is there, the tabs stand in it, as the Duo's own apps have theirs (HIG, "Vertical
+    // controls": "the system places toolbars and tab bars on the side"), and nothing is drawn along the foot. Folded
+    // upright the app drew a bar along the foot as well as that strip: two places of controls, the bar over the cards
+    // (Richard, 2026-11-21: "this looks fucked up man wtf" / "this isnt how iphone duo apps look").
+    @State private var strip: CGFloat = 0
+    private var railSide: Bool { sideways || wide || strip >= 40 }
     static func isSideways(_ s: CGSize) -> Bool { s.width > s.height && s.height < 600 }
     // Where the system's bar holds five tabs and puts the rest under "More": wherever the width is compact (UIKit's own
     // rule for a tab bar), not by a guessed size.
@@ -568,11 +576,11 @@ struct RootView: View {
             // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
             // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
             let n = model.nav
-            let open = (n.settingsOpen && n.settingsTab == t) || (t == 0 && (n.history != nil || n.processes != nil)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
+            let open = (n.settingsOpen && n.settingsTab == t) || (t == 0 && (n.history != nil || n.processes != nil || n.dashPage != nil)) || (t == 1 && n.appHistory != nil) || (t == 2 && n.sessionScreen != nil) || (t == 5 && n.macPage != nil)
                 || (t == 6 && (n.dashHistory != nil || n.dashProcesses != nil || n.dashPage != nil))
             if open {
                 if n.settingsOpen && n.settingsTab == t { n.settingsOpen = false }
-                if t == 0 { n.history = nil; n.processes = nil }
+                if t == 0 { n.history = nil; n.processes = nil; n.dashPage = nil }
                 if t == 1 { n.appHistory = nil }
                 if t == 2 { n.sessionScreen = nil }
                 if t == 5 { n.macPage = nil }
@@ -593,7 +601,11 @@ struct RootView: View {
                 // 2026-11-19: "never more tabs thing"), so on its side the app draws the rail itself, the system's look
                 // (a glass capsule of icons, the tab in front in the accent colour), all six in it. Every other posture
                 // keeps the system's own bar, which fits all six only where it's wide (open); upright and narrow the app draws a bar too.
-                if sideways || wide {
+                // Open upright too, where the system keeps no strip: the same pill at the foot of the trailing edge, the
+                // page keeping clear of its column. No bar along the foot in any posture (Richard's reference of
+                // 2026-11-21, "this is what iphone duo apps look like": content on the left, one rail on the right with
+                // the tabs as a vertical pill at its foot).
+                if railSide || !Self.systemTabs {
                     SideRailTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
                 } else if narrow || !Self.systemTabs {
                     // Upright and narrow (folded), the system's bar holds five and put Dashboard under "More": the app
@@ -629,6 +641,7 @@ struct RootView: View {
                 }
             }
             .tint(macBlue)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { strip = $0 }
             .onChange(of: model.tab) { _, t in
                 UserDefaults.standard.set(t, forKey: "tab")
                 // A tab opens on the Mac as it is now, not as it was at the last 10-second reading.
@@ -1039,7 +1052,7 @@ struct StackPages: ViewModifier {
             .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom() }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
-            .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 6 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
+            .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 0 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
                 Group { switch p {
                 case .health: MacHealthView(model: model)
                 case .restart: MacRestartView(model: model)
@@ -1330,7 +1343,35 @@ struct Hero: View {
     @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     let s: Status
-    var body: some View {
+    @Environment(\.sideRail) private var rail
+    @Environment(\.paneLayout) private var panes
+    // Folded (one column beside the rail), the Mac's portrait sits beside its name, a third the height, so the figures
+    // he opens Status for start above the fold (Richard, 2026-11-21: the big picture pushed them below the screen).
+    private var chips: some View {
+        // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
+        HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale, fresh: model.gotFresh, route: model.route, pulse: model.pulse) {
+            model.macPage = .health
+        }
+    }
+    @ViewBuilder var body: some View {
+        if rail > 0 && !panes {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 14) {
+                    Image("MacPro").resizable().scaledToFit().frame(height: 72)
+                        .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 92, height: 72))
+                        .accessibilityLabel("Mac Pro, Late 2013")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Mac Pro").font(.system(size: 24, weight: .bold))
+                        Text("macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+                    }
+                    Spacer(minLength: 0)
+                }
+                chips
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else { tall }
+    }
+    @ViewBuilder var tall: some View {
         let _ = SwipeLog.mark("hero body")
         VStack(spacing: 2) {
             Image("MacPro").resizable().scaledToFit().frame(height: 148)
@@ -1342,7 +1383,7 @@ struct Hero: View {
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
             HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale, fresh: model.gotFresh, route: model.route, pulse: model.pulse) {
-                model.tab = 6; model.macPage = .health
+                model.macPage = .health
             }
             .padding(.top, 9)
         }
@@ -1548,7 +1589,15 @@ struct StatusTab: View {
         let dim = model.stale ? staleDim : 1
         Section { LiveTiles(s: s).opacity(dim).place("tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if showTemps, let temps = s.temps, !temps.isEmpty {
-            Section { TempDials(s: s).opacity(dim).place("temps") } header: { TempsHeader(s: s) }
+            Section {
+                TempDials(s: s).opacity(dim).place("temps")
+                // The fans are driven where their heat is read.
+                Button { model.macPage = .fans } label: {
+                    HStack { Text("Fans & heat").foregroundStyle(Color.primary); Spacer(); RowChevron() }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .place("temps-fans")
+            } header: { TempsHeader(s: s) }
         }
         if showDisk {
             Section("Disk") {
@@ -1568,6 +1617,12 @@ struct StatusTab: View {
                 }
                 .buttonStyle(PressStyle())
                 .place("disk")
+                // What fills it, and the clean-up, where the disk is read.
+                Button { model.macPage = .storage } label: {
+                    HStack { Text("Storage").foregroundStyle(Color.primary); Spacer(); RowChevron() }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .place("disk-storage")
             }
         }
     }
@@ -2747,9 +2802,8 @@ struct ControlTab: View {
             } header: { Text("Reaching the Mac") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
-            // Connections, fans, updates, storage, startup items and Everything were here too, as rows into the same pages
-            // the Dashboard's tiles open; they live on the Dashboard now (2026-11-18: "the app is a mess and needs to be
-            // streamlined"). What's run by hand stays here: the Mac's jobs and its restart.
+            // The Mac's pages, each with how it stands, then what's run by hand: its jobs and its restart.
+            UpkeepSection(s: s)
             RunOnMacSection()
         }
     }

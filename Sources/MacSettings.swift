@@ -6,7 +6,7 @@ struct MacSettings: View {
     @AppStorage("accent") private var accent = "blue"
     @AppStorage("celsius") private var celsius = false
     @AppStorage("haptics") private var haptics = true
-    @AppStorage(MacFollow.defaultsKey) private var macFollows = true
+    @AppStorage(MacFollow.defaultsKey) private var macFollows = false
     @ObservedObject private var console = ConsoleRemote.shared
     @AppStorage("naturalScroll") private var naturalScroll = true
     @AppStorage("liveEvery") private var liveEvery = 1.0
@@ -101,10 +101,8 @@ struct MacSettings: View {
             }
             // The Mac's Console turns to the page he's on here, when it's already on screen and free (MacFollow).
             Toggle("Mac follows this iPhone", isOn: $macFollows)
-            // The Console's own two settings, moved here from the Dashboard (ruling 2026-11-11: settings belong in
-            // Settings). They are the Mac's: read from the Console and set on it, greyed while it isn't running.
-            Toggle("Boards take turns on the Mac", isOn: Binding(get: { console.state?.rotate == true }, set: { console.send(model, "rotate", "rotate", $0 ? "on" : "off") }))
-                .disabled(console.state?.running != true)
+            // The Console's animations are the Mac's: read from the Console and set on it, greyed while it isn't running.
+            // (Boards take turns is a switch on the Dashboard's remote, 2026-11-21.)
             Picker("Animations on the Mac", selection: Binding(get: { console.state?.animations ?? "full" }, set: { console.send(model, "animations", "animations", $0) })) {
                 Text("Full").tag("full"); Text("Gentle").tag("gentle"); Text("Off").tag("off")
             }
