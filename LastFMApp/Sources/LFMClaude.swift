@@ -316,11 +316,11 @@ struct TasteKept: Codable {
         ]
         k.week = .init(data: "A heavier week than usual, and Nadia Sorel took most of it, with Glass Harbor keeping close as a regular.", at: Clock.now, sig: "")
         k.discovery = .init(data: [
-            TastePick(artist: "Marlow Fen", like: "Nadia Sorel", why: "same glow, slower and more hushed"),
-            TastePick(artist: "The Quiet Year", like: "Low Tide", why: "the same blur with a drum machine"),
-            TastePick(artist: "Ivy Calloway", like: "June Halverson", why: "brighter, more tuneful"),
-            TastePick(artist: "North Pier", like: "Glass Harbor", why: "colder, drier edges"),
-            TastePick(artist: "Saint Lune", like: "Cassio Vale", why: "hazier, chopped and underground"),
+            TastePick(artist: "Marrow Lane", like: "Nadia Sorel", why: "same glow, slower and more hushed"),
+            TastePick(artist: "Juniper Static", like: "Low Tide", why: "the same blur with a drum machine"),
+            TastePick(artist: "Hollis Wren", like: "June Halverson", why: "brighter, more tuneful"),
+            TastePick(artist: "Saltwater Hymns", like: "Glass Harbor", why: "colder, drier edges"),
+            TastePick(artist: "Night Ferry", like: "Cassio Vale", why: "hazier, chopped and underground"),
         ], at: Clock.now, sig: "")
         k.asked = [TasteAsked(q: "How much Nadia Sorel have I played this year?", answer: "You have played Nadia Sorel 2,790 times in all, 912 of them this year, and first played them in February 2019.", day: LocalDay.today)]
         return k
