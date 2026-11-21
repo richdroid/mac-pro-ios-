@@ -27,6 +27,9 @@ final class QueueStore: ObservableObject {
     // rows changing.
     final class Showing: ObservableObject { @Published var on = false }
     let showing = Showing()
+    // Reordering: the rows' handles show only while this is on (his rule: no drag grips at rest). Turned on by the list's
+    // "Reorder" or a row's menu, off by "Done" or when the list goes.
+    @Published var arranging = false
     private var wanted = 12
     private var misses = 0
     // Edits waiting to go (one at a time, in order: two at once would cross in Mint's page) and the one on its way.
@@ -152,6 +155,7 @@ struct QueueRows: View {
     // near either edge carries the list with it.
     var viewport: CGRect = .zero
     var scroll: ((CGFloat) -> CGFloat)? = nil
+    @ObservedObject private var store = QueueStore.shared
     @State private var dragging: String?
     @State private var dy: CGFloat = 0
     @State private var auto: CGFloat = 0
@@ -175,7 +179,7 @@ struct QueueRows: View {
     var body: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.uid) { i, item in
-                QueueRow(item: item, height: rowHeight, lifted: dragging == item.uid,
+                QueueRow(item: item, height: rowHeight, lifted: dragging == item.uid, arranging: store.arranging,
                          jump: { jump(i) }, remove: { remove(i) }, toTop: i > 0 ? { toTop(i) } : nil,
                          up: i > 0 ? { move(i, i - 1) } : nil, down: i < items.count - 1 ? { move(i, i + 1) } : nil,
                          drag: .init(
@@ -201,7 +205,7 @@ struct QueueRows: View {
         .onChange(of: items.map(\.uid)) { _, now in
             if let d = dragging, !now.contains(d) { release() }
         }
-        .onDisappear { if dragging != nil { release() } }
+        .onDisappear { if dragging != nil { release() }; store.arranging = false }
         // Held near the top or the foot of the list, it scrolls (faster the nearer the edge) and the row keeps its place under the
         // finger, so a song can be carried far through a long queue.
         .task(id: dragging) {
@@ -224,6 +228,7 @@ private struct QueueRow: View {
     let item: QueueItem
     let height: CGFloat
     let lifted: Bool
+    let arranging: Bool
     let jump: () -> Void
     let remove: () -> Void
     let toTop: (() -> Void)?
@@ -271,7 +276,8 @@ private struct QueueRow: View {
                         else if x < -44 { withAnimation(.snappy(duration: 0.22)) { x = -Self.reveal } }
                         else { withAnimation(.snappy(duration: 0.22)) { x = 0 } }
                     })
-                // The handle: a touch on it takes the row at once, and the finger carries it.
+                // The handle, only while reordering: a touch on it takes the row at once, and the finger carries it.
+                if arranging {
                 Image(systemName: "line.3.horizontal").font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
                     .frame(width: 44, height: height).contentShape(Rectangle())
                     // A short hold first, so a scroll that starts on the handle is still a scroll; the state goes back to nil when
@@ -282,6 +288,8 @@ private struct QueueRow: View {
                         if let now { drag.changed(now) } else if old != nil { drag.ended() }
                     }
                     .accessibilityHidden(true)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
             .offset(x: x)
             .background(lifted ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color.clear), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -297,6 +305,7 @@ private struct QueueRow: View {
         .accessibilityAction(named: "Move down") { down?() }
         .contextMenu {
             if let toTop { Button("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") { Haptic.fire(.tap); toTop() } }
+            if !arranging { Button("Reorder", systemImage: "arrow.up.arrow.down") { Haptic.fire(.tap); withAnimation(.snappy(duration: 0.25)) { QueueStore.shared.arranging = true } } }
             Button("Remove from queue", systemImage: "minus.circle", role: .destructive) { remove() }
         }
     }
@@ -320,9 +329,13 @@ struct QueueList: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if queue.items.isEmpty {
-                    ContentUnavailableView("Nothing queued", systemImage: "music.note.list", description: Text("Hold a song or an album and choose Play next or Play later."))
+                    ContentUnavailableView("Nothing up next", systemImage: "music.note.list")
                         .padding(.top, 40)
                 } else {
+                    HStack {
+                        Spacer()
+                        ArrangeButton()
+                    }
                     QueueRows(items: queue.items, move: { queue.move($0, to: $1) }, remove: { queue.remove($0) },
                               jump: { queue.jump($0); dismiss() }, toTop: { queue.moveToTop($0) }, viewport: viewport, scroll: scrollBy)
                     if queue.total > queue.items.count {
@@ -411,8 +424,12 @@ struct PlayModes: View {
             mode(icon: "shuffle", on: queue.shuffle, label: "Shuffle", value: queue.shuffle ? "On" : "Off") { queue.setShuffle(!queue.shuffle) }
                 // Until Mint has said, the keys are there but quiet: they would be setting what isn't known.
                 .opacity(queue.loaded ? 1 : 0.45).disabled(!queue.loaded)
-            mode(icon: "list.bullet", on: showing.on, label: "Up next", value: queue.total > 0 ? "\(queue.total) songs" : "") {
-                Haptic.fire(.tick); withAnimation(.easeOut(duration: 0.25)) { showing.on.toggle() }
+            // Up next only when there is something next: never a key that opens an empty sheet (2026-11-20).
+            if queue.total > 0 || showing.on {
+                mode(icon: "list.bullet", on: showing.on, label: "Up next", value: "\(queue.total) songs") {
+                    Haptic.fire(.tick); withAnimation(.easeOut(duration: 0.25)) { showing.on.toggle() }
+                }
+                .transition(.opacity)
             }
             mode(icon: queue.repeatMode == 1 ? "repeat.1" : "repeat", on: queue.repeatMode != 0, label: "Repeat",
                  value: queue.repeatMode == 0 ? "Off" : queue.repeatMode == 1 ? "One song" : "All") { queue.cycleRepeat() }
@@ -422,11 +439,12 @@ struct PlayModes: View {
     }
     private func mode(icon: String, on: Bool, label: String, value: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 16, weight: .semibold)).frame(width: 46, height: 46).contentShape(Circle())
-                .foregroundStyle(on ? TVLook.accent : .primary)
+            // Full strength, showing their state: lit and filled when on, white when off; never grey on grey.
+            Image(systemName: icon).font(.system(size: 20, weight: .semibold)).frame(width: 56, height: 56).contentShape(Circle())
+                .foregroundStyle(on ? Color.black : Color.white)
+                .background { if on { Circle().fill(TVLook.accent) } }
         }
         .buttonStyle(.plain).keyGlass()
-        .overlay { if on { Circle().strokeBorder(TVLook.accent.opacity(0.55), lineWidth: 1.5) } }
         .accessibilityLabel(label).accessibilityValue(value)
     }
 }
@@ -459,5 +477,18 @@ struct PaneFoot: ViewModifier {
                 }
                 .ignoresSafeArea()
             }
+    }
+}
+
+// "Reorder" over a queue: shows the rows' handles; "Done" puts them away again.
+struct ArrangeButton: View {
+    @ObservedObject private var queue = QueueStore.shared
+    var body: some View {
+        Button { Haptic.fire(.tap); withAnimation(.snappy(duration: 0.25)) { queue.arranging.toggle() } } label: {
+            Text(queue.arranging ? "Done" : "Reorder").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
+                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(queue.arranging ? "Done reordering" : "Reorder")
     }
 }

@@ -529,7 +529,7 @@ struct SearchPage: View {
                         field.padding(.top, 12)
                         ScrollView {
                             VStack(alignment: .leading, spacing: 22) {
-                                if draft.text.isEmpty { RecentSearches(store: store) } else { ResultList(results: store.results, part: .left) }
+                                if draft.text.isEmpty { SearchIdle(store: store, part: .left) } else { ResultList(results: store.results, part: .left) }
                             }
                             .padding(.bottom, 12)
                         }
@@ -539,7 +539,7 @@ struct SearchPage: View {
                 } right: {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
-                            if draft.text.isEmpty { SearchSuggestions() } else { ResultList(results: store.results, part: .right) }
+                            if !draft.text.isEmpty { ResultList(results: store.results, part: .right) } else { SearchIdle(store: store, part: .right) }
                         }
                         .padding(.vertical, 12)
                     }
@@ -551,9 +551,10 @@ struct SearchPage: View {
                     field.padding(.top, 12)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
+                            // Idle: the recent searches, then things to search for and what was flicked lately. Never an
+                            // empty page (gate 3); Continue watching keeps its one home, Watch.
                             if draft.text.isEmpty {
-                                RecentSearches(store: store)
-                                SearchSuggestions()
+                                SearchIdle(store: store, part: .all)
                             } else {
                                 ResultList(results: store.results, part: .all)
                             }
@@ -575,8 +576,8 @@ struct SearchPage: View {
         .onChange(of: model.flicking != nil) { _, up in if up { focused = false; SendDraft.shared.wantsFocus = false; Keyboard.dismiss() } }
         // Continue watching there on the first frame, not cut in under the page later.
         .task { await BrowseStore.shared(.stremio).loadHome() }
-        // The tab opened straight (at launch, or before anything asked for the keyboard): the field takes it.
-        .onAppear { if !draft.wantsFocus, model.flicking == nil { draft.wantsFocus = true; draft.focusRequest += 1 } }
+        // The keyboard comes when he taps the field (or the tab again), in every posture alike, never by itself on arrival
+        // (2026-11-20: a cursor and no keyboard upright, the keyboard at once on its side).
     }
     var link: Bool { SendBar.isLink(draft.text) }
     var field: some View {
@@ -599,7 +600,7 @@ struct SearchPage: View {
                 // Return sends a link; for words it does the obvious thing with the top result, as a tap on it would.
                 .onSubmit {
                     store.touched = true
-                    if link { Keyboard.dismiss(); model.send(draft.text); draft.text = "" }
+                    if link { Keyboard.dismiss(); model.flick(SearchStore.linkTarget(draft.text)); draft.text = "" }
                     else if let h = store.results.top { store.open(h, model: model, origin: nil) }
                     else { store.remember(); focused = false }
                 }
@@ -630,13 +631,13 @@ struct SearchPage: View {
                 PasteButton(payloadType: String.self) { got in
                     guard let s = got.first?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return }
                     Task { @MainActor in
-                        if SendBar.isLink(s) { store.touched = true; Keyboard.dismiss(); model.send(s) } else { draft.text = s }
+                        if SendBar.isLink(s) { store.touched = true; Keyboard.dismiss(); model.flick(SearchStore.linkTarget(s)) } else { draft.text = s }
                     }
                 }
                 .labelStyle(.iconOnly).buttonBorderShape(.circle).tint(TVLook.accent.opacity(0.25)).padding(.trailing, 4)
             } else if link {
-                Button { store.touched = true; Keyboard.dismiss(); model.send(draft.text); draft.text = "" } label: { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44) }
-                    .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send to the TV")
+                Button { store.touched = true; Keyboard.dismiss(); model.flick(SearchStore.linkTarget(draft.text)); draft.text = "" } label: { Image(systemName: "arrow.right.circle.fill").font(.title2).frame(width: 44, height: 44) }
+                    .buttonStyle(.plain).foregroundStyle(.white).accessibilityLabel("Open the link as a card")
             } else {
                 Button { draft.text = ""; focused = true } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }
                     .buttonStyle(.plain).accessibilityLabel("Clear search")
@@ -870,6 +871,73 @@ private struct LinkRow: View {
         }
         .buttonStyle(PressCard())
         .padding(.horizontal, 12)
+    }
+}
+
+// Before anything is typed. One column: recent searches, titles to search for, recently flicked. Open flat, the left
+// pane has the recent searches (or, with none, what was flicked) and the right the titles to try, so neither is bare.
+private struct SearchIdle: View {
+    enum Part { case all, left, right }
+    @ObservedObject var store: SearchStore
+    let part: Part
+    @ObservedObject private var home = BrowseStore.shared(.stremio)
+    @ObservedObject private var flicks = RecentFlicks.shared
+    // Titles to try: the films and shows of Stremio's home that aren't his own (Continue watching has its home on Watch).
+    var tries: [String] {
+        var seen = Set<String>(), out: [String] = []
+        for r in home.rows where r.title != "Continue watching" {
+            for i in r.items where !i.title.isEmpty && !i.isYouTube && seen.insert(i.title.lowercased()).inserted { out.append(i.title); if out.count == 6 { return out } }
+        }
+        return out
+    }
+    var flicked: [SearchHit] {
+        flicks.list.prefix(4).map { f in SearchHit(kind: f.type == "series" ? .show : .film, item: f.item, match: 0, mine: 30, order: 0) }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            switch part {
+            case .all:
+                RecentSearches(store: store)
+                tryList
+                flickedList
+            case .left:
+                if store.recent.isEmpty { flickedList } else { RecentSearches(store: store) }
+                if store.recent.isEmpty && flicked.isEmpty { tryList }
+            case .right:
+                if !(store.recent.isEmpty && flicked.isEmpty) { tryList }
+                if !store.recent.isEmpty { flickedList }
+            }
+        }
+        .animation(.snappy, value: tries)
+    }
+    @ViewBuilder var tryList: some View {
+        if !tries.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                RowTitle("Try searching").padding(.horizontal, 20)
+                ForEach(tries, id: \.self) { t in
+                    Button { SendDraft.shared.text = t } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).frame(width: 24)
+                            Text(t).font(.body).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+    @ViewBuilder var flickedList: some View {
+        if !flicked.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                RowTitle("Recently flicked").padding(.horizontal, 20)
+                VStack(spacing: 4) { ForEach(flicked) { HitRow(hit: $0) } }.padding(.horizontal, 12)
+            }
+            .transition(.opacity)
+        }
     }
 }
 
@@ -1125,5 +1193,15 @@ struct TitleFacts: View {
     func fact(_ label: String, _ value: String) -> some View {
         (Text(label + "  ").font(.footnote.weight(.semibold)).foregroundStyle(.secondary) + Text(value).font(.footnote))
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+extension SearchStore {
+    // A pasted or typed link, as a card for his hand: opened as a page like any title, and thrown to the TV from there.
+    @MainActor static func linkTarget(_ text: String) -> FlickTarget {
+        let link = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = URL(string: link)?.host?.replacingOccurrences(of: "www.", with: "") ?? "Link"
+        let item = MediaItem(title: host, subtitle: link, art: "", id: link, kind: "link")
+        return FlickTarget(item: item, source: .stremio, send: ("send", ["text": link]))
     }
 }

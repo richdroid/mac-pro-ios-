@@ -1,6 +1,9 @@
 import AVFoundation
 import SwiftUI
 #if canImport(UIKit)
+import UIKit.UIGestureRecognizerSubclass
+#endif
+#if canImport(UIKit)
 import UIKit
 #endif
 #if os(iOS)
@@ -518,6 +521,12 @@ private struct BackToTop: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
+            // The foot of every scrolling page is the bar's own room plus 16 pt, fixed: it never changes while scrolling.
+            // A page shorter than the screen doesn't scroll or bounce, and so never collapses its title (brief 3.7).
+            .contentMargins(.bottom, 16, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+            // One indicator at most where two panes scroll side by side: none (2026-11-20, "this dual scroll bar").
+            .scrollIndicators(.hidden)
             // How far the page has scrolled, for its title to go up with it.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
                 if let pageScroll, abs(pageScroll.y - y) > 0.25 { pageScroll.y = y }
@@ -733,55 +742,91 @@ struct SeasonPivot: View {
         .accessibilityLabel("Seasons")
     }
 }
-// The episodes of the season on: they follow the finger as it pulls, the headers slide in step, and let go past a third of
-// the way or fast, the season on leaves the way the finger went and the next comes in behind it, with a tick.
+// One touch, one owner (brief 8.2, Richard 2026-11-20: "it cant tell if im trying to scroll horizontally or down"). The
+// episode rows are never dragged: any pull on them is the page's scroll, whatever its angle. Seasons change on the header
+// strip alone: a pull there within 30 degrees of level, judged once in its first 10 pt and held until the finger lifts, or a
+// tap on a neighbour's name. The rows only follow the header's change (`swipe.dx`).
 struct SeasonSwipeRows: ViewModifier {
     let seasons: [Int]
     @Binding var season: Int
-    // Where the rows ride the pull themselves; the phone picker's menu stays put and only takes the swipe.
+    // Where the rows ride the header's pull themselves; the phone picker's list stays put.
     var moves = true
+    // The header strip: the one place that takes the sideways pull.
+    var header = false
     var swipe = SeasonSwipe.shared
-    @GestureState private var active = false
-    // The axis the pull took in its first 16 pt, held until the finger lifts: sideways is a season, upward the page's own.
-    @State private var axis = AxisBox()
     func body(content: Content) -> some View {
-        content
-            .offset(x: moves ? swipe.dx : 0)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if moves { swipe.width = $0 } }
-            .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 10)
-                    .updating($active) { _, s, _ in s = true }
-                    .onChanged { g in
-                        guard ShelfHand.shared.item == nil, seasons.count > 1 else { return }
-                        if axis.sideways == nil { axis.sideways = abs(g.translation.width) > abs(g.translation.height) * 1.4 }
-                        guard axis.sideways == true else { return }
-                        swipe.pulledAt = Date()
-                        let k = seasons.firstIndex(of: season) ?? 0
-                        // Past either end, it gives, but only a little.
-                        let blocked = (g.translation.width > 0 && k == 0) || (g.translation.width < 0 && k == seasons.count - 1)
-                        swipe.dx = blocked ? g.translation.width * 0.5 : g.translation.width
-                    }
-                    .onEnded { g in
-                        let sideways = axis.sideways == true
-                        axis.sideways = nil
-                        if sideways { swipe.pulledAt = Date() }
-                        let k = seasons.firstIndex(of: season) ?? 0
-                        let far = abs(g.predictedEndTranslation.width) > 90 || abs(g.translation.width) > 45
-                        let to = g.translation.width < 0 ? k + 1 : k - 1
-                        // A card carried across and put back is no season swipe.
-                        let free = ShelfHand.shared.item == nil && Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35
-                        if sideways, free, far, seasons.count > 1, seasons.indices.contains(to) { SeasonPivot.move(seasons, $season, to: seasons[to]) }
-                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipe.dx = 0 } }
-                    }
-            )
-            // A pull the scroll view took over lets go without an end: the headers and rows come home all the same.
-            .onChange(of: active) { _, on in
-                // Only a pull that never reached its end (onEnded clears the axis first).
-                if !on, axis.sideways != nil { axis.sideways = nil; withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipe.dx = 0 } }
-            }
+        if header {
+            #if canImport(UIKit)
+            content.contentShape(Rectangle()).gesture(SidewaysPull(changed: { pulled($0) }, ended: { let_go($0, $1) }))
+            #else
+            content
+            #endif
+        } else {
+            content
+                .offset(x: moves ? swipe.dx : 0)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if moves { swipe.width = $0 } }
+        }
+    }
+    func pulled(_ dx: CGFloat) {
+        guard seasons.count > 1 else { return }
+        swipe.pulledAt = Date()
+        let k = seasons.firstIndex(of: season) ?? 0
+        // Past either end, it gives, but only a little.
+        let blocked = (dx > 0 && k == 0) || (dx < 0 && k == seasons.count - 1)
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { swipe.dx = blocked ? dx * 0.5 : dx }
+    }
+    func let_go(_ dx: CGFloat, _ vx: CGFloat) {
+        swipe.pulledAt = Date()
+        let k = seasons.firstIndex(of: season) ?? 0
+        let far = abs(dx + vx * 0.2) > 90 || abs(dx) > 45
+        let to = dx < 0 ? k + 1 : k - 1
+        if far, seasons.count > 1, seasons.indices.contains(to) { SeasonPivot.move(seasons, $season, to: seasons[to]) }
+        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipe.dx = 0 } }
     }
 }
+#if canImport(UIKit)
+// A pan that is sideways or nothing: at 10 pt of travel it either is within 30 degrees of level, and owns the touch until
+// it lifts, or it fails for good and the scroll views around it (which wait on it, and only on it) have the touch. Never
+// both. Each decision is a line in the hand's log: travel, angle, owner.
+final class SidewaysPan: UIPanGestureRecognizer {
+    private var start: CGPoint?
+    private var decided = false
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        if start == nil { start = touches.first?.location(in: nil); decided = false }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if !decided {
+            guard let s = start, let p = touches.first?.location(in: nil) else { return }
+            let dx = p.x - s.x, dy = p.y - s.y, travel = hypot(dx, dy)
+            guard travel >= 10 else { return }
+            decided = true
+            let angle = atan2(abs(dy), abs(dx)) * 180 / .pi
+            let sideways = angle <= 30
+            Task { @MainActor in HandLog.note(String(format: "touch travel=%.1f angle=%.0f owner=%@", travel, angle, sideways ? "season" : "scroll")) }
+            if !sideways { state = .failed; return }
+        }
+        super.touchesMoved(touches, with: event)
+    }
+    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool { other is UIPanGestureRecognizer && other.view is UIScrollView }
+    override func reset() { super.reset(); start = nil; decided = false }
+}
+struct SidewaysPull: UIGestureRecognizerRepresentable {
+    let changed: (CGFloat) -> Void
+    let ended: (CGFloat, CGFloat) -> Void
+    func makeUIGestureRecognizer(context: Context) -> SidewaysPan { let g = SidewaysPan(); g.maximumNumberOfTouches = 1; return g }
+    func handleUIGestureRecognizerAction(_ g: SidewaysPan, context: Context) {
+        let dx = g.translation(in: nil).x
+        switch g.state {
+        case .began, .changed: changed(dx)
+        case .ended: ended(dx, g.velocity(in: nil).x)
+        case .cancelled, .failed: ended(0, 0)
+        default: break
+        }
+    }
+}
+#endif
 final class AxisBox { var sideways: Bool? }
 
 // An episode's row, held anywhere on it, lifts its own still (the very picture in the row, 16:9, from where it sits) and
@@ -867,6 +912,7 @@ struct EpisodePicker: View {
     var header: some View {
         // One season has nothing to swipe to: its name stands alone, still large.
         SeasonPivot(seasons: seasons, selected: $season, size: part == .header ? 20 : 30)
+            .modifier(SeasonSwipeRows(seasons: seasons, season: $season, header: true))
     }
     // In a narrow pane the still gives way to the name, so a name is never cut to "Episod…" (r19).
     @State private var narrow = false

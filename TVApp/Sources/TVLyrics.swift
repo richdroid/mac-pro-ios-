@@ -260,13 +260,17 @@ struct MusicExtras: View {
                         // The whole queue as a list of its own, in place of a count of what isn't shown. Over the heading's end, so
                         // its 44 pt target never makes the heading taller than the others.
                         .overlay(alignment: .trailing) {
-                            if upNextTotal > shown {
-                                Button { Haptic.fire(.tap); withAnimation(.easeOut(duration: 0.25)) { QueueStore.shared.showing.on = true } } label: {
-                                    Text("Show all \(upNextTotal)").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
-                                        .frame(minHeight: 44).contentShape(Rectangle())
+                            HStack(spacing: 18) {
+                                if queue.loaded, !queue.items.isEmpty { ArrangeButton() }
+                                if upNextTotal > shown {
+                                    Button { Haptic.fire(.tap); withAnimation(.easeOut(duration: 0.25)) { QueueStore.shared.showing.on = true } } label: {
+                                        Text("Show all \(upNextTotal)").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
+                                            .frame(minHeight: 44).contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain).padding(.bottom, 8)
                             }
+                            .padding(.bottom, 8)
                         }
                     Group {
                         if queue.loaded, !queue.items.isEmpty {

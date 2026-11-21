@@ -22,7 +22,7 @@ final class TVModel {
     var staleStatus = true
     let mirrorStore = MirrorStore()
     // The TV's screen on the Remote: on unless he's turned it off, and kept that way.
-    var mirrorLive = UserDefaults.standard.object(forKey: "mirrorLive") as? Bool ?? true
+    var mirrorLive = true
     #if os(iOS)
     let live = LiveMirror()
     #endif
@@ -107,6 +107,10 @@ final class TVModel {
     var friends: [Film] = []
     var recommended: [Film] = []
     var flicking: FlickTarget?
+    // The title pages showing, newest last, by tab: the tab draws the newest one's ground behind its lip and its page as
+    // one, so there's no band where the lip sits above the stack (gates 3 and 4).
+    struct TitleGroundEntry: Equatable { let id: UUID; let tab: Int; let art: String }
+    var titleGrounds: [TitleGroundEntry] = []
     @ObservationIgnored private var lastFlick: (id: String, at: Date)?
     // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it. Set to what
     // it already is, nothing redraws: every page's ground reads it, and the pick set it again to the same colour in the
@@ -145,30 +149,24 @@ final class TVModel {
     // done with: the keyboard never stays up over what a search led to (Richard, 2026-11-05).
     func flick(_ target: FlickTarget) {
         Keyboard.dismiss()
-        // One at a time. And a send that goes by itself (next episode, an episode picked from the list) taken twice within
-        // three seconds is the same tap, never a second start.
-        // One being taken down after landing on the Remote (retireFlick) doesn't count.
-        guard flicking == nil || flickRetired else { return }
-        // The very thing a start is already under way for (the card tapped again, the same episode picked again while the
-        // TV brings it up): straight to the Remote, where the start is shown; never a second send (2026-11-08).
-        if let st = starting, !st.failed, !st.played, let t = startingTarget, !target.streamsFirst, target.send == nil,
-           t.item.stremioRef?.imdb == target.item.stremioRef?.imdb, t.item.stremioRef?.video == target.item.stremioRef?.video,
-           target.item.stremioRef != nil {
-            tick(); tab = 0; return
-        }
+        // A key that says what it sends (next episode, the one before): sent as it is, no page, no tab change. The same
+        // key twice within three seconds is the same press.
         if target.autoplay {
             if let l = lastFlick, l.id == target.item.id, Date().timeIntervalSince(l.at) < 3 { return }
             lastFlick = (target.item.id, Date())
+            tick()
+            if target.send != nil || target.item.stremioRef == nil { Thrower.sendPlain(self, target: target) }
+            else { Thrower.sendBest(self, item: target.item, velocity: .zero) }
+            return
         }
-        var t = Transaction(); t.disablesAnimations = true
-        // Choosing from the first frame, in the same quiet transaction: set by the screen once it was up, the change
-        // animated the host's inset and the new page's first layout with it, so the page grew in from a narrow column
-        // ("Choos / e on / the TV", CI tv-flicktap at 13 s).
-        // The screen as it is, held over the window while the page is built under it (ScreenVeil); the page lifts it in
-        // its first frame, so the fade can't be held by the build. Under it the pages beneath go out of sight at once.
-        ScreenVeil.cover()
-        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true; flickArrived = true }
+        // Anything else he tapped opens as its page on the tab he is on: the poster a card for his hand (brief 3.4). The
+        // page is pushed by the tab's own stack, so the system's Back returns to the exact place he came from.
+        titleAsk = target
+        titleAsks += 1
     }
+    // The title asked for, and each ask counted, for the showing tab's stack to push.
+    @ObservationIgnored var titleAsk: FlickTarget?
+    var titleAsks = 0
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
     // without an episode on its card still opens its page, which says "On the TV".
@@ -273,6 +271,7 @@ final class TVModel {
         // The light finishes its lap and the picture becomes the TV's own (the Remote reads `played`).
         withAnimation(.easeOut(duration: 0.3)) { starting?.played = true }
         Haptic.fire(.done)
+        HandLog.note(String(format: "haptic tv-confirmed, %.2f s after the send", Date().timeIntervalSince(st.since)))
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             startEndedAt = Date()
@@ -400,15 +399,25 @@ final class TVModel {
     // field opening the Apps page): resigning the responder in the same turn raced the field's own focus.
     // Settings was tab 9; it sits behind a gear on Status now (Richard, 2026-11-11): asked for as tab 9 (a link, the build's
     // shots, the tab he last left it on), it's Status with Settings pushed.
-    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t == 9 ? 5 : t }() {
+    // Four tabs (2026-11-20, "never a more thing ever"): Watch 3, Remote 0, Music 2, Search 6. Apps (1, once 4) is a row on
+    // the Remote; Status (5) and Settings (9) are pages behind the lip's gear, pushed on the tab he is on.
+    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return [0, 2, 3, 6].contains(t) ? t : t == 1 || t == 4 ? 0 : 3 }() {
         didSet {
-            if tab == 9 { tab = 5; settingsAsked += 1; return }
+            if tab == 9 || tab == 5 { let box = tab == 5; tab = [0, 2, 3, 6].contains(oldValue) ? oldValue : 3; settingsBox = box; settingsAsked += 1; return }
+            if tab == 1 || tab == 4 { tab = 0; return }
             if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() }
         }
     }
     // Each ask for Settings (tab 9), for Status to push it.
     // A phone coming from a build with a Settings tab: Status is saved in its place, so Settings is pushed this once only.
-    var settingsAsked = { guard UserDefaults.standard.integer(forKey: "tab") == 9 else { return 0 }; UserDefaults.standard.set(5, forKey: "tab"); return 1 }()
+    // Asked for at launch only by the build's shots or a link (the launch arguments): a phone whose saved tab was Status
+    // or Settings from an older build opens on Watch, with nothing pushed by itself.
+    private static var launchTab: Int? { UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["tab"].flatMap { ($0 as? Int) ?? Int("\($0)") } }
+    var settingsAsked = launchTab == 9 || launchTab == 5 ? 1 : 0
+    // Each ask is answered once, by the tab showing.
+    @ObservationIgnored var settingsAnswered = 0
+    // Whether the ask was for the box's own page (once the Status tab) rather than Settings' first page.
+    @ObservationIgnored var settingsBox = launchTab == 5
     var address: String { didSet { SavedAddress.save(address) } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -548,15 +557,9 @@ final class TVModel {
     func mirrorShown(_ on: Bool) {
         mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
         if on {
-            // Back on screen where it was: its place is known at once (it's only measured again if it moves), so a thrown
-            // card aims at it from the release and lands on it. Forgotten on the way out and never measured again, a card
-            // thrown from a shelf rose a little, hung there two seconds and vanished (CI b01326d: "landed, no slot",
-            // 2.6-2.9 s from the release).
-            if mirrorSlot == nil, let l = lastLanded, l.window == RenderFlight.windowSize { mirrorSlot = l.rect }
             warmMirror()
             if mirrorLive && !liveShowing && !flickHandoff && !remoteWarming { Task { await loadMirror() } }
         } else if mirrorViewers == 0 {
-            if let s = mirrorSlot, s.width > 20 { lastLanded = (s, RenderFlight.windowSize) }
             mirrorSlot = nil
             #if os(iOS)
             live.stop(after: 5)
@@ -685,7 +688,12 @@ final class TVModel {
             if s.online { let file = Self.cacheFile; Task.detached(priority: .utility) { try? d.write(to: file, options: .atomic) } }
         }
         settlePlayHold(s)
-        if staleStatus { staleStatus = false }
+        if staleStatus {
+            staleStatus = false
+            #if os(iOS)
+            HitchLog.shared.note(String(format: "first status %.2f s after the foreground", Date().timeIntervalSince(foregroundAt)))
+            #endif
+        }
         PhonePlayer.shared.follow(s)
         NextUp.shared.follow(s)
     }
@@ -715,6 +723,7 @@ final class TVModel {
         // catch and much of "the app is SLOW".
         guard let i = await Task.detached(priority: .userInitiated, operation: { Self.decoded(d) }).value else { return }
         mirrorStore.set(i)
+        mirrorStore.keep(d)
     }
     // A picture decoded now, on whatever thread calls this, so drawing it later costs nothing.
     nonisolated static func decoded(_ d: Data) -> TVImage? {
@@ -861,6 +870,27 @@ final class MirrorStore: ObservableObject {
     @Published private(set) var image: TVImage?
     @Published private(set) var at = Date.distantPast
     func set(_ i: TVImage?) { image = i; if i != nil { at = Date() } }
+    // The last still, kept between launches: the Remote's first arrival shows the TV's screen as it last was (dimmed as
+    // old, the light running round it) rather than an empty box (gates 3 and 4). Written at most every 20 s.
+    private static var file: URL? { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-shot.img") }
+    private var keptAt = Date.distantPast
+    func keep(_ d: Data) {
+        guard Date().timeIntervalSince(keptAt) > 20, let f = Self.file else { return }
+        keptAt = Date()
+        Task.detached(priority: .utility) { try? d.write(to: f, options: .atomic) }
+    }
+    init() {
+        guard let f = Self.file else { return }
+        Task { [weak self] in
+            let got: (TVImage, Date)? = await Task.detached(priority: .userInitiated) {
+                guard let d = try? Data(contentsOf: f), let i = TVModel.decoded(d) else { return nil }
+                let at = (try? FileManager.default.attributesOfItem(atPath: f.path))?[.modificationDate] as? Date ?? .distantPast
+                return (i, at)
+            }.value
+            guard let self, let got, self.image == nil else { return }
+            self.image = got.0; self.at = got.1
+        }
+    }
 }
 
 // A half-typed link outlives unfolding, which rebuilds the layout.

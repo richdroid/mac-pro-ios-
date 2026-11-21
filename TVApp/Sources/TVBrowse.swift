@@ -466,7 +466,8 @@ struct FlickCardButton: View {
     @State private var place = FrameBox()
     @Environment(\.openRow) private var openRow
     // A film or show from Stremio's catalogue has its details a tap away, on the "i" at the picture's corner.
-    var hasInfo: Bool { source == .stremio && !item.isYouTube && item.stremioRef != nil }
+    // No badge on the art (2026-11-20: it covered the poster's own lettering): the title's page is the details.
+    var hasInfo: Bool { false }
     // What a tap on a card does; the build's real-data flows tap through here too.
     @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil, held: Bool = false) {
         // A card picked from anywhere (a search result, Return on the field) takes the keyboard down with it (gate of 0472bce).
@@ -512,11 +513,6 @@ struct FlickCardButton: View {
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
             // comes on screen, so its page opens on them rather than on grey rows.
             .onAppear { if source == .stremio, item.progress != nil { NextUp.prefetch(item) } }
-            // Held: the same title on this phone instead, from his own add-ons.
-            .contextMenu {
-                if hasInfo { Button("Play on iPhone", systemImage: "iphone") { model.tick(); PhoneOpen.open(item, model: model) } }
-                QueueMenu(item: item, source: source)
-            }
     }
 }
 final class FrameBox { var rect: CGRect? }
