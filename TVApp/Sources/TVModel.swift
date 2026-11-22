@@ -355,6 +355,15 @@ final class TVModel {
     func togglePlay(shown: Bool?) {
         guard let p = shown else { key("play"); return }
         holdPlay(!p)
+        // Mint's song, ended or with Mint not in front: a bare resume goes to whichever app holds the TV's media key (often
+        // not Mint), so Mint is brought up first and then told to carry on (audit of 5b7b503).
+        if !p, !videoIsCurrent, !otherAirPlay, let m = nowMusic, songEnded(m) || status?.app != "com.codex.musicwebtv" {
+            Task {
+                _ = try? await TVBridge.post("music-now", timeout: 15)
+                key("resume")
+            }
+            return
+        }
         key(p ? "pause" : "resume")
     }
     // What a play key should say: the press, while it's held, else what the TV reports.
@@ -382,7 +391,8 @@ final class TVModel {
         // shrank mid-move for the bar, so the flick's picture landed 14 % wider than it (the review of e35ddbc). Mint's
         // mini player shows only when Mint is what's playing (ruling 6, 2026-11-05).
         guard let m = nowMusic, !videoIsCurrent, starting == nil else { return false }
-        return m.playing || status?.app == "com.codex.musicwebtv"
+        // As the lip reads it: a song past its end, or one from an old reading, isn't playing.
+        return songPlaying(m) == true || status?.app == "com.codex.musicwebtv"
     }
     // The app a tile's press has asked the TV to open, until the TV says which is in front (or six seconds).
     private(set) var openingApp: (pkg: String, at: Date)?
@@ -665,6 +675,9 @@ final class TVModel {
         if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
         if !unchanged && s != status && !clockOnly {
             Self.shown += 1
+            // The first reading after opening replaces the one kept from last time: it lands as it is, no fades, so the
+            // Remote and Music don't visibly change their minds a second and a half in (audit of 5b7b503).
+            if staleStatus { SettleQuiet.now() }
             status = s
             // Every app's banner fetched once, as soon as the list first comes, so the Apps tab and the Remote's tiles
             // never wait on one.
