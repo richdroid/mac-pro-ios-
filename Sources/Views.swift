@@ -1003,7 +1003,7 @@ struct Screen<Content: View>: View {
             .settingsItem { model.nav.settingsTab = tab; model.nav.settingsOpen = true }
             // Clear of the rail drawn on its side (SideRailTabs), outermost as a pushed page takes it: on the list itself
             // the room was added to the list's own margin open upright, 20 pt more than a pushed page's (gate, 11-22).
-            .railRoom()
+            .railRoom(listMargin: 20)
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
         .onReceive(model.statusStore.$status) { take($0) }
@@ -1044,13 +1044,13 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
-            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom() }
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom(listMargin: 20) }
             // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
-            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom() }
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom(listMargin: 20) }
             // All processes, from the tab itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom() }
-            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom() }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom() }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom(listMargin: 20) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
             .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 0 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
@@ -1066,7 +1066,7 @@ struct StackPages: ViewModifier {
                 case .actions: MacActionsView(model: model)
                 case .upgrade: UpgradeView(model: model)
                 } }
-                .railRoom()
+                .railRoom(listMargin: 20)
             }
     }
 }
@@ -1076,7 +1076,7 @@ struct ProcessesOverHistory: ViewModifier {
     @ObservedObject var nav: NavStore
     @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom() }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
     }
 }
 // A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.

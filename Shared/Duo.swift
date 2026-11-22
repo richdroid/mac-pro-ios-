@@ -538,18 +538,23 @@ extension EnvironmentValues { var sideRail: CGFloat { get { self[SideRailKey.sel
 // page takes it here, as it does the rail's.
 private struct BottomBarKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 extension EnvironmentValues { var bottomBar: CGFloat { get { self[BottomBarKey.self] } set { self[BottomBarKey.self] = newValue } } }
+// `listMargin`: what the page adds of its own on top of the room the app gives it. Open upright (no system strip, so the
+// room is the app's) a tab's list and the Mac Pro app's pages set their 20 pt margin beside the room rather than within
+// it, and ended 20 pt short of a pushed Chumby page, which sets it within (gate, 11-22). Taken off here, every page ends
+// 10 pt short of the pill, as it does where the system's strip gives the room.
 struct RailRoom: ViewModifier {
+    var listMargin: CGFloat = 0
     @Environment(\.sideRail) private var rail
     @Environment(\.bottomBar) private var bar
     @State private var has: CGFloat = 0
     func body(content: Content) -> some View {
         content
-            .safeAreaPadding(.trailing, rail > 0 ? max(0, rail - has) : 0)
+            .safeAreaPadding(.trailing, rail > has ? max(0, rail - has - listMargin) : 0)
             .safeAreaPadding(.bottom, bar)
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
     }
 }
-extension View { func railRoom() -> some View { modifier(RailRoom()) } }
+extension View { func railRoom(listMargin: CGFloat = 0) -> some View { modifier(RailRoom(listMargin: listMargin)) } }
 
 // Tabs with the rail drawn along the trailing edge, for where the system's own would hold too few and put the rest
 // under "More" (the Duo folded on its side holds four). Never a More list: every tab is in the rail, one tap away.

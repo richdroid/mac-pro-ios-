@@ -126,6 +126,8 @@ jobs:
           kill -INT $REC; wait $REC
           C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && cp "$C/Library/Caches/swipe-log.txt" dist/logo-tappush.log
           xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          shot tab0-portrait 3 9 $M -tab 0
+          shot tab3-portrait 3 9 $M -tab 3
           xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0; sleep 10
           xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-mac-tab0-portrait.png
           xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
