@@ -574,6 +574,7 @@ extension View {
     // indicator), read from the page itself, whichever of them its frame already leaves out.
     func homeRoom(_ set: @escaping (CGFloat) -> Void) -> some View {
         onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { set($0) }
+            .onGeometryChange(for: [CGFloat].self) { [$0.size.height, $0.safeAreaInsets.top, $0.safeAreaInsets.bottom, $0.frame(in: .global).minY] } action: { SwipeLog.mark("home room h/top/bottom/minY \($0.map { Int($0) })") }
     }
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
