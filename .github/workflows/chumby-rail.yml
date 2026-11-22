@@ -115,7 +115,7 @@ jobs:
           # Open upright: a tab and its pushed page by real taps, filmed (the Calendar row, then Back), and the Mac Pro
           # app's tab and pushed page, for one right edge on a tab and its pages.
           xcrun simctl ui "$DEVICE" appearance light
-          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 2 -pose calendar
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 2 -pose calendar -swipeLog YES
           sleep 10; xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-tap-before-portrait.png
           xcrun simctl io "$DEVICE" recordVideo --display=3 --codec=h264 --force dist/logo-tappush-portrait.mp4 > /dev/null 2>&1 & REC=$!
           sleep 2
@@ -124,6 +124,7 @@ jobs:
           $D "$DEVICE" touch 0.065 0.05 0.1; sleep 3
           xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-tap-back-portrait.png
           kill -INT $REC; wait $REC
+          C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && cp "$C/Library/Caches/swipe-log.txt" dist/logo-tappush.log
           xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0; sleep 10
           xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-mac-tab0-portrait.png
