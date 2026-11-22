@@ -17,8 +17,8 @@ struct TVNow: Equatable {
 
     @MainActor static func read(_ model: TVModel) -> TVNow {
         if let st = model.starting, !st.played {
-            if st.failed { return TVNow(kind: .starting, title: st.title, line: "Didn’t start", art: st.art, playing: nil) }
-            return TVNow(kind: .starting, title: st.title, line: startLine(st, model), art: st.art, playing: nil)
+            if st.failed { return TVNow(kind: .starting, title: st.title, line: st.note ?? "Didn’t start", art: st.art, playing: nil) }
+            return TVNow(kind: .starting, title: st.title, line: st.note ?? startLine(st, model), art: st.art, playing: nil)
         }
         // The player has answered and the TV hasn't said so yet: still starting, never "Home" for a moment in between
         // (gate on b97a5e7).

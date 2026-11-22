@@ -26,17 +26,17 @@ struct SettingsPages: ViewModifier {
         content
             .navigationDestination(for: SettingsRoute.self) { r in
                 switch r {
-                case .root: TVSettingsPage()
-                case .box: BoxPage()
+                case .root: TVSettingsPage().railRoom()
+                case .box: BoxPage().railRoom()
                 }
             }
-            .navigationDestination(for: StremioRoute.self) { _ in StremioAccountPage() }
-            .navigationDestination(for: AppsRoute.self) { _ in AppsPage() }
+            .navigationDestination(for: StremioRoute.self) { _ in StremioAccountPage().railRoom() }
+            .navigationDestination(for: AppsRoute.self) { _ in AppsPage().railRoom() }
             .navigationDestination(for: ManagePage.self) { page in
                 switch page {
-                case .apps: ManageAppsView(store: store)
-                case .settings: ManageSettingsView(store: store)
-                case .connection: ConnectionView()
+                case .apps: ManageAppsView(store: store).railRoom()
+                case .settings: ManageSettingsView(store: store).railRoom()
+                case .connection: ConnectionView().railRoom()
                 }
             }
             // For the build's film where touches can't reach: Settings pushed and popped, then TV settings, at a finger's pace.

@@ -98,6 +98,8 @@ struct DeviceTab: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     @Environment(\.scenePhase) private var phase
+    // Pushed on whichever tab he was on, and kept under the rail when he leaves it: asked for only while that tab is in front.
+    @Environment(\.tabInFront) private var front
     @ObservedObject private var store = DeviceStore.shared
     var info: DeviceInfo? { store.info }
     // Out of touch: the Mac (said once, by the banner at the top, and dimmed with it), or only the box's own readings
@@ -236,7 +238,7 @@ struct DeviceTab: View {
     // Asked for only while this tab is on screen, every 2 s (and so retried every 2 s while it fails). Leaving the tab, or
     // a push over it, cancels the task: whatever that cut short says nothing about the TV, and is dropped.
     func poll() async {
-        guard phase == .active else { return }
+        guard phase == .active, front else { return }
         store.arrived()
         while !Task.isCancelled {
             let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8)
@@ -265,7 +267,7 @@ struct DeviceTab: View {
                         // The tiles fade in over their waiting shapes (the first answer is set with no animation, so the
                         // name over them doesn't crossfade; the shapes here are theirs to replace).
                         .settledAnimation(.easeOut(duration: 0.25), value: info == nil)
-                        .task(id: phase) { await poll() }
+                        .task(id: "\(phase) \(front)") { await poll() }
                 }
                 .backToTop()
                 .onChange(of: model.reachable) { _, back in if back { store.arrived(); if store.failed { store.failed = false } } }
@@ -279,7 +281,7 @@ struct DeviceTab: View {
                         .settledAnimation(.easeOut(duration: 0.25), value: info == nil)
                 }
                 .padding(.horizontal, 16).padding(.bottom, 16)
-                .task(id: phase) { await poll() }
+                .task(id: "\(phase) \(front)") { await poll() }
             }
             .backToTop()
             .onChange(of: model.reachable) { _, back in if back { store.arrived(); if store.failed { store.failed = false } } }

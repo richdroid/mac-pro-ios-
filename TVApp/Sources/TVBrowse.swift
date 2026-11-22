@@ -495,7 +495,9 @@ struct FlickCardButton: View {
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             // Held, it lifts off the shelf; thrown up, it goes to the TV (ShelfFlick, the streams page's own hand).
-            .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in place.rect ?? .zero }))
+            .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in var r = place.rect ?? .zero; r.size.height = max(0, r.height - MediaCard.band(width)); return r }))
+            // For the build's shelf films: the first card drawn says where it is, so a real finger lands on it.
+            .shotSpot(ShelfSpot.claim(item.id) ? "card" : "", pose: "shelf")
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             // The details are a pushed page with the system's Back, never a sheet (2026-11-08: the sheet sat inset with a
             // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that
@@ -516,6 +518,15 @@ struct FlickCardButton: View {
     }
 }
 final class FrameBox { var rect: CGRect? }
+// The one card the shelf films touch: the first drawn under the "shelf" pose (the first shelf's first card).
+@MainActor enum ShelfSpot {
+    private static var first: String?
+    static func claim(_ id: String) -> Bool {
+        guard UserDefaults.standard.string(forKey: "pose") == "shelf" else { return false }
+        if first == nil { first = id }
+        return first == id
+    }
+}
 extension View {
     // Where a picture is, kept in a box without redrawing anything while the page scrolls.
     func measured(_ box: FrameBox) -> some View { onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { box.rect = $0 } }

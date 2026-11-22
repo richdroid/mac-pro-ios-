@@ -429,10 +429,11 @@ struct AppBrowse: View {
         }
         .topShade().topFade()
         .environment(\.openRow, { row = $0 })
-        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true) }
+        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true).railRoom() }
         .background { Ambience() }
-        .onAppear { model.mood = source.mood }
-        .onDisappear { if model.mood == source.mood { model.mood = nil } }
+        .onScreen { on in
+            if on { model.mood = source.mood } else if model.mood == source.mood { model.mood = nil }
+        }
         // The build's shots: Stremio's first row opened from its heading ("-pose stremiorow"), its own list, not Stremio
         // again; and a title's details page ("-pose details"), pushed with the system's Back, edge to edge.
         .task {
@@ -490,7 +491,7 @@ struct ShelfFlick: ViewModifier {
     // The pebble (TVHand): held still 0.15 s it lifts and is his finger's, point for point; moved first, the touch is the
     // scroll's and it never lifts (brief 8.2 and 8.3: one touch, one owner).
     func body(content: Content) -> some View {
-        content.modifier(Liftable(item: item, source: source, wide: still != nil, art: still, onThrow: onThrow.map { f in { _ in f() } }, onTap: onTap, rect: rect, hides: still == nil))
+        content.modifier(Liftable(item: item, source: source, wide: still != nil, art: still, onThrow: onThrow.map { f in { _ in f() } }, onTap: onTap, rect: rect, hides: still == nil, quickUp: still == nil))
     }
 }
 
