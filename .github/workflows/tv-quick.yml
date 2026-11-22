@@ -62,7 +62,12 @@ jobs:
             done
           fi
           date
-          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          # With "path" added (ci/flick-hands): one finger held, then carried through segments. The pinned build has only
+          # touch and drag, and a drag can't hold first, which a lift needs.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 \
+            && F=$(grep -rl 'args\[1\] == "touch" || args\[1\] == "drag"' Sources) \
+            && python3 -c 'import sys; f,p=sys.argv[1:]; m="if args[1] == \"touch\" || args[1] == \"drag\" {"; s=open(f).read(); assert m in s; open(f,"w").write(s.replace(m, open(p).read()+m, 1))' "$F" $GITHUB_WORKSPACE/ci/flick-hands/devicehub-path.swift \
+            && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
           date
@@ -207,14 +212,24 @@ jobs:
               local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/hand-log.txt" ] && mv "$c/Library/Caches/hand-log.txt" dist/tv-$1-hand.log || echo "no hand log" > dist/tv-$1-hand.log
               cp /tmp/tv-flick-sends.log dist/tv-$1-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$1-sends.log
             }
-            # Scripted: a stream row held and flicked up, and a pasted link's card thrown from the Remote.
+            # A title's page opened by its pose (a film's, and a pasted link's from the Remote), then its card held and
+            # carried by a real finger into the lip and let go there. The poses only open the page now (the old flick
+            # screen that threw by itself is gone), so the throw is the finger's, at the card's place (what=card).
             posefilm() {
-              local name=$1 pose=$2 tab=$3
+              local name=$1 pose=$2 tab=$3 at x y
               curl -s $M/fnormal/reset > /dev/null
+              rm -f /tmp/tv-home-applied.log
               xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$FD --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
               sleep 4
               xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab $tab -pose $pose
-              sleep 16
+              sleep 10
+              at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+              if [ -n "$at" ]; then
+                x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+                $D "$DEVICE" path $x $y 0.7 $x 0.12 0.5 0 $x 0.12 0.2 0 || echo "path failed"
+              else echo "no card position for $name"; fi
+              sleep 8
+              cp /tmp/tv-home-applied.log dist/tv-$name-applied.log 2>/dev/null || true
               xcrun simctl io "$DEVICE" screenshot --display=$FD dist/tv-$name-end.png
               kill -INT $REC; wait $REC
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
@@ -236,9 +251,12 @@ jobs:
               at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
               if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; else echo "no card position for $name"; fi
               case $how in
-                throw) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.3 0 $x $(echo "$y - 0.3" | bc -l) 0.2 0 || echo "path failed" ;;
+                # Held 0.7 s (the lift at 0.15 s), then: a quick flick up a quarter of the screen in 0.12 s, let go moving;
+                # carried sideways and let go (must go back, nothing sent); a slow carry up into the lip over 1.5 s, a rest
+                # there and let go (a throw at any speed); and no hold at all, a drag straight up (the shelf's quick lift).
+                throw) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.25" | bc -l) 0.12 0 || echo "path failed" ;;
                 back) $D "$DEVICE" path $x $y 0.7 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
-                carry) $D "$DEVICE" path $x $y 0.7 $x 0.1 1.6 0 $x 0.1 0.5 0 || echo "path failed" ;;
+                carry) $D "$DEVICE" path $x $y 0.7 $x 0.12 1.5 0 $x 0.12 0.4 0 || echo "path failed" ;;
                 quickup) $D "$DEVICE" path $x $y 0.02 $x $(echo "$y - 0.3" | bc -l) 0.25 0 || echo "path failed" ;;
               esac
               sleep 12
