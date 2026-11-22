@@ -94,6 +94,34 @@ struct RingKeys: View {
     }
 }
 
+// The card's words: what it's doing, the alarm's name and what it plays. The name is always whole, never an ellipsis
+// (gate 4, 11-21: "Morning shift at the sh…"): on one line at full size, else one line a size down, else two lines with
+// the detail line given up for the room (the Lock Screen gives a card 160 pt; two lines of name over the detail and the
+// keys came to about 176, and iOS squeezed the name back to one cut line). Each form is chosen by its whole width, so
+// the choice never depends on the height iOS happens to offer.
+struct RingNameBlock: View {
+    let state: ChumbyRingAttributes.ContentState
+    let stale: Bool
+    var head: some View {
+        Text(RingCardLook.headline(state, stale: stale)).font(RingCardLook.face(14))
+            .foregroundStyle(state.snoozed || stale ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f)).lineLimit(1)
+    }
+    var detail: some View {
+        RingDetail(forms: RingCardLook.details(state, stale: stale)).font(RingCardLook.face(14, bold: false)).foregroundStyle(RingCardLook.soft)
+    }
+    func name(_ size: CGFloat) -> some View { Text(state.title).font(RingCardLook.face(size)).foregroundStyle(.white) }
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            VStack(alignment: .leading, spacing: 1) { head; name(22).lineLimit(1).fixedSize(); detail }
+            VStack(alignment: .leading, spacing: 1) { head; name(18).lineLimit(1).fixedSize(); detail }
+            VStack(alignment: .leading, spacing: 1) {
+                head
+                name(19).lineLimit(2).minimumScaleFactor(0.75).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 struct RingLockCard: View {
     let state: ChumbyRingAttributes.ContentState
     let stale: Bool
@@ -101,13 +129,7 @@ struct RingLockCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 RingOctopus(snoozed: state.snoozed || stale).frame(width: 44)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(RingCardLook.headline(state, stale: stale)).font(RingCardLook.face(14))
-                        .foregroundStyle(state.snoozed || stale ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f))
-                    // The name whole: smaller before a second line, never an ellipsis.
-                    Text(state.title).font(RingCardLook.face(22)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7)
-                    RingDetail(forms: RingCardLook.details(state, stale: stale)).font(RingCardLook.face(14, bold: false)).foregroundStyle(RingCardLook.soft)
-                }
+                RingNameBlock(state: state, stale: stale)
                 Spacer(minLength: 4)
                 if state.snoozed, !stale, let again = state.again {
                     RingCountdown(until: again).font(RingCardLook.face(22)).foregroundStyle(.white).frame(maxWidth: 76)
@@ -124,6 +146,89 @@ struct RingLockCard: View {
     }
 }
 
+// The Dynamic Island's pieces, one set for the island and for the CI gallery that draws it (the gallery kept a copy of
+// its own, in the old orange, and the gate judged the copy; 11-21). Blue only here: the octopus's own colour marks the
+// ring in the island (Richard, 11-20: "blue for chumby ... its just the dynamic island entry"); the keys are the card's.
+enum RingIsland {
+    // Expanded, beside the camera: the octopus, then what it's doing and the name, then the time on the right (the
+    // countdown through a snooze, the alarm's own time while it rings), so the top row is never half empty.
+    struct Leading: View {
+        let quiet: Bool
+        var body: some View { RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.ring).frame(width: 40).padding(.leading, 4) }
+    }
+    struct Center: View {
+        let state: ChumbyRingAttributes.ContentState
+        let stale: Bool
+        var body: some View {
+            let quiet = state.snoozed || stale
+            VStack(spacing: 1) {
+                Text(RingCardLook.headline(state, stale: stale)).font(RingCardLook.face(13))
+                    .foregroundStyle(quiet ? RingCardLook.soft : ChumbyPalette.ring).lineLimit(1)
+                Text(state.title).font(RingCardLook.face(18)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+    struct Trailing: View {
+        let state: ChumbyRingAttributes.ContentState
+        let stale: Bool
+        var body: some View {
+            Group {
+                if state.snoozed, !stale, let again = state.again {
+                    RingCountdown(until: again).font(RingCardLook.face(17)).foregroundStyle(.white)
+                } else if !state.name.isEmpty || !stale {
+                    // The time it's for, as the clock on the Chumby showed it.
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(state.rang.formatted(.dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits)))
+                            .font(RingCardLook.face(17)).foregroundStyle(.white).monospacedDigit()
+                        if let ampm = Self.ampm(state.rang) { Text(ampm).font(RingCardLook.face(11)).foregroundStyle(RingCardLook.soft) }
+                    }
+                }
+            }
+            .lineLimit(1).frame(maxWidth: 60, alignment: .trailing).padding(.trailing, 4)
+        }
+        // "AM" or "PM" on a 12-hour clock; nothing on a 24-hour one.
+        static func ampm(_ d: Date) -> String? {
+            guard DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current)?.contains("a") == true else { return nil }
+            let f = DateFormatter(); f.locale = .current; f.dateFormat = "a"
+            return f.string(from: d)
+        }
+    }
+    struct Bottom: View {
+        let state: ChumbyRingAttributes.ContentState
+        let stale: Bool
+        var body: some View {
+            VStack(spacing: 8) {
+                if let p = state.problem, !stale {
+                    Text(p).font(RingCardLook.face(13, bold: false)).foregroundStyle(ChumbyPalette.warn(true)).fixedSize(horizontal: false, vertical: true)
+                }
+                if !stale { RingKeys(snoozed: state.snoozed, height: 42, working: state.working != nil) }
+            }
+            .padding(.top, 4)
+        }
+    }
+    struct CompactLeading: View {
+        let quiet: Bool
+        var body: some View { RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.ring).frame(width: 24, height: 22) }
+    }
+    struct CompactTrailing: View {
+        let state: ChumbyRingAttributes.ContentState
+        let stale: Bool
+        var body: some View {
+            if state.snoozed, !stale, let again = state.again {
+                RingCountdown(until: again).font(RingCardLook.face(14)).foregroundStyle(.white).frame(maxWidth: 44)
+            } else {
+                Image(systemName: "alarm.waves.left.and.right.fill").font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(state.snoozed || stale ? RingCardLook.soft : ChumbyPalette.ring)
+            }
+        }
+    }
+    struct Minimal: View {
+        let quiet: Bool
+        var body: some View { RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.ring).frame(width: 22, height: 20) }
+    }
+}
+
 #if os(iOS)
 struct ChumbyRingActivityWidget: Widget {
     static let opens = URL(string: "chumbyapp://ring")
@@ -136,41 +241,16 @@ struct ChumbyRingActivityWidget: Widget {
         } dynamicIsland: { context in
             let s = context.state, quiet = s.snoozed || context.isStale
             return DynamicIsland {
-                DynamicIslandExpandedRegion(.leading) {
-                    RingOctopus(snoozed: quiet).frame(width: 40).padding(.leading, 4)
-                }
-                DynamicIslandExpandedRegion(.center) {
-                    VStack(spacing: 1) {
-                        Text(RingCardLook.headline(s, stale: context.isStale)).font(RingCardLook.face(13))
-                            .foregroundStyle(quiet ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f)).lineLimit(1)
-                        Text(s.title).font(RingCardLook.face(18)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7).multilineTextAlignment(.center)
-                    }
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    if s.snoozed, !context.isStale, let again = s.again {
-                        RingCountdown(until: again).font(RingCardLook.face(17)).foregroundStyle(.white).frame(maxWidth: 60).padding(.trailing, 4)
-                    }
-                }
-                DynamicIslandExpandedRegion(.bottom) {
-                    VStack(spacing: 8) {
-                        if let p = s.problem, !context.isStale {
-                            Text(p).font(RingCardLook.face(13, bold: false)).foregroundStyle(ChumbyPalette.warn(true)).fixedSize(horizontal: false, vertical: true)
-                        }
-                        if !context.isStale { RingKeys(snoozed: s.snoozed, height: 42, working: s.working != nil) }
-                    }
-                    .padding(.top, 4)
-                }
+                DynamicIslandExpandedRegion(.leading) { RingIsland.Leading(quiet: quiet) }
+                DynamicIslandExpandedRegion(.center) { RingIsland.Center(state: s, stale: context.isStale) }
+                DynamicIslandExpandedRegion(.trailing) { RingIsland.Trailing(state: s, stale: context.isStale) }
+                DynamicIslandExpandedRegion(.bottom) { RingIsland.Bottom(state: s, stale: context.isStale) }
             } compactLeading: {
-                RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.ring).frame(width: 24, height: 22)
+                RingIsland.CompactLeading(quiet: quiet)
             } compactTrailing: {
-                if s.snoozed, !context.isStale, let again = s.again {
-                    RingCountdown(until: again).font(RingCardLook.face(14)).foregroundStyle(.white).frame(maxWidth: 44)
-                } else {
-                    Image(systemName: "alarm.waves.left.and.right.fill").font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(quiet ? RingCardLook.soft : ChumbyPalette.ring)
-                }
+                RingIsland.CompactTrailing(state: s, stale: context.isStale)
             } minimal: {
-                RingOctopus(snoozed: quiet, color: quiet ? .white : ChumbyPalette.ring).frame(width: 22, height: 20)
+                RingIsland.Minimal(quiet: quiet)
             }
             .keylineTint(ChumbyPalette.ring)
             .widgetURL(Self.opens)

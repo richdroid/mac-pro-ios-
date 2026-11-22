@@ -30,32 +30,38 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
     var nightOnly: ChumbyEntry { var s = ChumbyProvider.sample; s.sys.night = 1; return s }
     var playing: ChumbyEntry { var s = ChumbyProvider.sample; s.playing = true; return s }
     var lost: ChumbyEntry { var s = ChumbyEntry(date: Date()); s.lastSeen = Date().addingTimeInterval(-25 * 60); return s }
+    // At its natural height, as the Lock Screen lays it out (stacked in the page's VStack, six cards were squeezed and the
+    // name came out cut, 11-21), with that height written beside it: iOS gives a card 160 pt.
     func ringCard(_ s: ChumbyRingAttributes.ContentState, stale: Bool = false) -> some View {
         RingLockCard(state: s, stale: stale).frame(width: 370)
+            .fixedSize(horizontal: false, vertical: true)
             .background(RingCardLook.sea.opacity(0.82), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                GeometryReader { g in
+                    Text("\(Int(g.size.height.rounded())) pt").font(.caption2.monospacedDigit()).foregroundStyle(g.size.height > 160 ? .red : .white.opacity(0.5))
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 14).padding(.top, 6)
+                }
+            }
     }
+    // The Dynamic Island, from the island's own pieces (RingIsland) laid out as iOS lays its regions: the camera's row
+    // with the octopus and the time either side of the words, the keys across the foot.
     func island(_ s: ChumbyRingAttributes.ContentState) -> some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
-                RingOctopus(snoozed: s.snoozed).frame(width: 40)
-                VStack(spacing: 1) {
-                    Text(RingCardLook.headline(s, stale: false)).font(RingCardLook.face(13)).foregroundStyle(s.snoozed ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f))
-                    Text(s.title).font(RingCardLook.face(18)).foregroundStyle(.white).lineLimit(2)
-                }
-                .frame(maxWidth: .infinity)
-                if s.snoozed, let again = s.again { RingCountdown(until: again).font(RingCardLook.face(17)).foregroundStyle(.white).frame(width: 60) } else { Color.clear.frame(width: 40) }
+                RingIsland.Leading(quiet: s.snoozed)
+                RingIsland.Center(state: s, stale: false).frame(maxWidth: .infinity)
+                RingIsland.Trailing(state: s, stale: false)
             }
-            RingKeys(snoozed: s.snoozed, height: 42)
+            RingIsland.Bottom(state: s, stale: false)
         }
         .padding(.horizontal, 18).padding(.vertical, 16).frame(width: 370)
         .background(.black, in: RoundedRectangle(cornerRadius: 44, style: .continuous))
     }
     func compact(_ s: ChumbyRingAttributes.ContentState) -> some View {
         HStack {
-            RingOctopus(snoozed: s.snoozed, color: s.snoozed ? .white : ChumbyPalette.orange).frame(width: 24, height: 22)
+            RingIsland.CompactLeading(quiet: s.snoozed)
             Spacer(minLength: 126)
-            if s.snoozed, let again = s.again { RingCountdown(until: again).font(RingCardLook.face(14)).foregroundStyle(.white).frame(maxWidth: 44) }
-            else { Image(systemName: "alarm.waves.left.and.right.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(ChumbyPalette.orange) }
+            RingIsland.CompactTrailing(state: s, stale: false)
         }
         .padding(.horizontal, 12).frame(height: 37).fixedSize()
         .background(.black, in: Capsule())
@@ -97,7 +103,11 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
                 ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false))
                 ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 120, snoozed: true, until: Date().timeIntervalSince1970 + 431))
                 ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, problem: "Didn’t stop. Try again."))
+            case 7:
+                // Long names (never an ellipsis), an alarm with no name, and one nothing has reached in half an hour.
                 ringCard(.init(name: "Morning shift at the shop", sound: "Pandora: Today’s Hits Radio", at: Date().timeIntervalSince1970 - 120, snoozed: true, until: Date().timeIntervalSince1970 + 431))
+                ringCard(.init(name: "Morning shift at the shop", sound: "Pandora: Today’s Hits Radio", at: Date().timeIntervalSince1970 - 40, snoozed: false))
+                ringCard(.init(name: "2026 Mandatory Conflict of Interest Training", sound: "Starting Over Radio", at: Date().timeIntervalSince1970 - 40, snoozed: false))
                 ringCard(.init(name: "", sound: "Beep", at: Date().timeIntervalSince1970 - 40, snoozed: false))
                 ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 2400, snoozed: false), stale: true)
             case 5:
@@ -107,7 +117,8 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
                 island(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 120, snoozed: true, until: Date().timeIntervalSince1970 + 431))
                 compact(.init(name: "Work", sound: "Beep", at: Date().timeIntervalSince1970 - 40, snoozed: false))
                 compact(.init(name: "Work", sound: "Beep", at: Date().timeIntervalSince1970 - 40, snoozed: true, until: Date().timeIntervalSince1970 + 431))
-                HStack { Capsule().fill(.black).frame(width: 126, height: 37); RingOctopus(snoozed: false, color: ChumbyPalette.orange).frame(width: 22, height: 20).frame(width: 37, height: 37).background(.black, in: Circle()) }
+                HStack { Capsule().fill(.black).frame(width: 126, height: 37); RingIsland.Minimal(quiet: false).frame(width: 37, height: 37).background(.black, in: Circle()) }
+                island(.init(name: "Morning shift at the shop", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, working: "Stopping…"))
             case 6:
                 // A press on its way and its answers (RingDesk, 11-18): Stopping… and Snoozing… with the keys dimmed but live,
                 // a press the Chumby hasn't confirmed, and the snooze by the Chumby's own time.

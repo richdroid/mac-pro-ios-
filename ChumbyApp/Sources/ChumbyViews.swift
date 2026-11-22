@@ -2095,7 +2095,8 @@ struct ChannelsTab: View {
         .background(.white.opacity(0.12), in: Capsule())
     }
     func widgetRow(_ w: EditorRow) -> some View {
-        HStack(alignment: .center, spacing: 16) {
+        SwipeLog.mark("chrow \(w.name)")
+        return HStack(alignment: .center, spacing: 16) {
             // The app's one remove control while editing (LeadingRemove), sliding in with the name in the same spring.
             LeadingRemove(editing: reordering, label: "Remove \(w.name) from \(pickedTitle)") { remove(w.id) }
                 .padding(.trailing, reordering ? -23 : -16)
@@ -2161,6 +2162,7 @@ struct ChannelsTab: View {
             // By id, never by index: following the playing channel swaps `rows` under the list.
             ForEach(shown, id: \.id) { widgetRow($0) }
                 .onMove { from, to in
+                    SwipeLog.note("chmove \(Array(from)) -> \(to)")
                     var on = shown
                     on.move(fromOffsets: from, toOffset: to)
                     // The list has already carried the row to its place under the finger: the new order is taken with
@@ -2343,6 +2345,8 @@ struct ChannelsTab: View {
             withAnimation(.snappy) { pick() }
         }
         .onChange(of: model.state.channel) { _, _ in followPlaying(showing) }
+        .onChange(of: reordering) { _, r in model.reorderHold = r }
+        .onDisappear { model.reorderHold = false }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
         .onDisappear { flush() }
         // A save on its way is waited for first: read before it landed, the Chumby's old list came back over the edit

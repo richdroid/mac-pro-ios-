@@ -434,6 +434,8 @@ enum RingOutcome: Equatable {
     // The Chumby took it but hasn't said so yet (it said nothing within the wait, or its readings didn't come).
     case unconfirmed
     case failed(String)
+    // Over on the Chumby: a Stop that landed, or found nothing left ringing.
+    var stopped: Bool { switch self { case .confirmed, .nothingRinging: true; default: false } }
 }
 actor RingDesk {
     static let shared = RingDesk()

@@ -1,0 +1,166 @@
+name: Chumby pass 11-22 (branch)
+# The chumby-pass-1122 branch's own run (never main), after chumby-debug.yml of 00c6c6a: every tab in every posture
+# (folded, open flat, open upright), the ring films (Home's card snoozed then stopped, the ringing page, the slide to stop
+# let go short, presses from the Lock Screen's doors), a nap set and called off, a channel reordered with a real finger
+# (with the app's log), the empty channel, and the Lock Screen card and the island from the widget's own pieces.
+# Published to the chumby-pass-1122 release. Temporary: goes when the branch merges.
+on:
+  push:
+    branches: [chumby-pass-1122]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chumby-pass-1122
+  cancel-in-progress: true
+jobs:
+  pass:
+    runs-on: xcode-27
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Alarm logic tests
+        run: ci/chumby-tests.sh
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          for APP in Chumby GalleryChumby; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | grep -E "error:|warning: unre|BUILD" | tail -40
+          done
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 100
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
+          node ci/mock-chumby.js & MOCK=$!
+          sleep 2
+          M=http://127.0.0.1:9000
+          remock() { kill $MOCK 2>/dev/null; wait $MOCK 2>/dev/null; node ci/mock-chumby.js & MOCK=$!; sleep 2; }
+          shot() { # name, display, wait, address, args
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/p-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          film() { # name, display, seconds, address, args
+            local name=$1 display=$2 secs=$3 address=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/p-$name.mp4 > /dev/null 2>&1 &
+            local rec=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            sleep $secs
+            kill -INT $rec; wait $rec
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          warm() { xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $1 -tab 0; sleep 10; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; sleep 1; }
+          gallery() { # page, display, name
+            xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $1
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$2 dist/p-$3.png
+            xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby || true
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          rec() { # name, display, address, args
+            local name=$1 display=$2 address=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/p-$name.mp4 > /dev/null 2>&1 &
+            REC=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+          }
+          cut() { # name, display
+            xcrun simctl io "$DEVICE" screenshot --display=$2 dist/p-$1-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/p-$1-swipe.log || true
+          }
+          # The ringing page's slide to stop under a finger: a short slide let go (the key must travel home over frames),
+          # then the whole run (the Chumby stops, the page leaves).
+          slide() { # name, display, x of the key at rest, x at the run's end, y of the bar
+            remock; warm $M/liveringing; rec $1 $2 $M/liveringing -tab 0 -pose ringscreen
+            sleep 16
+            local mid=$(echo "$3 + ($4 - $3) * 0.35" | bc -l)
+            $D "$DEVICE" drag $3 $5 $mid $5 0.8 || echo "slide failed"; sleep 2
+            $D "$DEVICE" drag $3 $5 $mid $5 0.3 || echo "slide failed"; sleep 2
+            $D "$DEVICE" drag $3 $5 $4 $5 0.6 || echo "slide failed"; sleep 5
+            cut $1 $2
+          }
+          tabs() { # display, suffix
+            shot home$2 $1 9 $M -tab 0
+            shot channels$2 $1 10 $M -tab 1
+            shot alarms$2 $1 9 $M -tab 2
+            shot sounds$2 $1 9 $M -tab 3
+            shot tinker$2 $1 9 $M -tab 4
+            shot home-ringing$2 $1 9 $M/ringing -tab 0
+            shot home-snoozed$2 $1 9 $M/snoozed -tab 0
+            shot ringpage$2 $1 9 $M/ringing -tab 0 -pose ringscreen
+            shot ringpage-snoozed$2 $1 9 $M/snoozed -tab 0 -pose ringscreen
+            shot channels-edit$2 $1 10 $M -tab 1 -pose chedit
+            shot channels-empty$2 $1 10 $M/chempty -tab 1
+            shot alarms-nap$2 $1 11 $M/nap -tab 2 -pose napset
+            shot alarms-editor$2 $1 10 $M -tab 2 -pose editor
+            # Ring, Snooze (3.5 s in), Stop (4 s later) on Home's card: the leaving card says "Stopping…" alone.
+            remock; warm $M/liveringing; film ringdemo$2 $1 16 $M/liveringing -tab 0 -pose ringdemo
+            # The ringing page: Snooze at 5 s, slid to Stop at 10 s.
+            remock; warm $M/liveringing; film ringpage$2 $1 18 $M/liveringing -tab 0 -pose ringpagedemo
+          }
+          xcrun simctl ui "$DEVICE" appearance light
+          # Folded.
+          $D "$DEVICE" pose closed || true; sleep 5
+          tabs 1 ""
+          # Snooze, then Stop, pressed as the Lock Screen's card and the notification press them, through an old copy of sys.
+          remock; warm $M/livestale; film ringdoor 1 16 $M/livestale -tab 0 -pose ringdoor
+          # A nap set, counting down, and called off (the row keeps its own words as it fades).
+          remock; film alarmsdemo 1 30 $M/live -tab 2 -pose alarmsdemo
+          # Channels: a channel of six in Edit, the last widget dragged to the top by its grip, then the second down two.
+          remock; rec chdrag 1 $M/livemany -tab 1 -pose chedit -swipeLog YES
+          sleep 18
+          $D "$DEVICE" drag 0.75 0.728 0.75 0.20 2.5 || echo "drag failed"; sleep 2
+          $D "$DEVICE" drag 0.75 0.324 0.75 0.55 1.5 || echo "drag failed"; sleep 2
+          $D "$DEVICE" drag 0.75 0.55 0.75 0.40 1.0 || echo "drag failed"; sleep 3
+          cut chdrag 1
+          slide ringslide 1 0.12 0.93 0.864
+          gallery 4 1 card
+          gallery 7 1 card-long
+          gallery 5 1 island
+          gallery 6 1 card-working
+          # Open flat.
+          $D "$DEVICE" pose open; sleep 5
+          tabs 3 "-open"
+          slide ringslide-open 3 0.58 0.96 0.58
+          # Open upright (his posture).
+          $D "$DEVICE" rotate 1; sleep 5
+          tabs 3 "-portrait"
+          remock; film alarmsdemo-portrait 3 30 $M/live -tab 2 -pose alarmsdemo
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../pass-shots.zip . -i '*.png' '*.log' || zip -q ../pass-shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-pass-1122 >/dev/null 2>&1 || gh release create chumby-pass-1122 --prerelease --title "Chumby pass 11-22" --notes "Work in progress: shots, films and logs from the chumby-pass-1122 branch."
+          for f in pass-shots.zip status.txt dist/p-*.mp4; do
+            [ -f "$f" ] || continue
+            for i in 1 2 3; do gh release upload chumby-pass-1122 "$f" --clobber && break; sleep 15; done
+          done

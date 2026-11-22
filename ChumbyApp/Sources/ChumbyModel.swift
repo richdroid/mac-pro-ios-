@@ -194,7 +194,11 @@ final class ChumbyModel: ObservableObject {
     // confirmed what's shown (a List reports a settling phase as it opens, which parked the Mac Pro app's first reading;
     // Home's channel name and Playing card wait on stateConfirmed), and never while Calendar settings, a day or an
     // editor is open over Alarms, since they're waiting on it.
-    private var parks: Bool { ScrollHold.holding && stateConfirmed && !alarmsPage && !editingAlarm }
+    // Channels in Edit parks them too: a reading landing mid-drag redrew the page under the lifted row, which faded out in
+    // the air for four frames (gate 4, 11-21, dbg-chdrag 72.36 s), and the list "constantly refreshes" (Richard, 11-17).
+    // What's parked lands on Done.
+    var reorderHold = false { didSet { if oldValue && !reorderHold { releaseHeld() }; if reorderHold != oldValue { SwipeLog.note("reorderHold \(reorderHold)") } } }
+    private var parks: Bool { (ScrollHold.holding || reorderHold) && stateConfirmed && !alarmsPage && !editingAlarm }
     private func releaseHeld() {
         if heldSys != nil || heldState != nil { SwipeLog.note("held readings landed") }
         if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh, takenAt: h.at) } }
@@ -734,10 +738,12 @@ final class ChumbyModel: ObservableObject {
             // To the Mac's log with the Chumby's own word for how it went, as every other door's press is.
             Task.detached { await ChumbyRingActions.report("app", "stop", out, since: Date(timeIntervalSince1970: tapped), backup: "the app’s own") }
             hold(0)
-            withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
+            // Confirmed, "Stopping…" goes with the ring in one change: cleared a change before, the card under it said
+            // "Snoozed until …" again for the frames it took to leave (gate 4, 11-21).
+            if !out.stopped { withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil } }
             switch out {
             case .confirmed, .nothingRinging:
-                withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
+                withAnimation(Self.stopSpring) { ringWorking = nil; sys.ring = ""; snoozedAt = nil }
                 RingSeen.stopped(at: tapped)
                 // the phone's backup alarm for this ring goes with it (ChumbyBackupAlarm)
                 ChumbyBackupAlarm.shared.handled(name: was.components(separatedBy: "\t").dropFirst().first)

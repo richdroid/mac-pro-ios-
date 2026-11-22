@@ -315,11 +315,13 @@ struct RingingCard: View {
     @EnvironmentObject var model: ChumbyModel
     // Everything the card says, taken while the alarm is still there. Once Stop is tapped the card draws only this, so
     // its words never change while it fades.
-    struct Shown: Equatable { var ring: Sys.Ringing; var until: Date?; var away: Bool; var seen: Date? }
+    // `working` is held too: a card leaving after a Stop says "Stopping…" alone to the last frame, never the "Snoozed
+    // until …" it said before the press (gate 4, 11-21).
+    struct Shown: Equatable { var ring: Sys.Ringing; var until: Date?; var away: Bool; var seen: Date?; var working: String? }
     @State private var frozen: Shown?
     // Room for the wave and "Snooze" in the card's type, with the capsule's ends.
     @ScaledMetric(relativeTo: .title3) private var snoozeMin: CGFloat = 136
-    var live: Shown? { model.sys.ringing.map { Shown(ring: $0, until: model.snoozeEnds, away: model.unreachable, seen: model.seenAt) } }
+    var live: Shown? { model.sys.ringing.map { Shown(ring: $0, until: model.snoozeEnds, away: model.unreachable, seen: model.seenAt, working: model.ringWorking) } }
     var shown: Shown? { live ?? frozen }
     var body: some View {
         content
@@ -345,8 +347,8 @@ struct RingingCard: View {
                     // old one goes, so the card is never without one (gate, 11-20: two blank frames between "Snoozed
                     // until" and "Stopping…").
                     ZStack {
-                        Text(model.ringWorking ?? (snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing"))
-                            .id(model.ringWorking ?? (snoozed ? "s" : "r"))
+                        Text(s.working ?? (snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing"))
+                            .id(s.working ?? (snoozed ? "s" : "r"))
                             .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.14))))
                     }
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
@@ -417,6 +419,7 @@ struct NapSection: View {
     @AppStorage("napLength") private var napLength = 0
     @AppStorage("napSetAt") private var napSetAt = 0.0
     @State private var sending: Int?
+    @State private var lastNap: Alarm?
     static let lengths = [10, 20, 30, 60]
     // How far what's there fades before the rows change places: not to nothing, so the card is never drawn empty for a
     // frame as the old rows go and the new ones come (gate, 11-20); faint enough that the two never read as drawn twice.
@@ -445,6 +448,8 @@ struct NapSection: View {
             }
             if let f = model.failed("nap") { FailNote(text: f) }
         }
+        .onAppear { if let n = model.napAlarm { lastNap = n } }
+        .onChange(of: model.napAlarm) { _, n in if let n { lastNap = n } }
     }
     var chips: some View {
         HStack(spacing: 8) {
@@ -463,7 +468,9 @@ struct NapSection: View {
     // The nap set, as an alarm: the Nap alarm's own sound and length, or the Chumby's own nap (cmd nap), which has none
     // and nothing to change. The time left is said in whole minutes and moves once a minute, so the row never flickers.
     func napRow(_ due: Date) -> some View {
-        let nap = model.napAlarm
+        // While the row fades out (called off, so no nap is due), it keeps the nap it showed: the alarm leaves the list before
+        // the row has gone, and its line turned to "Set on the Chumby" over "Beep" for four frames (gate 4, 11-21).
+        let nap = model.napAlarm ?? (model.napDue == nil ? lastNap : nil)
         let own = nap == nil
         return TimelineView(.periodic(from: .now, by: 30)) { ctx in
             let left = max(due.timeIntervalSince(ctx.date), 0)

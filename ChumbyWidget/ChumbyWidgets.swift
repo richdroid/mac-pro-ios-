@@ -83,8 +83,15 @@ struct ChumbyProvider: AppIntentTimelineProvider {
             if let midnight = Calendar.current.nextDate(after: first.date, matching: DateComponents(hour: 0), matchingPolicy: .nextTime) { marks.insert(midnight) }
             // And the moment a skipped time passes, so "Skipped" clears by itself.
             if let s = first.skipped { marks.insert(s.date.addingTimeInterval(1)) }
+            // And each of the Chumby's own night and day times in the next day, drawn as it will be then: every later entry
+            // carried the night reading, so the morning's "night off" left the moon lit on the Home Screen until iOS next
+            // asked (Richard, 11-20: "the widget sometimes doesn't update" after night to day).
+            let turns = Self.nightTurns(state, after: first.date)
+            for t in turns { marks.insert(t.at.addingTimeInterval(5)) }
             for m in marks.sorted() {
-                var e = ChumbyEntry(date: m, reachable: first.reachable, sys: first.sys, alarmsKnown: true, deviceDown: first.deviceDown, lastSeen: first.lastSeen)
+                var sys = first.sys
+                if first.reachable, let t = turns.last(where: { $0.at.addingTimeInterval(5) <= m }) { sys.night = t.night ? 1 : 0 }
+                var e = ChumbyEntry(date: m, reachable: first.reachable, sys: sys, alarmsKnown: true, deviceDown: first.deviceDown, lastSeen: first.lastSeen)
                 if let n = Self.next(state, after: m) { e.nextAlarm = n.alarm; e.nextAt = n.at }
                 e.skipped = first.skipped.flatMap { $0.date > m ? $0 : nil }
                 e.moved = state.justOnce(now: m).flatMap { $0.pinned ? $0 : nil }
@@ -93,6 +100,15 @@ struct ChumbyProvider: AppIntentTimelineProvider {
             }
         }
         return Timeline(entries: entries, policy: .after(Date().addingTimeInterval(30 * 60)))
+    }
+    // The Chumby's scheduled night and day changes ("22:00 night on", "07:00 night off") over the next day, in order.
+    static func nightTurns(_ s: ChumbyState, after d: Date) -> [(at: Date, night: Bool)] {
+        s.schedule.filter { $0.cmd == "night" }.compactMap { item -> (at: Date, night: Bool)? in
+            let p = item.time.split(separator: ":").compactMap { Int($0) }
+            guard p.count == 2, let at = Calendar.current.nextDate(after: d, matching: DateComponents(hour: p[0], minute: p[1]), matchingPolicy: .nextTime) else { return nil }
+            return (at, item.val != "off")
+        }
+        .sorted { $0.at < $1.at }
     }
     static func next(_ s: ChumbyState, after d: Date) -> (alarm: Alarm, at: Date)? {
         s.nextRing(after: d)

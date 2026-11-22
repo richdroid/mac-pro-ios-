@@ -388,18 +388,21 @@ struct RingScreen: View {
 struct SlideToStop: View {
     var busy = false
     let done: () -> Void
-    // Let go short of the end, or the touch taken away by the system, the key springs back by itself (the gesture's own
-    // reset): set back in the gesture's ending, it was at the start in one frame (film, 11-20).
-    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.32, dampingFraction: 0.7))) private var pull: CGFloat = 0
+    // Where the finger has the key, kept as plain state and sent back by an explicit spring when let go short: the
+    // gesture's own reset (GestureState's resetTransaction) put it back at the start in one frame under a real finger
+    // (gate 4, 11-21, dbg-ringslide ~40.85 s). `touching` only notices a touch the system took away (a call, the
+    // Control Centre), which ends the gesture with no onEnded, so the key goes back then too.
+    @State private var pull: CGFloat = 0
+    @GestureState private var touching = false
     @State private var landed = false
-    @State private var from: CGFloat = 0
+    static let back = Animation.spring(response: 0.32, dampingFraction: 0.78)
     static let height: CGFloat = 76, key: CGFloat = 60, inset: CGFloat = 8
     var body: some View {
         GeometryReader { g in
             let run = max(g.size.width - Self.key - Self.inset * 2, 1)
             // A Stop on its way that wasn't slid here (pressed on the Lock Screen or Home's card, with this page up) takes
             // the key across all the same: the bar never says "Slide to stop" under a card that says "Stopping…".
-            let k = landed || busy ? 1 : max(min(max(pull / run, 0), 1), from)
+            let k = landed || busy ? 1 : min(max(pull / run, 0), 1)
             ZStack(alignment: .leading) {
                 ChumbyGel(colors: [0xff8f5e, 0xfc5825, 0xdc4410], rim: 0x9c2c08)
                 Text("Slide to stop").font(.custom("Trebuchet MS", size: 20).weight(.bold)).foregroundStyle(.white)
@@ -423,24 +426,33 @@ struct SlideToStop: View {
             .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .gesture(
                 DragGesture(minimumDistance: 4)
-                    .updating($pull) { v, pull, _ in if !landed && !busy { pull = v.translation.width } }
+                    .updating($touching) { _, t, _ in t = true }
+                    .onChanged { v in
+                        guard !landed, !busy else { return }
+                        // 1:1 under the finger, never animated.
+                        var plain = Transaction(); plain.disablesAnimations = true
+                        withTransaction(plain) { pull = v.translation.width }
+                    }
                     .onEnded { v in
                         guard !landed, !busy else { return }
                         // The whole run, or a flick already past halfway that would carry it there.
                         let far = v.translation.width / run, carried = v.predictedEndTranslation.width / run
                         if far >= 0.8 || (far >= 0.45 && carried >= 1) {
-                            // Held where the finger left it, then on to the end: not back to the start and out again.
-                            var keep = Transaction(); keep.disablesAnimations = true
-                            withTransaction(keep) { from = min(max(far, 0), 1) }
+                            // From where the finger left it on to the end: not back to the start and out again.
                             withAnimation(.spring(response: 0.22, dampingFraction: 0.8)) { landed = true }
                             done()
+                        } else {
+                            // Short: back to the start over a third of a second, "Slide to stop" fading in as it goes.
+                            withAnimation(Self.back) { pull = 0 }
                         }
                     }
             )
         }
         .frame(height: Self.height)
         // Back from a Stop the Chumby didn't take: the key returns to its start, ready to be slid again.
-        .onChange(of: busy) { _, b in if !b { withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { landed = false; from = 0 } } }
+        .onChange(of: busy) { _, b in if !b { withAnimation(Self.back) { landed = false; pull = 0 } } }
+        // A touch the system took away: the key goes home as it does when let go short.
+        .onChange(of: touching) { _, t in if !t, !landed, !busy, pull != 0 { withAnimation(Self.back) { pull = 0 } } }
         .accessibilityElement()
         .accessibilityLabel("Stop the alarm")
         .accessibilityAddTraits(.isButton)
