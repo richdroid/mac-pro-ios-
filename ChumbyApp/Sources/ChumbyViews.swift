@@ -974,6 +974,12 @@ struct HomeTab: View {
     // it was taken at. Worked from the new width instead, a stale reading narrowed the device a second time (the build's
     // log, 11-21: 330 → 273 → 250 folded, where 273 fits).
     @State private var slotWidth: CGFloat = 0
+    // Whether the controls' foot was read while a ring held Home (its card in the slot, the snooze ring's room made).
+    @State private var slotRing = false
+    // While a ring holds Home, folded and open upright, the device may narrow further so Stop is on screen; the width at
+    // rest is kept apart and comes back on Stop. Home at rest is never sized by a ring's card (it is about 75 pt taller
+    // than the next alarm's): before, one ring narrowed the device for the rest of the posture.
+    @State private var ringFit: CGFloat?
     @State private var captionWidth: CGFloat = 0
     @State private var room: CGFloat = 0
     @State private var under: CGFloat = 0
@@ -986,11 +992,19 @@ struct HomeTab: View {
     // How far the caption's foot moves per point of stage width: the octopus's lift (58/380) and the device's own height.
     static let footPerWidth: CGFloat = 58.0 / 380 + 325.0 / 371
     var maxWidth: CGFloat { wide ? Self.wideStage : Self.maxStage }
-    var stageWidth: CGFloat { min(fitWidth ?? maxWidth, maxWidth) }
+    var stageWidth: CGFloat { min(fitWidth ?? maxWidth, ringHolds && !wide ? (ringFit ?? maxWidth) : maxWidth, maxWidth) }
     func refit() {
         guard room > 0, controlsFoot > 0, wide || slotFoot > 0 else { return }
-        if abs(fitRoom - room) > 1 { fitRoom = room; fitWidth = nil }
+        if abs(fitRoom - room) > 1 { fitRoom = room; fitWidth = nil; ringFit = nil }
         let w = stageWidth
+        // A ring's reading sizes only the ring's width; one taken at rest, only the width at rest. A reading left from the
+        // other state (before the page is laid out again) is passed over.
+        if !wide, slotRing != ringHolds { return }
+        if !wide, ringHolds {
+            let t = min(maxWidth, max(Self.minStage, slotWidth - (slotFoot + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
+            if t < w - 0.6 { withAnimation(ChumbyModel.ringChange(to: model.sys.ringing)) { ringFit = t } }
+            return
+        }
         // Sized for Home at rest: the feet are read less the snooze ring's room (taken off as each is measured), so a
         // ring never narrows the device for the rest of the posture.
         let fitFoot = wide ? controlsFoot : slotFoot
@@ -1089,6 +1103,8 @@ struct HomeTab: View {
             // The picture goes to static, then black, only when the Chumby itself has gone quiet; a route this phone
             // can't use keeps the last picture (2026-11-11 gate: a black screen read as "so it's off?").
             .onChange(of: model.dead) { _, gone in goneAt = gone ? Date() : nil }
+            // Stopped: back to the width at rest, in the ring change's spring, as the ringing card goes.
+            .onChange(of: ringHolds) { _, holds in if !holds, ringFit != nil { withAnimation(ChumbyModel.ringChange(to: nil)) { ringFit = nil } } }
             // Going quiet mid-snooze moves him too, in the same spring a ring change would.
             .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: snoozing)
             .onAppear {
@@ -1436,7 +1452,7 @@ struct HomeTab: View {
                             .frame(maxWidth: Self.column)
                             .padding(.top, Self.underDevice)
                             // What the fit ends on, one column: the foot of the last control.
-                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { slotFoot = $0 - snoozeRoom; slotWidth = stageWidth; refit() }
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { slotFoot = $0; slotRing = ringHolds; slotWidth = stageWidth; refit() }
                         Color.clear.frame(height: 1).id("homebar")
                         about.padding(.top, Self.sectionGap)
                         if moreInfo { more.frame(maxWidth: Self.column) }
