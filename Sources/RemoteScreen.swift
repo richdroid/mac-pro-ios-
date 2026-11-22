@@ -316,7 +316,7 @@ final class RemoteScreen: ObservableObject {
     // decoder's count, which the display link picks up; the main thread hears only of a change of state.
     nonisolated private static func receiveLoop(_ task: URLSessionWebSocketTask, decoder: ScreenDecoder, owner screen: RemoteScreen?) async {
         weak var owner = screen
-        var told = false, toldWhole = false
+        var told = false, toldWhole = false, proved = false
         while true {
             let data: Data
             do {
@@ -333,8 +333,15 @@ final class RemoteScreen: ObservableObject {
                 await owner?.dropped(task, code: code)
                 return
             }
+            // Past the handshake before this message: a reattached session, carrying on mid-stream.
+            let midStream = !proved && decoder.resumable
             let events = decoder.feed(data, from: task)
             if decoder.socket !== task { return }
+            // The first of the Mac's stream on a reattached socket: it's up (see provedUp).
+            if midStream {
+                proved = true
+                guard let owner, await owner.provedUp(task) else { return }
+            }
             let state = events.filter { !$0.isDrawing }
             let firstPicture = !told && events.contains { $0.isDrawing }
             // And once more when the first picture is whole (the first may only have been its top), for its timing.
@@ -375,18 +382,32 @@ final class RemoteScreen: ObservableObject {
         if o["video"] as? Bool == true, Self.videoWanted { decoder?.useVideo() }
         if o["waking"] as? Bool == true, !macWaking { macWaking = true }
         if let token = o["resume"] as? String { resumeToken = token }
-        if o["resumed"] as? Bool == true, resuming === task {
-            // Back on the same session: the picture never went, so there's nothing to show but the picture.
-            resuming = nil
-            attempts = 0
-            if phase == .reconnecting || phase == .connecting { phase = .connected }
-            slowTimer?.cancel(); slowTimer = nil; slowReconnect = false
-            send([251, 0, 0, 0])
-            refresh()
-            startMeasuring()
-            watchWhole()
-        }
+        if o["resumed"] as? Bool == true, resuming === task { resumed(on: task) }
         return true
+    }
+    // Back on the same session: the picture never went, so there's nothing to show but the picture.
+    private func resumed(on task: URLSessionWebSocketTask) {
+        guard resuming === task else { return }
+        resuming = nil
+        attempts = 0
+        if phase == .reconnecting || phase == .connecting { phase = .connected }
+        slowTimer?.cancel(); slowTimer = nil; slowReconnect = false
+        send([251, 0, 0, 0])
+        refresh()
+        startMeasuring()
+        watchWhole()
+    }
+    // The Mac's own stream arriving on a socket past its handshake proves it is up, picture or not: on a still Mac the
+    // bridge sends no new picture, so "Reconnecting…" waited on one while the keys and pointer already worked (Richard,
+    // 2026-11-20: "the reconnecting thing is still happening even when i can control still"). A reattached session
+    // carrying the stream counts as resumed even if the bridge's note was missed. A fresh connection is past its
+    // handshake only once the Mac's first words are read, which already said so (.opened), so nothing is sent early.
+    private func provedUp(_ task: URLSessionWebSocketTask) -> Bool {
+        guard running, socket === task else { return false }
+        if resuming === task { resumed(on: task) }
+        else if phase == .reconnecting { phase = .connected }
+        if phase == .connected, slowReconnect || slowTimer != nil { slowTimer?.cancel(); slowTimer = nil; slowReconnect = false }
+        return running && socket === task
     }
     private func dropped(_ task: URLSessionWebSocketTask, code: Int) {
         guard running, socket === task else { return }

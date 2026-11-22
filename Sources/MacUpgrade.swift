@@ -35,7 +35,22 @@ struct UpgradeFeed: Decodable, Equatable {
     static func gb(_ b: Double) -> String { Format.bytes(b) }
     var name: String { target.map { "macOS \($0.version)" } ?? "macOS" }
     var short: Double { max(0, want - free) }
-    var safe: Double { (cleanups ?? []).reduce(0) { $0 + ($1.bytes ?? 0) } }
+    // The clean-ups worth a row (50 MB or more: "0.0 GB" beside a live Remove key was a row for nothing).
+    var shownCleanups: [Cleanup] { (cleanups ?? []).filter { ($0.bytes ?? 0) >= 50e6 } }
+    // What the rows above free between them, added up as they are written, so the sum is the rows' own figures: the
+    // exact total read "free 4.6 GB" under rows of 1.0 and 3.5 GB (gate 3, 2026-11-21), the left-out 7 MB and the
+    // rounding between them.
+    var safe: Double { shownCleanups.reduce(0) { $0 + Self.asShown($1.bytes ?? 0) } }
+    static func asShown(_ b: Double) -> Double {
+        let gib = 1_073_741_824.0, v = b / gib
+        return (b < 17_179_869_184 ? (v * 10).rounded() / 10 : v.rounded()) * gib
+    }
+    // The version waiting, only while it isn't the one already running: patching after the install, the Mac is on it
+    // and the page said "Waiting: macOS 26.7.3" under "Running: macOS 26.7.3" (gate 3).
+    var waiting: Target? {
+        guard let t = target, current.split(separator: " ").first.map(String.init) != t.version else { return nil }
+        return t
+    }
     // Something waiting or under way: the Dashboard shows its card.
     var pending: Bool { target != nil || ["downloading", "installing", "patching"].contains(phase) }
     var underWay: Bool { ["downloading", "installing", "patching"].contains(phase) }
@@ -83,13 +98,19 @@ final class DownloadClock: @unchecked Sendable {
 // What the page says first, for the feed and for the Mac gone quiet in the middle of it.
 struct UpgradeStanding: Equatable {
     var symbol: String, color: Color, title: String, line: String
+    // What to do, in order, when there is something for his hands (the Mac not back): numbered under the line.
+    var todo: [String] = []
     static func of(_ f: UpgradeFeed, away: Bool = false, awayMinutes: Int = 0) -> UpgradeStanding {
         let n = f.name
         if away, f.underWay || f.phase == "ready" {
             // The Mac restarts itself to install and again for its patches: about 40 minutes out of reach is the usual.
             if awayMinutes >= UpgradeView.backWithin {
+                // Steps, not a paragraph: eight grey lines under the title were a wall to read in a hurry (gate 3).
                 return UpgradeStanding(symbol: "exclamationmark.triangle.fill", color: .red, title: "The Mac hasn’t come back",
-                                       line: "It went quiet \(awayMinutes) min ago, installing \(n); it is usually back within \(UpgradeView.backWithin). It may be stopped at a screen that needs a keyboard. Look at its display. If it is dark and stays dark, hold its power button for ten seconds, then press it once to start it.")
+                                       line: "Quiet for \(awayMinutes) min while installing \(n). It is usually back within \(UpgradeView.backWithin).",
+                                       todo: ["Look at its display: it may be waiting at a screen that needs a keyboard.",
+                                              "Dark and staying dark: hold its power button for ten seconds.",
+                                              "Then press the power button once to start it."])
             }
             return UpgradeStanding(symbol: "arrow.triangle.2.circlepath", color: macBlue, title: "The Mac is restarting",
                                    line: "Installing \(n). It restarts by itself, more than once, and is out of reach meanwhile: \(awayMinutes) min so far, usually back within \(UpgradeView.backWithin).")
@@ -314,19 +335,20 @@ struct CleanupRow: View {
                 }
                 Spacer(minLength: 8)
                 Text(empty ? "Empty" : UpgradeFeed.gb(item.bytes ?? 0)).foregroundStyle(.secondary).monospacedDigit()
-                if busy { ProgressView().controlSize(.small).frame(width: 76, height: 44) }
-                else {
-                    Button("Remove") { start() }.buttonStyle(.bordered).tint(.red).disabled(empty)
-                        .frame(minWidth: 76, minHeight: 44)
-                        .accessibilityIdentifier("cleanup." + item.id)
-                }
+                // The key stays put while the Mac is asked, its wait drawn in its place, and the question hangs off
+                // the key itself: hung off the row, its bubble pointed at the row's middle, not at Remove (gate 3).
+                Button("Remove") { start() }.buttonStyle(.bordered).tint(.red).disabled(empty || busy)
+                    .opacity(busy ? 0 : 1)
+                    .overlay { if busy { ProgressView().controlSize(.small) } }
+                    .frame(minWidth: 76, minHeight: 44)
+                    .accessibilityIdentifier("cleanup." + item.id)
+                    .confirmationDialog("Remove \(item.name)?", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } }), titleVisibility: .visible) {
+                        if let a = asking {
+                            Button("Remove", role: .destructive) { run(a.nonce) }
+                            Button("Cancel", role: .cancel) {}
+                        }
+                    } message: { Text(asking.map { "This will " + MPActionRow.lowerFirst($0.say) } ?? "") }
             }
-            .confirmationDialog("Remove \(item.name)?", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } }), titleVisibility: .visible) {
-                if let a = asking {
-                    Button("Remove", role: .destructive) { run(a.nonce) }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: { Text(asking.map { "This will " + MPActionRow.lowerFirst($0.say) } ?? "") }
             if let a = answer {
                 Label(a.say ?? (a.ok == true ? "Done" : "Not done"), systemImage: a.ok == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .font(.footnote).foregroundStyle(a.ok == true ? Color.green : Color.red).fixedSize(horizontal: false, vertical: true)
@@ -337,11 +359,13 @@ struct CleanupRow: View {
     func start() {
         failure = nil; answer = nil; busy = true
         Task {
+            // The key is live again before its question is asked: the question hangs off the key.
             defer { busy = false }
-            if !model.pose.isEmpty { try? await Task.sleep(nanoseconds: 500_000_000); asking = ("Dry run: would remove \(UpgradeFeed.gb(item.bytes ?? 0)). Nothing was removed.", "posed"); return }
+            if !model.pose.isEmpty { try? await Task.sleep(nanoseconds: 500_000_000); busy = false; asking = ("Dry run: would remove \(UpgradeFeed.gb(item.bytes ?? 0)). Nothing was removed.", "posed"); return }
             do {
                 let (e, n) = try await model.api.mp("clean", [item.id], dryRun: true)
                 if e.ok == false || n == nil || !MPActionRow.wouldDo(e.say) { withAnimation(Motion.quick) { answer = e }; return }
+                busy = false
                 asking = (e.say ?? "remove it", n!)
             } catch { failure = MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription }
         }
@@ -365,7 +389,9 @@ struct CleanupRow: View {
 
 struct UpgradeView: View {
     let model: AppModel
+    @Environment(\.paneLayout) private var panes
     @ObservedObject private var feed = ConsoleSummary.shared.upgrade
+    @State private var fullLog = false
     @State private var checks: MacReport?
     @State private var checking = false
     @State private var password = ""
@@ -404,11 +430,23 @@ struct UpgradeView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(st.title).font(.headline).fixedSize(horizontal: false, vertical: true)
                     Text(st.line).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    ForEach(st.todo.indices, id: \.self) { i in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("\(i + 1).").font(.subheadline.weight(.semibold)).monospacedDigit().frame(width: 18, alignment: .leading)
+                            Text(st.todo[i]).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.top, 2)
+                    // The download's bar under its figures, at the top of the page: open flat it is in the left pane,
+                    // beside the steps, not only down in step 3.
+                    if f.phase == "downloading", let d = f.download {
+                        ProgressView(value: min(100, max(0, d.percent)), total: 100).tint(macBlue).padding(.top, 6)
+                    }
                 }
             }
             .padding(.vertical, 4)
             LabeledContent("Running", value: "macOS \(f.current)")
-            if let t = f.target { LabeledContent("Waiting", value: t.label ?? "macOS \(t.version)") }
+            if let t = f.waiting { LabeledContent("Waiting", value: t.label ?? "macOS \(t.version)") }
         }
     }
 
@@ -420,7 +458,7 @@ struct UpgradeView: View {
             }
             if s[0] != .done {
                 // A clean-up with nothing worth taking (under 50 MB) is left out: "0.0 GB" beside a live Remove key.
-                ForEach((f.cleanups ?? []).filter { ($0.bytes ?? 0) >= 50e6 }) { c in CleanupRow(model: model, item: c) { Task { await feed.read(model.api, query: "?fresh=1") } } }
+                ForEach(f.shownCleanups) { c in CleanupRow(model: model, item: c) { Task { await feed.read(model.api, query: "?fresh=1") } } }
             }
         } header: { Text("Make room") } footer: {
             if s[0] != .done {
@@ -446,7 +484,7 @@ struct UpgradeView: View {
     func checkLine(_ s: StepState) -> String {
         if checking || (checks == nil && failure == nil && s != .waiting) { return "Checking…" }
         if s == .waiting { return "Run when there is room and the patcher supports it." }
-        if !red.isEmpty { return "The install waits: " + red.map(\.say).joined(separator: "; ") + "." }
+        if !red.isEmpty { return "The install waits: " + red.map { MacParts.say($0, check: true) }.joined(separator: "; ") + "." }
         if publicLink { return "The install only starts over Tailscale, never the public link." }
         return checks == nil ? "Not checked: the Mac didn’t answer." : "Nothing in the way."
     }
@@ -463,8 +501,8 @@ struct UpgradeView: View {
                 .padding(.leading, 40)
                 .accessibilityIdentifier("upgrade.patcherScreen")
             }
-            step(3, s[2], f.phase == "downloading" ? (f.downloadLine.map { $0 + "." } ?? "Downloading.") : s[2] == .done ? "Downloaded." : "Starts with the install; the Mac fetches it itself\(f.target?.size.map { " (\($0))" } ?? "").")
-            if f.phase == "downloading", let d = f.download { ProgressView(value: min(100, max(0, d.percent)), total: 100).tint(macBlue) }
+            // Its figures and bar are at the top of the page while it runs: said once.
+            step(3, s[2], f.phase == "downloading" ? "Under way; how far it has got is at the top." : s[2] == .done ? "Downloaded." : "Starts with the install; the Mac fetches it itself\(f.target?.size.map { " (\($0))" } ?? "").")
             step(4, s[3], checkLine(s[3]))
             if s[3] != .waiting, let c = checks {
                 ForEach(c.parts.filter { $0.part != "oclp" && $0.part != "updates" && $0.part != "restart" }) { p in
@@ -472,7 +510,8 @@ struct UpgradeView: View {
                         Circle().fill(p.bad ? Color.red : Color.green).frame(width: 8, height: 8)
                         Text(MacParts.name(p.part, check: true)).font(.subheadline)
                         Spacer(minLength: 8)
-                        Text(p.say).font(.footnote).foregroundStyle(p.bad ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary)).multilineTextAlignment(.trailing)
+                        // In his words, never the Mac's paths ("Scripts from /tmp kept", gate 3).
+                        Text(MacParts.say(p, check: true)).font(.footnote).foregroundStyle(p.bad ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary)).multilineTextAlignment(.trailing)
                     }
                     .padding(.leading, 40)
                 }
@@ -556,13 +595,19 @@ struct UpgradeView: View {
             } else {
                 Section { HStack { ProgressView(); Text("Asking the Mac where the upgrade stands…").foregroundStyle(.secondary) } }
             }
+            // Open flat the log fills the left pane under where the upgrade stands, beside the steps: the left pane was
+            // half empty (gate 3). In one column it stays at the foot, after the steps.
+            if panes { UpgradeLog(store: model.statusStore, full: $fullLog) }
         } right: {
             if let f, f.phase != "idle" {
                 rest(f, f.steps(checksRed: !red.isEmpty || publicLink, checked: checks != nil && !checking))
                     .disabled(away)
             }
-            UpgradeLog(model: model)
+            if !panes { UpgradeLog(store: model.statusStore, full: $fullLog) }
         }
+        // The whole log, from the page, not from inside a row of its list: hung off the row, it went with the row when
+        // the list let it go, and closing it left the page's foot black (gate 3).
+        .screenCover(isPresented: $fullLog) { FullLog(log: model.statusStore.status?.upgrade.log ?? "").environmentObject(model) }
         .onChange(of: feed.value?.download?.percent, initial: true) { _, p in DownloadClock.shared.note(p) }
         .task {
             if let p = posed { feed.set(p.feed); await check(); return }
@@ -579,19 +624,22 @@ struct UpgradeView: View {
 // the app): its newest lines, whole, and a tap for all of it full screen. The same log as the Updates page's, read from
 // the Mac's status as it lands; while the Mac is restarting it is the last one it gave.
 struct UpgradeLog: View {
-    let model: AppModel
-    @State private var log = ""
-    @State private var full = false
+    // Read straight from the status as it lands, not copied in from inside the section's header: a header the list
+    // hadn't drawn yet never copied it, and the row stood empty (gate 3, "the Log row is blank").
+    @ObservedObject var store: StatusStore
+    @Binding var full: Bool
     // The newest lines, drawn plainly: the Updates page's LogPreview parks the lines that don't fit 5000 pt above
     // itself, which inside a List row left the row, and at the page's foot the whole page, blank (CI 017ec21).
     static let shown = 12
-    var lines: [String] { Array(log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(LogPreview.short).suffix(Self.shown)) }
+    var log: String { store.status?.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+    static func lines(_ log: String) -> [String] { Array(log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(LogPreview.short).suffix(shown)) }
     var body: some View {
+        let log = self.log
         Section {
             if log.isEmpty {
                 Text("The Mac hasn’t sent its update log yet.").foregroundStyle(.secondary)
             } else {
-                let all = lines
+                let all = Self.lines(log)
                 VStack(alignment: .leading, spacing: LogPreview.gap) {
                     ForEach(all.indices, id: \.self) { i in
                         Text(all[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(all[i]))
@@ -606,17 +654,12 @@ struct UpgradeLog: View {
                 .accessibilityLabel("Update log, newest lines").accessibilityHint("Opens the whole log").accessibilityAddTraits(.isButton)
                 .accessibilityAction { full = true }
                 .accessibilityIdentifier("upgrade.log")
-                .screenCover(isPresented: $full) { FullLog(log: log).environmentObject(model) }
             }
         } header: {
             HStack(alignment: .firstTextBaseline) {
                 Text("Log")
                 Spacer()
                 if !log.isEmpty { Button("Show all") { full = true }.textCase(nil).foregroundStyle(macBlue) }
-            }
-            .onReceive(model.statusStore.$status) { st in
-                let l = st?.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if l != log { log = l }
             }
         } footer: { if !log.isEmpty { Text("The update service’s own lines, newest at the foot; tap for all of them. Red is a failure, green a step done.") } }
     }

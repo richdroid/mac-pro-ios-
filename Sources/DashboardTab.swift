@@ -334,7 +334,9 @@ struct UpkeepSection: View {
                 row("Connections", "point.3.connected.trianglepath.dotted", x.good ? "All up" : x.text, bad: !x.good, page: .links)
             } else { row("Connections", "point.3.connected.trianglepath.dotted", nil, page: .links) }
             if let g = upgrade.value, g.pending {
-                row("Updates", "arrow.down.circle", (g.target?.version).map { "macOS \($0) waiting" } ?? "macOS waiting", page: .upgrade)
+                // Under way it says what it is doing; "waiting" only while the version isn't the one running (gate 3).
+                let doing = ["downloading": "Downloading", "installing": "Installing", "patching": "Patching"][g.phase]
+                row("Updates", "arrow.down.circle", doing ?? (g.waiting?.version).map { "macOS \($0) waiting" } ?? "macOS waiting", page: .upgrade)
             } else if let u = updates.value {
                 let waiting = (u.macos.pending ?? []).count + (u.brew?.outdated ?? []).count
                 row("Updates", "arrow.down.circle", u.macos.pending == nil ? nil : waiting == 0 ? "Up to date" : "\(waiting) waiting", page: .updates)

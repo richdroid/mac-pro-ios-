@@ -442,6 +442,18 @@ enum Motion {
     // Fades: the pointer, a value changing.
     static let fade = Animation.easeOut(duration: 0.16)
 }
+// A live figure flowing from its last reading to the new one (Richard, 2026-11-20: "the way the #s r changing is choppy
+// and weird ... it should suggest motion and interconnectivity between the number reported and the new one"): the digits
+// roll and the dial or line beside it moves with them, eased over most of the time between readings, so one reading's
+// motion ends as the next arrives. Capped at a second: at a 5 s pace a digit never drags.
+enum LiveMotion {
+    static var seconds: Double { min(max(MacPrefs.liveEvery * 0.85, 0.5), 1.0) }
+    static var figure: Animation { .smooth(duration: seconds) }
+    // A sparkline slides one reading to the left over the whole interval, so it scrolls continuously.
+    static var glide: Double { MacPrefs.liveEvery * 0.95 }
+    // Not while a page slides on or off, nor as he arrives on a tab: the readings he missed are simply there.
+    @MainActor static var now: Animation? { NavTransit.shared.active || AppModel.justArrived ? nil : figure }
+}
 
 // A card that gives under the finger, as system rows highlight.
 struct PressStyle: ButtonStyle {
@@ -879,6 +891,9 @@ struct Screen<Content: View>: View {
             // No pull to refresh: every figure follows the Mac by itself (each second on Status, every 10 seconds
             // otherwise, and at once on opening a tab), so pulling only ever showed what was already there (Richard,
             // 2026-11-07: the display key "should self update not requiring refresh which u can take the function out").
+            // Except Claude's, which he asked for (Richard, 2026-11-20: "esp on claude add a refresh or pull down action
+            // for that tab"): a pull reads the Mac's status, limits and sessions, at once.
+            .modifier(PullToRead(on: tab == 2, model: model))
             .contentMargins(.top, 4, for: .scrollContent)
             // Asked for the usage (the Claude widget, or an old link to the Usage tab): the Claude tab opens at it.
             .task(id: model.usageAsked) {
@@ -1015,6 +1030,14 @@ struct Screen<Content: View>: View {
         }
     }
 }
+// Pull to read the Mac now, on the one tab that has it (Claude).
+struct PullToRead: ViewModifier {
+    let on: Bool
+    let model: AppModel
+    func body(content: Content) -> some View {
+        if on { content.refreshable { await model.refresh() } } else { content }
+    }
+}
 extension View {
     // Settings as the system's own bar item, on every tab's root. Not a tab ("never more tabs").
     func settingsItem(_ open: @escaping () -> Void) -> some View {
@@ -1144,6 +1167,8 @@ struct WebTile: View {
     // "ready to install" with itself as its shorter form took the app down in every upgrade state but "room", wherever
     // the tiles were laid out (CI c43e051's crash report).
     static func distinct(_ a: [String]) -> [String] { var seen = Set<String>(); return a.filter { seen.insert($0).inserted } }
+    // The figure's number, for which way its digits roll ("48.4 MB/s" is 48.4; the unit's size is in the words).
+    static func number(_ v: String) -> Double { Double(v.prefix { $0.isNumber || $0 == "." }) ?? 0 }
     func figureText(_ value: String) -> Text {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
         let small = Font.system(size: 17, weight: .semibold)
@@ -1170,15 +1195,19 @@ struct WebTile: View {
             // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
             HStack(spacing: 7) {
                 if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
+                // Each form keeps its place, not its words, as its identity: keyed by the words, every new reading was a
+                // new view, faded in over the old one in a fifth of a second, and the digits never rolled (Richard,
+                // 2026-11-20: "choppy and weird").
                 ViewThatFits(in: .horizontal) {
-                    ForEach(Self.distinct([value] + figures), id: \.self) { v in figureText(v).lineLimit(1).fixedSize() }
+                    ForEach(Array(Self.distinct([value] + figures).enumerated()), id: \.offset) { _, v in figureText(v).lineLimit(1).fixedSize() }
                     figureText(figures.last ?? value).lineLimit(1)
                 }
-                .contentTransition(.numericText())
+                // Rolled up as the figure grows and down as it falls, over most of the time to the next reading.
+                .contentTransition(.numericText(value: Self.number(value)))
                 // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                 // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                 // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
-                .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
+                .animation(LiveMotion.now, value: value)
             }
             // The longest that fits whole, never cut with an ellipsis.
             ViewThatFits(in: .horizontal) {
@@ -1188,7 +1217,7 @@ struct WebTile: View {
             .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             if spark.count > 1 {
                 // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
-                SparkLine(values: spark, top: top)
+                SparkLine(values: spark, top: top, glide: NavTransit.shared.active || AppModel.justArrived ? 0 : LiveMotion.glide)
                     .frame(height: 42).padding(.top, 8)
             }
         }
@@ -1248,9 +1277,11 @@ struct TempDials: View {
         EvenGrid(spacing: 12, rowSpacing: 16) {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
+                    // The number and its ticks move as one: the ticks light or go out one by one as the digits roll.
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
-                        Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+                        Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit().contentTransition(.numericText(value: t.c))
                     }
+                    .animation(LiveMotion.now, value: t.c)
                     // The hottest sensor's name stands out, so the one to watch is found at a glance (Richard, 2026-11-12:
                     // "iterate on the features u removed and make it even better").
                     Text(t.name).font(.caption2.weight(t.name == hottest && temps.count > 1 ? .semibold : .regular))
@@ -1938,10 +1969,12 @@ struct LimitsSection: View {
     var budget: Double { savedBudget > 0 ? savedBudget : MacPrefs.apiBudget }
     // Whole dollars once it's big enough that cents would crowd the dial.
     static func money(_ v: Double) -> String { v.formatted(.currency(code: "USD").precision(.fractionLength(v >= 100 ? 0 : 2))) }
-    // A Mac that has answered and still has nothing to say about the API (an older one) gets no dial for it, rather than
-    // a grey placeholder that never fills in.
+    // A dial for the API only when the Mac has said something about it: the last status kept on the phone says so at
+    // once on opening. Before the first answer the tab drew a grey placeholder dial, which read as the tab still loading
+    // (gate 3, 2026-11-21: "Claude tab opens with a grey placeholder gauge"); a Mac with nothing to say (an older one)
+    // never had one either.
     var showsAPI: Bool { Self.showsAPI(s, model) }
-    static func showsAPI(_ s: Status, _ model: AppModel) -> Bool { s.apiUsage != nil || !model.gotFresh }
+    static func showsAPI(_ s: Status, _ model: AppModel) -> Bool { s.apiUsage != nil }
     // A lone dial (the week, on a Mac that reports no API) would sit in the middle of a wide card: this Mac's own figures
     // go beside it, as the plan card had them, and the list further down leaves them out.
     static func lone(_ s: Status, _ model: AppModel) -> Bool { s.usage.plan?.fiveHour == nil && !showsAPI(s, model) }
@@ -2588,7 +2621,7 @@ struct FullLog: View {
                 .background(groupedBackground.ignoresSafeArea())
                 .navigationTitle("Log")
                 .toolbarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("log.done") } }
         }
     }
 }

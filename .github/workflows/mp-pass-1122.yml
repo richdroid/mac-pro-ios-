@@ -1,0 +1,181 @@
+name: Mac Pro pass 11-22 (mp-pass-1122)
+# Branch-only shots and films for the Mac Pro pass of 2026-11-22: every tab in every posture (folded, folded on its side,
+# open upright, open flat at the simulator's size and at Richard's), the Upgrade page in its states (the log, the
+# download, patching, the Mac not back, the clean-up's question), the Dashboard remote in each Console state with films
+# of its presses, the live figures moving (60 fps), Claude's pull to refresh, and the Screen's Return key. Published to
+# the mp-pass-1122 release. Remove this file before merging.
+on:
+  push:
+    branches: [mp-pass-1122]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mp-pass-1122
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 70
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          APP=local.macpro.MacPro
+          crashes() {
+            local n=0
+            for f in $(ls -t ~/Library/Logs/DiagnosticReports/MacPro* 2>/dev/null | head -3); do n=$((n+1)); head -c 40000 "$f" > dist/crash-$n.log; done
+            echo "crash reports: $n"
+          }
+          # name, display, wait, then the app's own arguments.
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            perl -e 'alarm 90; exec @ARGV' xcrun simctl launch "$DEVICE" $APP -address http://127.0.0.1:${PORT:-9001} "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" $APP || { echo "NOT RUNNING at the end of $name"; sleep 6; crashes; }
+          }
+          # A shot after touches (devicehubctl commands, ';'-separated): name, display, touches, then the app's arguments.
+          shotdrag() {
+            local name=$1 display=$2 touches=$3; shift 3
+            perl -e 'alarm 90; exec @ARGV' xcrun simctl launch "$DEVICE" $APP -address http://127.0.0.1:${PORT:-9001} "$@"
+            sleep 8
+            ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep 1.5; done )
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" $APP || { echo "NOT RUNNING at the end of $name"; sleep 6; crashes; }
+          }
+          # A film: name, display, seconds after the touches, touches, then the app's arguments. Each touch is timed in the log.
+          film() {
+            local name=$1 display=$2 length=$3 touches=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 2
+            echo "$name launch at $(date +%s.%N | cut -c1-14)"
+            perl -e 'alarm 90; exec @ARGV' xcrun simctl launch "$DEVICE" $APP -address http://127.0.0.1:${PORT:-9001} "$@"
+            sleep 7
+            ( IFS=';'; for t in $touches; do echo "$name $t at $(date +%s.%N | cut -c1-14)"; eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep ${GAP:-2.5}; done )
+            sleep $length
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" $APP || true
+          }
+          # Every tab and Settings. suffix, display, then extra arguments.
+          tabs() {
+            local x=$1 d=$2; shift 2
+            for T in 0 1 2 4 5 6 9; do shot tab$T$x $d 8 -tab $T "$@"; done
+          }
+          # The Upgrade page (Control > Upkeep > Updates) in its states, and scrolled to its foot (the log).
+          upgrades() {
+            local x=$1 d=$2 sx=$3; shift 3
+            for u in room freed checksred downloading patches noreturn done; do shot upgrade-$u$x $d 9 -tab 5 -pose upgrade-$u "$@"; done
+            for u in room downloading patches; do
+              shotdrag upgrade-$u-low$x $d "drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4" -tab 5 -pose upgrade-$u "$@"
+            done
+            # The whole log opened from the page and closed: the page must come back whole, never black at its foot.
+            film upgrade-log$x $d 4 "drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;tap upgrade.log;tap log.done" -tab 5 -pose upgrade-downloading "$@"
+            # A clean-up's question: it hangs off the Remove key.
+            film upgrade-remove$x $d 4 "drag $sx 0.7 $sx 0.45 0.4;tap cleanup.caches" -tab 5 -pose upgrade-room "$@"
+          }
+          # The Dashboard remote in each state of the Console, and films of its presses answered.
+          remote() {
+            local x=$1 d=$2 sx=$3; shift 3
+            for p in consoleboard consolebed console consoleglance consoleasleep consolebehind consoleoff consolefail; do shot dash-$p$x $d 8 -tab 6 -pose $p "$@"; done
+            shotdrag dash-switches$x $d "drag $sx 0.8 $sx 0.2 0.5;drag $sx 0.8 $sx 0.2 0.5" -tab 6 -pose consolebed "$@"
+            # Next, Next, Previous: each press says "Asking the Mac…", then the board it landed on, with the lit key following.
+            film remote-steps$x $d 4 "tap remote.Next;tap remote.Next;tap remote.Previous;tap board.work" -tab 6 -pose consolebed "$@"
+            # Every switch, each answered: display held on, turns off and on, large text, Glance on and off, hidden and shown.
+            GAP=3 film remote-switches$x $d 4 "drag $sx 0.8 $sx 0.2 0.5;tap switch.display;tap switch.rotate;tap switch.rotate;tap switch.text;tap switch.glance;tap switch.glance;tap switch.show;tap switch.show" -tab 6 -pose consoleboard "$@"
+            # Not running: Start, then the remote comes alive.
+            film remote-start$x $d 4 "tap 'remote.Start the dashboard'" -tab 6 -pose consoleoff "$@"
+            # A refusal stays until the next press.
+            film remote-refused$x $d 6 "tap remote.Next" -tab 6 -pose consolefail "$@"
+          }
+          # The live figures, 12 s against the stand-in Mac whose readings change every second (number motion, 60 fps).
+          live() {
+            local x=$1 d=$2; shift 2
+            PORT=9021 film live-status$x $d 12 "" -tab 0 -fullEvery 1 "$@"
+            PORT=9021 film live-temps$x $d 10 "drag 0.5 0.75 0.5 0.35 0.5" -tab 0 -fullEvery 1 "$@"
+          }
+          # The Screen with its Return key, and the session page.
+          screens() {
+            local x=$1 d=$2; shift 2
+            shot screen$x $d 9 -tab 0 -pose screen -openScreen YES "$@"
+            shot session$x $d 9 -tab 2 -pose session "$@"
+            shot claude-scrolled$x $d 9 -tab 2 -pose scrolled "$@"
+          }
+
+          # Folded, upright.
+          tabs "" 1
+          upgrades "" 1 0.4
+          remote "" 1 0.4
+          live "" 1
+          screens "" 1
+          film claude-pull 1 3 "drag 0.4 0.3 0.4 0.75 0.7" -tab 2
+          # Folded, on its side.
+          $D "$DEVICE" rotate 1; sleep 5
+          tabs -land 1
+          shot upgrade-downloading-land 1 9 -tab 5 -pose upgrade-downloading
+          shot dash-consolebed-land 1 8 -tab 6 -pose consolebed
+          shot screen-land 1 9 -tab 0 -pose screen -openScreen YES
+          $D "$DEVICE" rotate 3; sleep 5
+          # Open, upright.
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          tabs -portrait 3
+          upgrades -portrait 3 0.5
+          remote -portrait 3 0.5
+          live -portrait 3
+          screens -portrait 3
+          tabs -hisportrait 3 -windowSize 604x859
+          # Open flat, at the simulator's size and at his.
+          $D "$DEVICE" rotate 3; sleep 5
+          tabs -open 3
+          upgrades -open 3 0.25
+          remote -open 3 0.22
+          screens -open 3
+          tabs -his 3 -windowSize 859x604
+          upgrades -his 3 0.22 -windowSize 859x604
+          remote -his 3 0.22 -windowSize 859x604
+          live -his 3 -windowSize 859x604
+          crashes
+          ls dist | wc -l
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view mp-pass-1122 >/dev/null 2>&1 || gh release create mp-pass-1122 --prerelease --title "Mac Pro mp-pass-1122 shots" --notes "Temporary shots for the mp-pass-1122 branch."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload mp-pass-1122 "$f" --clobber && break; sleep 15; done
+          done

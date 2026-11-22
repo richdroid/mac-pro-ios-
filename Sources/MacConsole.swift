@@ -745,7 +745,8 @@ struct FanDial: View {
                 Text(tag).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(Int(fan.rpm.rounded()))").font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit().contentTransition(.numericText())
+                Text("\(Int(fan.rpm.rounded()))").font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit().contentTransition(.numericText(value: fan.rpm))
+                    .animation(LiveMotion.now, value: Int(fan.rpm.rounded()))
                 Text("rpm").font(.title3).foregroundStyle(.secondary)
             }
             // Its range, slowest to fastest, with the speed on it.

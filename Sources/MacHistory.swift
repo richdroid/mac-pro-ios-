@@ -483,8 +483,10 @@ struct HistoryReadout: View {
     var current: Double? { metric.now(store.live) ?? metric.now(model.status) ?? last }
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
+            // The live figure rolls to each new reading; a finger on the chart moves it at once.
             Text(picked.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–")
-                .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
+                .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText(value: picked?.value ?? current ?? 0))
+                .animation(picked == nil ? LiveMotion.now : nil, value: current)
             Text(picked.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? (stale ? "Last reading" : "Now")).font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -1190,18 +1190,29 @@ struct RemoteScreenView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pad.width = $0 }
         .accessibilityLabel("Trackpad")
     }
-    // ⌃ ⌥ ⌘ ⇧ and the arrows, where there's no room for the whole keyboard.
+    // ⌃ ⌥ ⌘ ⇧, the arrows and Return, where there's no room for the whole keyboard. Return is always here, at the right
+    // hand's end of the row, a key and a half wide, so Enter never needs the iPhone's keyboard (Richard, 2026-11-20: "add an
+    // easily accessible enter button when doing screen").
     var modifierRow: some View {
-        HStack(spacing: 5) {
-            MacKeyCap(label: "⌃", sym: MacKey.control, keys: keys, a11y: "Control", size: 16)
-            MacKeyCap(label: "⌥", sym: MacKey.option, keys: keys, a11y: "Option", size: 16)
-            MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16)
-            MacKeyCap(label: "⇧", sym: MacKey.shift, keys: keys, a11y: "Shift", size: 16)
-            Color.clear.frame(width: 4, height: 1)
-            MacKeyCap(label: "", icon: "arrow.left", sym: MacKey.left, keys: keys, a11y: "Left arrow")
-            MacKeyCap(label: "", icon: "arrow.up", sym: MacKey.up, keys: keys, a11y: "Up arrow")
-            MacKeyCap(label: "", icon: "arrow.down", sym: MacKey.down, keys: keys, a11y: "Down arrow")
-            MacKeyCap(label: "", icon: "arrow.right", sym: MacKey.right, keys: keys, a11y: "Right arrow")
+        GeometryReader { g in
+            let gap: CGFloat = 5, spacer: CGFloat = 4
+            // Eight keys and Return at one and a half: nine and a half widths between the gaps.
+            let unit = max((g.size.width - gap * 9 - spacer) / 9.5, 20)
+            HStack(spacing: gap) {
+                MacKeyCap(label: "⌃", sym: MacKey.control, keys: keys, a11y: "Control", size: 16).frame(width: unit)
+                MacKeyCap(label: "⌥", sym: MacKey.option, keys: keys, a11y: "Option", size: 16).frame(width: unit)
+                MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16).frame(width: unit)
+                MacKeyCap(label: "⇧", sym: MacKey.shift, keys: keys, a11y: "Shift", size: 16).frame(width: unit)
+                Color.clear.frame(width: spacer, height: 1)
+                MacKeyCap(label: "", icon: "arrow.left", sym: MacKey.left, keys: keys, a11y: "Left arrow").frame(width: unit)
+                MacKeyCap(label: "", icon: "arrow.up", sym: MacKey.up, keys: keys, a11y: "Up arrow").frame(width: unit)
+                MacKeyCap(label: "", icon: "arrow.down", sym: MacKey.down, keys: keys, a11y: "Down arrow").frame(width: unit)
+                MacKeyCap(label: "", icon: "arrow.right", sym: MacKey.right, keys: keys, a11y: "Right arrow").frame(width: unit)
+                MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return", size: 15)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("screen.return")
+            }
+            .frame(width: g.size.width, height: g.size.height)
         }
     }
     func typeText(_ text: String) {
@@ -1281,6 +1292,9 @@ struct RemoteScreenView: View {
     // which is as wide as the keys' one, whatever is between.
     @ViewBuilder func dockTools(compact: Bool = false, spread: Bool = false) -> some View {
         let k = Self.dockKey
+        // Return stays with the keys tucked away too: Enter is always one press away on the Mac's screen (Richard,
+        // 2026-11-20: "an easily accessible enter button when doing screen").
+        if !dockOpen { MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: k, height: k) }
         if dockOpen {
             MacKeyCap(label: "", icon: "delete.left", sym: MacKey.delete, keys: keys, a11y: "Delete").frame(width: k, height: k)
             MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: k, height: k)

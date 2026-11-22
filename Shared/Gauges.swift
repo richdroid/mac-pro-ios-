@@ -61,8 +61,11 @@ enum MacPrefs {
     static var widgetCelsius: Bool { shared?.bool(forKey: "celsius") ?? false }
 }
 
-struct ArcGauge<Center: View>: View {
-    let value: Double
+struct ArcGauge<Center: View>: View, Animatable {
+    var value: Double
+    // Animated, the dial's reading moves through every value between, so its ticks light or go out one by one with the
+    // figure in its centre instead of all at once (Richard, 2026-11-20: numbers that "suggest motion").
+    var animatableData: Double { get { value } set { value = newValue } }
     var tint: Color = macBlue
     var heat = false
     var ticks = 40
@@ -104,29 +107,63 @@ struct SparkLine: View {
     let values: [Double]
     var top: Double?
     var color: Color = macBlue
+    // Seconds a new reading takes to slide in from the right (about the time between readings); 0 steps along. The line
+    // the readings came in on is drawn as it was, then moves left by one reading as the new one arrives, so the line and
+    // the figure over it move together (Richard, 2026-11-20: "interconnectivity between the number reported and the new one").
+    var glide: Double = 0
+    // What is drawn: the readings that slid off the left (`lead` of them) and then the window, and where the first sits,
+    // in readings from the left edge. Set together when the readings change, so no frame shows the new line in place.
+    @State private var drawn: [Double]?
+    @State private var lead = 0
+    @State private var origin: CGFloat = 0
     // Shapes, not a Canvas, for the same reason as the dials' ticks: never a blank chart for a frame.
     var body: some View {
-        if values.count > 1 {
+        let shown = glide > 0 ? (drawn ?? values) : values
+        let k = glide > 0 && drawn != nil ? lead : 0
+        if shown.count - k > 1 {
             let hi = max(top ?? values.max() ?? 1, 0.0001)
+            let steps = shown.count - k - 1, o = glide > 0 && drawn != nil ? origin : 0
             ZStack {
-                SparkPath(values: values, hi: hi, closed: true).fill(color.opacity(0.18))
-                SparkPath(values: values, hi: hi, closed: false).stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                SparkPath(values: shown, hi: hi, closed: true, origin: o, steps: steps).fill(color.opacity(0.18))
+                SparkPath(values: shown, hi: hi, closed: false, origin: o, steps: steps).stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
             }
+            // Only what slid off the left is cut; the line's round ends keep their room.
+            .clipShape(Rectangle().inset(by: -2))
+            .onChange(of: values) { old, new in slide(from: old, to: new) }
         }
+    }
+    private func slide(from old: [Double], to new: [Double]) {
+        var still = Transaction(); still.disablesAnimations = true
+        // Stepping along (a page sliding, just arrived): the new line as it is, and nothing kept to slide from.
+        guard glide > 0 else { if drawn != nil { withTransaction(still) { drawn = nil; lead = 0; origin = 0 } }; return }
+        // The same window moved on by one to three readings: drawn from where it was, then slid.
+        guard old.count == new.count, let k = (1...3).first(where: { k in old.count > k + 1 && Array(old.dropFirst(k)) == Array(new.dropLast(k)) }) else {
+            withTransaction(still) { drawn = new; lead = 0; origin = 0 }
+            return
+        }
+        withTransaction(still) { drawn = Array(old.prefix(k)) + new; lead = k; origin = 0 }
+        let seconds = glide
+        DispatchQueue.main.async { withAnimation(.linear(duration: seconds)) { origin = -CGFloat(k) } }
     }
 }
 struct SparkPath: Shape {
     let values: [Double]
     let hi: Double
     let closed: Bool
+    // Where the first value sits, in steps from the left edge, and how many steps span the width (0: the values').
+    var origin: CGFloat = 0
+    var steps = 0
+    var animatableData: CGFloat { get { origin } set { origin = newValue } }
     func path(in rect: CGRect) -> Path {
         var line = Path()
-        let step = rect.width / CGFloat(values.count - 1)
+        let step = rect.width / CGFloat(max(steps > 0 ? steps : values.count - 1, 1))
+        var first = rect.minX, last = rect.maxX
         for (i, v) in values.enumerated() {
-            let p = CGPoint(x: rect.minX + CGFloat(i) * step, y: rect.minY + rect.height * (1 - CGFloat(min(v / hi, 1))) * 0.92 + 1.5)
-            if i == 0 { line.move(to: p) } else { line.addLine(to: p) }
+            let p = CGPoint(x: rect.minX + (CGFloat(i) + origin) * step, y: rect.minY + rect.height * (1 - CGFloat(min(v / hi, 1))) * 0.92 + 1.5)
+            if i == 0 { line.move(to: p); first = p.x } else { line.addLine(to: p) }
+            last = p.x
         }
-        if closed { line.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY)); line.addLine(to: CGPoint(x: rect.minX, y: rect.maxY)); line.closeSubpath() }
+        if closed { line.addLine(to: CGPoint(x: last, y: rect.maxY)); line.addLine(to: CGPoint(x: first, y: rect.maxY)); line.closeSubpath() }
         return line
     }
 }
