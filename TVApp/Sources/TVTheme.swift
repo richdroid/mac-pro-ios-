@@ -15,11 +15,6 @@ enum TVLook {
     // Every glass card and section: one corner, 25 pt continuous, as the Chumby app's (2026-11-11 audit).
     static let glass: CGFloat = 25
     static let press = Animation.spring(duration: 0.25, bounce: 0.25)
-    // The side bar's glass and its margin from the display's edge, folded and open alike.
-    static let railRoom: CGFloat = 76
-    // The tab bar's room along the foot, open in portrait (its glass and its margin), for a page laid over everything to
-    // stop short of; the measured foot inset is used when it's more.
-    static let footRoom: CGFloat = 92
     // A form row in the same glass as the cards, never the system's opaque grey over the living background.
     static var glassRow: some View { Rectangle().fill(.ultraThinMaterial) }
 }
@@ -310,6 +305,10 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
 }
 #endif
 
+// Whether the tab a view is on is the one in front (RootView sets it on each tab under the rail).
+private struct TabInFrontKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues { var tabInFront: Bool { get { self[TabInFrontKey.self] } set { self[TabInFrontKey.self] = newValue } } }
+
 // A fade for a change that comes from data (the TV's status, rows arriving), only once the view has been on screen a
 // moment. SwiftUI defers a tab's or a covered page's updates until it is shown again, so a change that landed while he
 // was elsewhere animated in the tab switch or the pop itself (the row fading in, the pad resizing, the stack crossfading
@@ -318,11 +317,13 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
 struct SettledAnimation<V: Equatable>: ViewModifier {
     let animation: Animation
     let value: V
+    // A tab left is kept under the rail rather than taken down, so leaving it counts as going: back, it's simply there.
+    @Environment(\.tabInFront) private var front
     @State private var settled = false
     func body(content: Content) -> some View {
         content
             .animation(settled ? animation : nil, value: value)
-            .task { try? await Task.sleep(nanoseconds: 400_000_000); if !Task.isCancelled { settled = true } }
+            .task(id: front) { guard front else { settled = false; return }; try? await Task.sleep(nanoseconds: 400_000_000); if !Task.isCancelled { settled = true } }
             .onDisappear { settled = false }
     }
 }

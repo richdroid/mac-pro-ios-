@@ -269,13 +269,17 @@ struct RootView: View {
     // The Playing tab's glyph, kept here only when it changes (PlayingGlyph below works it out), so a status reading
     // never redraws the whole tab view.
     @State private var playingSymbol = "play.circle"
+    // The rail steps aside only while a software keyboard really covers the foot, as BottomBarTabs' bar does: above the
+    // keyboard it ran into the status folded on its side. A field with focus is not enough (a hardware keyboard, or the
+    // keyboard still to come): Search open upright then showed no tabs at all (gate of f9ca25f).
+    @State private var keyboardUp = false
     var body: some View {
         let _ = SwipeLog.mark("body root")
         PaneReader {
             // Content full width on the left, the tabs a glass pill at the foot of one rail on the right, in every posture,
             // as in Mac Pro: never a bar along the foot (Richard's reference of 2026-11-21, "this is what iphone duo apps
             // look like"). The system's TabView drew one open upright.
-            SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, hidden: model.typingIn != nil) { t in
+            SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, hidden: keyboardUp) { t in
                 tabPage(t).environment(\.tabInFront, model.tab == t)
             }
             .onChange(of: model.tab) { was, t in
@@ -283,14 +287,20 @@ struct RootView: View {
                 HitchLog.shared.note("tab \(was)→\(t)")
                 #endif
                 UserDefaults.standard.set(t, forKey: "tab")
-                // The tab left is kept under the rail, not taken down, so a field on it would keep the keyboard.
-                Keyboard.dismiss()
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
             }
             // A poster lifted off a shelf, over everything, where his finger has it (Liftable).
             .overlay { HandOverlay() }
         }
+        #if canImport(UIKit)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+            let screen = UIScreen.main.bounds.height
+            keyboardUp = f.height > 120 && f.minY < screen - 120
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        #endif
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { Hand.shared.screen = $0 } }
         // What follows the status lives in small views of its own, so only they redraw when it changes.
         .background { StatusFollower(playingSymbol: $playingSymbol) }
@@ -311,8 +321,7 @@ struct RootView: View {
 // Whether the tab a view is on is the one in front. The rail keeps each tab once shown, under the one in front
 // (SideRailTabs), where the system's TabView took it off screen: leaving a tab no longer ends its views' appearance, so
 // what must stop when he leaves one (the TV's live picture, the AirPlay search, polling) follows this as well.
-private struct TabInFrontKey: EnvironmentKey { static let defaultValue = true }
-extension EnvironmentValues { var tabInFront: Bool { get { self[TabInFrontKey.self] } set { self[TabInFrontKey.self] = newValue } } }
+// (tabInFront lives in TVTheme, beside SettledAnimation, which follows it too.)
 // On screen: appeared, on the tab in front. Each on is matched by one off, as onAppear by onDisappear.
 private struct OnScreen: ViewModifier {
     @Environment(\.tabInFront) private var front
@@ -458,7 +467,6 @@ struct Page<C: View>: View {
             content()
                 .underFlick(warms: alwaysInline)
                 .modifier(TabBarFade())
-                .modifier(TypingHidesTabBar(enabled: !alwaysInline))
                 .environment(\.backToTop, top)
                 .environment(\.pageScroll, alwaysInline ? nil : scrolled)
                 // The page's name, large, drawn by the page and going up with what scrolls under it, so the two never sit
@@ -481,7 +489,7 @@ struct Page<C: View>: View {
                 .toolbar(showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
-                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).modifier(TypingHidesTabBar(enabled: !alwaysInline)).railRoom() }
+                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).railRoom() }
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
                 .navigationDestination(for: TitleRoute.self) { r in
@@ -513,11 +521,6 @@ struct Page<C: View>: View {
         // Over the art too, so the strip round the bars beside or under a flick's page is black like the page's own foot,
         // never a lighter band of the tab's art (open upright, under the tab bar).
         .modifier(UnderFlickGround(warms: alwaysInline))
-        // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
-        // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
-        .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
-        // And how tall the bar along the foot is, open in portrait, for the flick's screen to stop short of it.
-        .background { Color.clear.ignoresSafeArea(.keyboard).onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.bottom, 140) } action: { h in if abs(model.footBarRoom - h) > 0.5 { model.footBarRoom = h } } }
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
@@ -1879,13 +1882,6 @@ struct RemoteTab: View {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { typing.toggle() }
             }
         }
-        // The keyboard would slice the tab rail and leave half a button peeking above it, folded or open: the rail steps
-        // aside while typing, and comes back with the keyboard's going. Not the bar along the foot, open in portrait: the
-        // keyboard simply covers it, and hiding it there re-laid the page out under the field as it took the keyboard,
-        // which never came up (the reviews of 9c34a08 and 01fc626: no keyboard in any open-portrait search shot).
-        #if os(iOS)
-        .toolbarVisibility((lay || model.typingIn != nil) && !(size == .regular && !panes) ? .hidden : .automatic, for: .tabBar)
-        #endif
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
         .onAppear { model.remoteBuilt = true }
@@ -1893,11 +1889,6 @@ struct RemoteTab: View {
             if on { model.warmMirror() }
             // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
             else { typing = false; epPanel.open = false }
-        }
-        // The rail steps aside while typing on the TV, as for any other field (HidesTabBarWhileTyping).
-        .onChange(of: lay, initial: true) { _, on in
-            if on { if model.typingIn != "remote" { model.typingIn = "remote" } }
-            else if model.typingIn == "remote" { model.typingIn = nil }
         }
         // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
         .task(id: model.status?.apps?.map(\.pkg) ?? []) {
@@ -2735,7 +2726,7 @@ struct AppsTab: View {
     }
     var body: some View {
         let _ = SwipeLog.mark("body apps")
-        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).modifier(TypingHidesTabBar()).railRoom() }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).railRoom() }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
             #endif
@@ -3969,6 +3960,7 @@ struct Ambience: View {
     // whatever it showed last time.
     @ObservedObject private var store = AmbienceStore.shared
     @State private var appeared = false
+    @Environment(\.tabInFront) private var front
     var tint: Color { model.mood ?? store.band ?? Color(hex: 0x4A1A5C) }
     var body: some View {
         ZStack {
@@ -3992,6 +3984,8 @@ struct Ambience: View {
         .transaction { if !appeared { $0.animation = nil } }
         .onAppear { Task { appeared = true } }
         .onDisappear { appeared = false }
+        // A tab left is kept under the rail, not taken down: arriving back, it's simply there, as on a first appearance.
+        .onChange(of: front) { _, f in if !f { appeared = false } else { Task { appeared = true } } }
     }
 }
 // The picture behind every page, held once for the whole app. It changes only when a new one is ready, never to
@@ -4097,41 +4091,6 @@ private struct Untitled: ViewModifier {
 }
 extension View { func underFlick(barHidden: Bool = false, warms: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden, warms: warms)) } }
 
-// While a search or send box has the keyboard, the tab bar steps aside, as the Remote's does while typing on the TV: the
-// keyboard sliced the side bar and left half a button peeking over it (review of dfd490e, tv-realsearch 12–14 s). The
-// page keeps the width it had beside the bar while it's away, so nothing on it moves as the bar goes and comes back.
-// The Remote (not `enabled`) has its own, which follows `typingIn` too.
-struct TypingHidesTabBar: ViewModifier {
-    @Environment(TVModel.self) private var model
-    @Environment(\.horizontalSizeClass) private var size
-    @Environment(\.paneLayout) private var panes
-    var enabled = true
-    // The side bar's inset while it's there, and the inset now.
-    @State private var beside: CGFloat = 0
-    @State private var now: CGFloat = 0
-    func body(content: Content) -> some View {
-        if enabled {
-            // Only a side bar steps aside. The bar along the foot (open in portrait) is simply covered by the keyboard;
-            // hidden, it re-laid the page out as the field took the keyboard, and the keyboard never came (the reviews of
-            // 9c34a08 and 01fc626: no keyboard in any open-portrait search shot, in every other posture it was there).
-            let away = model.typingIn != nil && !(size == .regular && !panes)
-            content
-                .padding(.trailing, away ? max(0, beside - now) : 0)
-                .background {
-                    Color.clear.ignoresSafeArea(.keyboard)
-                        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { v in
-                            now = v
-                            if model.typingIn == nil { beside = v }
-                        }
-                }
-                #if os(iOS)
-                .toolbarVisibility(away ? .hidden : .automatic, for: .tabBar)
-                #endif
-        } else {
-            content
-        }
-    }
-}
 // On each search or send box: while it has the keyboard, it's the one `typingIn` names, and the tab bar is away.
 private struct HidesTabBarWhileTyping: ViewModifier {
     @Environment(TVModel.self) private var model

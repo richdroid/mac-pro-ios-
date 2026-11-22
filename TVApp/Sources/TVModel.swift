@@ -62,10 +62,6 @@ final class TVModel {
     var flickHandoff = false {
         didSet { if oldValue && !flickHandoff { warmMirror(); if mirrorLive && mirrorViewers > 0 && !liveShowing { Task { await loadMirror() } } } }
     }
-    // The side bar's width, so a show's page opened over everything can leave it uncovered and in reach.
-    var railWidth: CGFloat = 0
-    // The tab bar's room along the foot, open in portrait, so the flick's screen leaves it uncovered too.
-    var footBarRoom: CGFloat = 0
     // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
     var flickChoosing = false
     // The flick's page is fully up: only then are the pages under it put out of sight, so nothing between them is ever
