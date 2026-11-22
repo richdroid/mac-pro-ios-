@@ -10,8 +10,11 @@ import UIKit
 // release speed and nothing is sent. Nothing moves the card but his finger, the spring home and the flight after his release.
 
 enum ThrowRules {
-    // An upward release at least this fast throws from anywhere.
-    static let throwSpeed: CGFloat = 700
+    // An upward release at least this fast throws from anywhere (mostly up: sideways or down never throws by speed).
+    static let throwSpeed: CGFloat = 500
+    // How far ahead a release is projected, in seconds of its own speed, for where it would have gone: a flick let go
+    // moving up just short of the line passes it (CI 7c991a4: released 13 pt short at 638 pt/s, and put back).
+    static let projection: CGFloat = 0.2
     // Above the commit line, a release moving down faster than this is put back.
     static let downCancel: CGFloat = 200
     // The commit line: this share of the screen's height above the card's rest, but never more than this share of the
@@ -178,12 +181,19 @@ enum ThrowRules {
     }
     enum Outcome { case thrown, back }
     // What his release means, by the brief's rule.
+    // Where the last release was projected to, for the release line in the hand log.
+    @ObservationIgnored private var projectedY: CGFloat = 0
     func judge(_ v: CGSize) -> Outcome {
-        let above = restCenter.y + offset.height < commitY
+        let y = restCenter.y + offset.height
+        let above = y < commitY
+        let up = v.height < 0 && abs(v.height) > abs(v.width)
+        // Where it was going: only an upward release is carried on; one moving down or sideways is judged where it is.
+        projectedY = up ? y + v.height * ThrowRules.projection : y
         // Let go with the card in the lip is a throw, however slowly it got there.
         let lip = Hand.shared.lipFrame
-        if lip.height > 0, lip.contains(CGPoint(x: restCenter.x + offset.width, y: restCenter.y + offset.height)) { return .thrown }
-        if v.height <= -ThrowRules.throwSpeed { return .thrown }
+        if lip.height > 0, lip.contains(CGPoint(x: restCenter.x + offset.width, y: y)) { return .thrown }
+        if up && v.height <= -ThrowRules.throwSpeed { return .thrown }
+        if up && projectedY < commitY { return .thrown }
         if above && v.height < ThrowRules.downCancel { return .thrown }
         return .back
     }
@@ -196,7 +206,7 @@ enum ThrowRules {
         Hand.shared.carrying = false
         withAnimation(.easeOut(duration: 0.2)) { Hand.shared.glow = 0 }
         if over { over = false; Hand.shared.committed = false }
-        HandLog.note(String(format: "release back v=%.0f,%.0f", v.width, v.height))
+        HandLog.note(String(format: "release back v=%.0f,%.0f y=%.0f projectedY=%.0f commitY=%.0f", v.width, v.height, restCenter.y + o.height, projectedY, commitY))
         withAnimation(.interpolatingSpring(Spring(response: 0.35, dampingRatio: 0.82), initialVelocity: rel)) {
             offset = .zero; scale = 1; tilt = 0
         } completion: { [weak self] in
@@ -228,7 +238,7 @@ enum ThrowRules {
         let speed = max(sp, ThrowRules.floorSpeed)
         let dur = min(Double(dist / speed), ThrowRules.flightMax)
         let small = rest.width > 0 && rest.height > 0 ? min(ThrowRules.lipPicture.width / rest.width, ThrowRules.lipPicture.height / rest.height) : ThrowRules.lipScale
-        HandLog.note(String(format: "release thrown v=%.0f,%.0f speed=%.0f flight=%.0fpt %.3fs to lip %.0f,%.0f", v.width, v.height, sp, dist, dur, x, lipY))
+        HandLog.note(String(format: "release thrown v=%.0f,%.0f y=%.0f projectedY=%.0f commitY=%.0f speed=%.0f flight=%.0fpt %.3fs to lip %.0f,%.0f", v.width, v.height, center.y, projectedY, commitY, sp, dist, dur, x, lipY))
         withAnimation(.easeOut(duration: 0.15)) { Hand.shared.glow = 1 }
         withAnimation(.easeOut(duration: dur)) {
             offset = to; scale = small; tilt = 0
