@@ -621,14 +621,30 @@ struct SideRailTabs<Content: View>: View {
                 #endif
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 for t in prewarm {
-                    // Quiet for a second and a half, no finger down, and the tab he's on not just changed.
-                    while !Task.isCancelled && !TouchClock.idle(1.5) { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    // A tab whose build ran long last time isn't built ahead again: its stall would land on whatever he
+                    // pressed next (gate on 4f36e1e: 464-1246 ms builds). It's built when he opens it instead.
+                    // Skipped once, then tried again on the next launch (a slow build can be a cold cache, not the tab).
+                    if UserDefaults.standard.bool(forKey: "prewarmSlow.\(t)") {
+                        UserDefaults.standard.removeObject(forKey: "prewarmSlow.\(t)")
+                        TouchClock.note("prewarm skips tab \(t)"); continue
+                    }
+                    // Quiet for two seconds, no finger down, and the tab he's on not just changed.
+                    var waited = false
+                    while !Task.isCancelled && !TouchClock.idle(2) { waited = true; try? await Task.sleep(nanoseconds: 250_000_000) }
                     if Task.isCancelled { return }
+                    if waited { TouchClock.note("prewarm waited for a quiet moment") }
                     guard !shown.contains(t) else { continue }
                     TouchClock.note("prewarm tab \(t)")
+                    let began = Date()
                     shown.insert(t)
-                    // The build itself runs in the next pass; then a rest before the next, so they never run back to back.
-                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    // This resumes only once the build has run (it holds the main thread), so the time is the build's,
+                    // and the rest below starts after it: never two builds back to back.
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                    let cost = Date().timeIntervalSince(began) - 0.02
+                    TouchClock.note("prewarm tab \(t) took \(Int(cost * 1000)) ms")
+                    if cost > 0.3 { UserDefaults.standard.set(true, forKey: "prewarmSlow.\(t)") }
+                    else { UserDefaults.standard.removeObject(forKey: "prewarmSlow.\(t)") }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
                 return
             }

@@ -885,8 +885,9 @@ private struct SearchIdle: View {
     // Titles to try: the films and shows of Stremio's home that aren't his own (Continue watching has its home on Watch).
     var tries: [String] {
         var seen = Set<String>(), out: [String] = []
+        let shownLeft = Set((part == .left || store.recent.isEmpty && flicked.isEmpty ? popular?.items.prefix(5).map { $0.title.lowercased() } : nil) ?? [])
         for r in home.rows where r.title != "Continue watching" {
-            for i in r.items where !i.title.isEmpty && !i.isYouTube && seen.insert(i.title.lowercased()).inserted { out.append(i.title); if out.count == 6 { return out } }
+            for i in r.items where !i.title.isEmpty && !i.isYouTube && !shownLeft.contains(i.title.lowercased()) && seen.insert(i.title.lowercased()).inserted { out.append(i.title); if out.count == 6 { return out } }
         }
         return out
     }
@@ -898,13 +899,17 @@ private struct SearchIdle: View {
             switch part {
             case .all:
                 RecentSearches(store: store)
+                if store.recent.isEmpty && flicked.isEmpty { popularList }
                 tryList
                 flickedList
             case .left:
-                if store.recent.isEmpty { flickedList } else { RecentSearches(store: store) }
-                if store.recent.isEmpty && flicked.isEmpty { tryList }
+                // His own first; with none yet, what's popular on Stremio, as posters he can flick. Never an empty pane.
+                if !store.recent.isEmpty { RecentSearches(store: store) }
+                else if !flicked.isEmpty { flickedList }
+                else { popularList }
             case .right:
-                if !(store.recent.isEmpty && flicked.isEmpty) { tryList }
+                // "Try searching" always has this side, so neither pane is ever blank open flat (gate on 4f36e1e).
+                tryList
                 if !store.recent.isEmpty { flickedList }
             }
         }
@@ -926,6 +931,22 @@ private struct SearchIdle: View {
                     .buttonStyle(.plain)
                     .padding(.horizontal, 20)
                 }
+            }
+            .transition(.opacity)
+        }
+    }
+    // The first of Stremio's own rows (not Continue watching, which lives on Watch).
+    var popular: MediaRow? { home.rows.first { $0.title != "Continue watching" && !$0.items.isEmpty } }
+    @ViewBuilder var popularList: some View {
+        if let r = popular {
+            VStack(alignment: .leading, spacing: 6) {
+                RowTitle(r.title).padding(.horizontal, 20)
+                VStack(spacing: 4) {
+                    ForEach(r.items.prefix(5)) { i in
+                        HitRow(hit: SearchHit(kind: i.kind == "series" ? .show : .film, item: i, match: 0, mine: 0, order: 0))
+                    }
+                }
+                .padding(.horizontal, 12)
             }
             .transition(.opacity)
         }

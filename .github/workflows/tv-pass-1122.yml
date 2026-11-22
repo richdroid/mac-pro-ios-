@@ -1,7 +1,9 @@
 name: TV pass 11-22 (branch)
-# Branch-only evidence for the tv-pass-1122 work (remove before merging): the Remote in each state, a title page at rest
-# and scrolled, Search and Watch at rest, and the tab tour cold and after the idle prewarm, folded, open upright and open
-# flat. Published to the tv-pass-1122 release.
+# Branch-only evidence for the tv-pass-1122 work (remove before merging). Built Release, as on his phone. Folded, open
+# upright and open flat: the Remote in each state, a title page at rest and its list scrolled (filmed), Search and Watch,
+# the tab tour cold and after the idle prewarm, a finger on the keys while the prewarm waits, Wake and Back tapped, Back
+# by the edge swipe, Watch scrolled (the top fade), a shelf card thrown by a finger, a title's card thrown, a search typed
+# and picked; and the fold opened and closed live. Published to the tv-pass-1122 release.
 on:
   push:
     branches: [tv-pass-1122]
@@ -14,7 +16,7 @@ concurrency:
 jobs:
   pass:
     runs-on: xcode-27
-    timeout-minutes: 50
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,15 +25,15 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate
-      - name: Build for the simulator
+      - name: Build for the simulator (Release)
         run: |
           set -o pipefail
           mkdir -p dist
-          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Release -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 38
+        timeout-minutes: 58
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -39,13 +41,17 @@ jobs:
           xcrun simctl list devices available | grep -m1 "$DEVICE"
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
-          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Release-iphonesimulator/TV.app
           xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
           rm -f /tmp/tv-hitches.log
           node ci/mock-chumby.js &
           sleep 2
           M=http://127.0.0.1:9002
-          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          # With "path" added (ci/flick-hands): one finger held, then carried, for the throws.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 \
+            && F=$(grep -rl 'args\[1\] == "touch" || args\[1\] == "drag"' Sources) \
+            && python3 -c 'import sys; f,p=sys.argv[1:]; m="if args[1] == \"touch\" || args[1] == \"drag\" {"; s=open(f).read(); assert m in s; open(f,"w").write(s.replace(m, open(p).read()+m, 1))' "$F" $GITHUB_WORKSPACE/ci/flick-hands/devicehub-path.swift \
+            && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
           shot() {
@@ -55,42 +61,78 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           }
-          tourfilm() {
-            local name=$1 display=$2
+          # A film of one launch: name, display, seconds, address, then the launch's args; ACT (a function) runs mid-film.
+          film() {
+            local name=$1 display=$2 secs=$3 address=$4; shift 4
             local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            rm -f /tmp/tv-home-applied.log
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES "${@:3}"
-            sleep 30
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -swipeLog YES "$@"
+            if [ -n "$ACT" ]; then $ACT; fi
+            sleep $secs
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             sleep 2
             tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-$name-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-$name-hitches.log
+            cp /tmp/tv-home-applied.log dist/tv-$name-applied.log 2>/dev/null || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/hand-log.txt" ] && mv "$c/Library/Caches/hand-log.txt" dist/tv-$name-hand.log
+            cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || true
+            ACT=
           }
-          # One posture's set: x is the name's suffix, d the display.
+          # The list dragged up slowly beside the poster (x as given), then further: the shrink, the rise, the fade.
+          dragList() { sleep 12; $D "$DEVICE" drag $LX 0.88 $LX 0.62 1.6 || echo "drag failed"; sleep 1.5; $D "$DEVICE" drag $LX 0.88 $LX 0.55 1.6 || echo "drag failed"; }
+          # A finger on the D-pad's centre every 0.6 s for 6 s right after launch: the prewarm must wait it out.
+          pressKeys() { sleep 4; for i in $(seq 1 10); do $D "$DEVICE" touch $PX $PY 0.08 || echo "touch failed"; sleep 0.6; done; }
+          tapWake() { sleep 9; $D "$DEVICE" tap "Wake the TV" || $D "$DEVICE" tap "Wake" || echo "Wake not found"; }
+          tapBack() { sleep 14; $D "$DEVICE" tap "Back" || echo "Back not found"; }
+          swipeBack() { sleep 14; $D "$DEVICE" drag 0.005 0.5 0.7 0.5 0.35 || echo "edge swipe failed"; }
+          scrollWatch() { sleep 10; $D "$DEVICE" drag 0.4 0.8 0.4 0.4 1.2 || true; sleep 1.5; $D "$DEVICE" drag 0.4 0.4 0.4 0.85 1.2 || true; }
+          throwShelf() {
+            sleep 10
+            local at x y; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.25" | bc -l) 0.12 0 || echo "path failed"; else echo "no card position"; fi
+          }
+          throwTitle() {
+            sleep 10
+            local at x y; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; $D "$DEVICE" path $x $y 0.7 $x 0.12 0.5 0 $x 0.12 0.2 0 || echo "path failed"; else echo "no card position"; fi
+          }
           set_for() {
             local x=$1 d=$2
             for S in repisode rfilm ridle rasleep rtvoff roffline rmint; do shot remote-$S$x $d 9 $M/$S -tab 0; done
             curl -s $M/real/reset > /dev/null; shot title-series$x $d 14 $M/real -tab 3 -pose realseries
-            # The same page, the list dragged up beside the poster: the poster shrinks and goes, the episodes get the room.
-            curl -s $M/real/reset > /dev/null
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/real -tab 3 -pose realseries
-            sleep 14
-            $D "$DEVICE" drag 0.1 0.88 0.1 0.5 0.6 || echo "drag failed"
-            sleep 2
-            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-title-series-scrolled$x.png
-            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            curl -s $M/real/reset > /dev/null; ACT=dragList; film title-scroll$x $d 6 $M/real -tab 3 -pose realseries
             shot search$x $d 9 $M -tab 6
-            shot watch-early$x $d 6 $M -tab 3
-            shot watch$x $d 10 $M -tab 3
-            # The first open of each tab, cold (no building ahead), then after the quiet moment that builds them ahead.
-            tourfilm tour-cold$x $d -noPrewarm YES
-            tourfilm tour-warm$x $d -tourDelay 10
+            shot watch-early$x $d 5 $M -tab 3 -noPrewarm YES
+            shot watch$x $d 12 $M -tab 3
+            film tour-cold$x $d 30 $M/live -tab 0 -pose tour -noPrewarm YES
+            film tour-warm$x $d 30 $M/live -tab 0 -pose tour -tourDelay 10
+            ACT=pressKeys; film keys-during-prewarm$x $d 14 $M/live -tab 0
+            ACT=tapWake; film wake$x $d 5 $M/rasleep -tab 0
+            curl -s $M/real/reset > /dev/null; ACT=tapBack; film back-tap$x $d 4 $M/real -tab 3 -pose realseries
+            curl -s $M/real/reset > /dev/null; ACT=swipeBack; film back-swipe$x $d 4 $M/real -tab 3 -pose realseries
+            ACT=scrollWatch; film watch-scroll$x $d 3 $M -tab 3
+            curl -s $M/fnormal/reset > /dev/null; ACT=throwShelf; film flick-shelf$x $d 10 $M/fnormal -tab 3 -pose shelf
+            curl -s $M/fnormal/reset > /dev/null; ACT=throwTitle; film flick-title$x $d 10 $M/fnormal -tab 3 -pose flick-starting
+            curl -s $M/real/reset > /dev/null; film search-pick$x $d 16 $M/real -tab 6 -pose realsearch
           }
+          # The D-pad's centre, roughly, per posture (fractions of the display).
+          PX=0.66; PY=0.27; LX=0.1
           set_for "" 1
-          $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5
+          # The fold opened live, then turned, then closed, filmed on the main display while open.
+          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/tv-posture-live.mp4 > /dev/null 2>&1 & REC=$!
+          sleep 2
+          xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/repisode -tab 0
+          sleep 8
+          $D "$DEVICE" pose open; sleep 6; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" rotate 1; sleep 6
+          kill -INT $REC; wait $REC
+          xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          PX=0.8; PY=0.3; LX=0.1
           set_for "-portrait" 3
           $D "$DEVICE" rotate 3 || true; sleep 5
+          PX=0.72; PY=0.45; LX=0.8
           set_for "-flat" 3
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist

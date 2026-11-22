@@ -195,7 +195,16 @@ struct MusicDetailWatch: View {
             // Asked once whenever the page comes up, the song changes or a paused song is moved (so a paused song still
             // has its words), then every two seconds only while it plays and the page is in front.
             .task(id: "\(watching) \(playing) \(song) \(playing ? 0 : pausedAt)") {
-                guard watching else { return }
+                // Built ahead, unseen: the words and the queue asked for once, so the page opens with them in place
+                // rather than laying out without them and swapping 0.2 s later (gate on 4f36e1e).
+                guard watching else {
+                    guard phase == .active else { return }
+                    store.follow(song)
+                    await store.read(playing: playing)
+                    if model.status?.airplay?.active != true { await QueueStore.shared.read() }
+                    store.settle()
+                    return
+                }
                 store.follow(song)
                 await store.read(playing: playing)
                 if model.status?.airplay?.active != true { await QueueStore.shared.read() }

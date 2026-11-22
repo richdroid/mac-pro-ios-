@@ -113,8 +113,23 @@ struct TitlePage: View {
     @State private var st: TitleState
     @State private var carry = Carry()
     @State private var groundID = UUID()
+    @Environment(\.paneLayout) private var panes
+    // The hinge's band across this view, in its own x: the system's reported region where there is one, else the display's
+    // middle, 40 pt wide.
+    static func foldBand(_ g: GeometryProxy) -> ClosedRange<CGFloat> {
+        #if os(iOS)
+        if #available(iOS 27.1, *), let r = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame, r.height > r.width {
+            return r.minX...r.maxX
+        }
+        let mid = UIScreen.main.bounds.width / 2 - g.frame(in: .global).minX
+        return (mid - 20)...(mid + 20)
+        #else
+        return (g.size.width / 2 - 20)...(g.size.width / 2 + 20)
+        #endif
+    }
     // How far the list under the poster has scrolled (stacked pages), read by the poster alone.
     @State private var listY = PageScrollY()
+    @State private var listUnder = false
     init(target: FlickTarget) { _st = State(initialValue: TitleState(target)) }
     var body: some View {
         GeometryReader { g in
@@ -122,21 +137,27 @@ struct TitlePage: View {
             let wide = g.size.width > g.size.height * 1.15 && (g.size.width > 600 || g.size.height < 480)
             Group {
                 if wide {
+                    // Open flat the fold runs down the middle of the display, not of this page (the rail's room is off its
+                    // right): the card's side ends 12 pt short of the fold's band and the words start 12 pt past it (gate
+                    // on 4f36e1e: they began at 458 pt, inside the 455-495 band).
+                    let fold = panes ? Self.foldBand(g) : nil
+                    let leftW = fold.map { max(0, $0.lowerBound - 12) } ?? g.size.width * 0.5
+                    let gapW = fold.map { $0.upperBound + 12 - leftW } ?? 0
                     HStack(spacing: 0) {
                         VStack(spacing: 0) {
                             Spacer(minLength: 8)
-                            card(maxH: g.size.height * 0.66, maxW: g.size.width * 0.38)
+                            card(maxH: g.size.height * 0.66, maxW: min(g.size.width * 0.38, leftW - 24))
                             Spacer(minLength: 8)
                         }
-                        // The card's side ends at the fold, the words begin after it: nothing sits across the hinge.
-                        .frame(width: g.size.width * 0.5)
+                        .frame(width: leftW)
                         .zIndex(1)
+                        Color.clear.frame(width: gapW)
                         ScrollView {
                             VStack(alignment: .leading, spacing: 0) {
                                 header.padding(.bottom, 20)
                                 details
                             }
-                            .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 24)
+                            .padding(.leading, fold == nil ? 24 : 0).padding(.trailing, 24).padding(.top, 8).padding(.bottom, 24)
                         }
                         .scrollIndicators(.hidden)
                         .scrollBounceBehavior(.basedOnSize)
@@ -150,7 +171,7 @@ struct TitlePage: View {
                     let maxW = g.size.width * 0.55
                     let full = cardSize(maxH: g.size.height * (g.size.height < 560 ? 0.42 : 0.46), maxW: maxW).height
                     VStack(spacing: 0) {
-                        header.padding(.horizontal, 20).padding(.top, 4)
+                        header.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
                         ZStack(alignment: .top) {
                             ScrollView {
                                 VStack(spacing: 0) {
@@ -162,7 +183,10 @@ struct TitlePage: View {
                             .scrollBounceBehavior(.basedOnSize)
                             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
                                 if abs(listY.y - y) > 0.25 { listY.y = y }
+                                if (y > full) != listUnder { listUnder = y > full }
                             }
+                            // The list going up under the header fades there, as every page's does, once the poster is away.
+                            .modifier(TopFade(on: listUnder))
                             ShrinkingCard(scroll: listY, full: full) { h in card(maxH: h, maxW: maxW) }
                                 .zIndex(1)
                         }
@@ -476,18 +500,20 @@ struct TitlePage: View {
                         Text(e.title).font(.system(size: 17, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         if playing { Image(systemName: "play.tv.fill").font(.system(size: 13)).foregroundStyle(TVLook.accent) }
                     }
-                    Text(e.overview ?? (e.runtime.map { "\($0) min" } ?? "")).font(.system(size: 15)).foregroundStyle(.white.opacity(0.65)).lineLimit(2)
+                    // Whole, never cut ("visi…", gate on 4f36e1e): the row grows with it.
+                    Text(e.overview ?? (e.runtime.map { "\($0) min" } ?? "")).font(.system(size: 15)).foregroundStyle(.white.opacity(0.65))
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
             .padding(10)
-            .frame(height: 96, alignment: .top)
+            .frame(minHeight: 96, alignment: .top)
             .background(on ? AnyShapeStyle(TVLook.accent.opacity(0.16)) : AnyShapeStyle(Color.clear), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay { if on { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(TVLook.accent.opacity(0.7), lineWidth: 1.5) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, -10)
+        // On the stream rows' own edges: the chosen episode's card hung 10 pt past them each side (gate on 4f36e1e).
     }
 }
 
@@ -612,7 +638,8 @@ private struct ShrinkingCard<C: View>: View {
         let half = full / 2
         let h = max(half, full - s)
         let rise = max(0, s - half)
-        let fade = max(0, min(1, 1 - rise / 60))
+        // Shrinks to half, then rises with the list, fading over the whole of its rise rather than vanishing at once.
+        let fade = max(0, min(1, 1 - rise / max(1, half + 12)))
         card(h)
             .padding(.top, 12 - rise)
             .opacity(fade)

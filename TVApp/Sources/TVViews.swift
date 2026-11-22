@@ -973,6 +973,11 @@ struct RowList<Content: View>: View {
 
 // MARK: - Remote
 struct MirrorView: View {
+    // One picture giving way to another of a different kind (the TV's screen and a song's cover): the old one out, then
+    // the new one in, through the dark glass, never the two half-seen over each other (gate on 4f36e1e: a double exposure
+    // on first arrival as the song came in).
+    static let dip = AnyTransition.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.14).delay(0.1)),
+                                              removal: .opacity.animation(.easeIn(duration: 0.1)))
     @Environment(TVModel.self) var model
     @ObservedObject var store: MirrorStore
     // Where it always has its place, it carries its own way to hide it, and the bar has no second one.
@@ -1007,7 +1012,7 @@ struct MirrorView: View {
             if let film {
                 PosterOnBlur(url: film)
                 .id(film)
-                .transition(.opacity)
+                .transition(MirrorView.dip)
             } else if let s = model.starting, !s.played {
                 // While a flicked film starts, never the TV's own picture under its poster: a launcher still read through
                 // PosterOnBlur's first frames (r26). Dark until the poster's in; the TV's picture only once it plays.
@@ -1030,7 +1035,7 @@ struct MirrorView: View {
                 } else if model.status?.session?.pkg == "com.stremio.one" { EpisodeStill() } else { NoPicture() }
             } else if model.mirrorLive {
                 #if os(iOS)
-                ScreenPicture(live: model.live, store: store, art: model.nowArt)
+                ScreenPicture(live: model.live, store: store, art: model.nowArt).transition(MirrorView.dip)
                 #else
                 if let m = store.image { Image(tv: m).resizable().scaledToFit() }
                 #endif
@@ -1498,16 +1503,18 @@ struct RemoteTab: View {
                 GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: grid.key)
                     .opacity(wakeShown ? Self.dim : 1).allowsHitTesting(!wakeShown).accessibilityHidden(wakeShown)
                     .slot()
-                GlassKey(icon: "chevron.left", label: "Back", key: "back", size: grid.key).slot()
-                GlassKey(icon: "house.fill", label: "Home", key: "home", size: grid.key).slot()
+                // Asleep or off, Back, Home, typing and Menu do nothing: dimmed and still, like the power key (gate on 4f36e1e).
+                GlassKey(icon: "chevron.left", label: "Back", key: "back", size: grid.key).sleepDim(wakeShown).slot()
+                GlassKey(icon: "house.fill", label: "Home", key: "home", size: grid.key).sleepDim(wakeShown).slot()
                 // Lit while the typing bar is up, and closes it again.
                 Button { model.tick(); withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { typing.toggle() } } label: {
                     Image(systemName: "keyboard").font(.system(size: grid.key * 0.35, weight: .medium)).foregroundStyle(typing ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.primary))
                         .frame(width: grid.key, height: grid.key).contentShape(Circle())
                 }
                 .buttonStyle(.plain).keyGlass().accessibilityLabel(typing ? "Stop typing" : "Type on TV")
+                .sleepDim(wakeShown)
                 .slot()
-                GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu", size: grid.key).slot()
+                GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu", size: grid.key).sleepDim(wakeShown).slot()
             }
             // Typing takes the transport's room, in every posture: folded the keyboard sliced it in half, and upright it sat
             // across the hinge (Remote gate 4).
@@ -1628,7 +1635,8 @@ struct RemoteTab: View {
             // Typing, the episode line and Mint's player step aside, in every posture: open flat they sat half under the
             // keyboard, and upright the picture's pane gives its height to the bar and the keys (an episode line at the
             // shrunken picture's width read "Episo…", CI 69af3dc). Folded does the same.
-            if !lay { episodes.columnRole(.under); music.columnRole(.under) }
+            // Mint's player is in the keys' column's transport place now, beside (open flat, folded on its side).
+            if !lay { episodes.columnRole(.under) }
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
             if !lay {
@@ -1678,12 +1686,38 @@ struct RemoteTab: View {
                 // From the top, beside the picture's top, at one gap all the way down: anchored to the foot, the keys left
                 // an uneven gap above them whenever the transport wasn't there (gate 5, item 4). The room the transport
                 // takes when something's on is kept at the foot, under the keys.
-                VStack(spacing: 14) {
-                    if lay { Spacer(minLength: 0) } else { padRow(grid).transition(.opacity) }
-                    keysBlock(grid)
-                    if !lay { Spacer(minLength: 0) }
+                if lay {
+                    VStack(spacing: 14) { Spacer(minLength: 0); keysBlock(grid) }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // The same order as every other posture: pad, transport, keys, volume (gate on 4f36e1e). Every place
+                    // fixed in every state, the transport dimmed and still when nothing is on; the pad takes all the
+                    // height the rows leave, so there's no empty foot.
+                    let g = RemoteGrid.keys(geo.size.width, maxKey: 72)
+                    let d = max(100, min(geo.size.width, geo.size.height - g.play - 2 * g.key - 3 * 14))
+                    let idle = !session && !musicShown
+                    VStack(spacing: 14) {
+                        pad.frame(width: d, height: d)
+                        ZStack {
+                            if musicShown { music }
+                            else {
+                                Transport(size: g.key, playSize: g.play).frame(width: g.width + g.gap)
+                                    .opacity(idle ? 0.35 : 1).allowsHitTesting(!idle).accessibilityHidden(idle)
+                            }
+                        }
+                        .frame(width: g.width, height: g.play)
+                        .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                        keysBlock(g, transport: false)
+                        HStack(spacing: RemoteGrid.sideGap) {
+                            VolumeKey(down: true, size: g.key)
+                            VolumeBar().padding(.horizontal, 16)
+                            VolumeKey(down: false, size: g.key)
+                        }
+                        .frame(width: g.width)
+                        .opacity(unreachable || volumeDim ? Self.dim : 1).allowsHitTesting(!unreachable && !volumeDim)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         // Beside the picture (open flat, folded sideways) the pane is narrow: 6 pt margins leave five 64 pt keys their
@@ -1697,73 +1731,108 @@ struct RemoteTab: View {
     }
     // Open upright, not typing: the picture beside the pad, then the bar, the transport, the episode line, the keys'
     // row, volume, and the apps at the foot. Every place is kept whatever is on, so nothing moves as a show starts.
-    func uprightColumn(width: CGFloat, height: CGFloat, margin: CGFloat = 20) -> some View {
-        var grid = RemoteGrid.keys(width - 2 * margin, maxKey: 72)
-        // The page's own width and edges: the title, the picture, the keys and the apps start on one line (the column
-        // was 520 pt in the middle of a 669 pt screen: three left edges, gate on b97a5e7).
-        grid.width = max(grid.width, width - 2 * margin)
-        grid.play = min(grid.key + 8, 80)
-        // Folded there is less height: the same rows, 10 pt apart rather than 14.
+    // Open upright and folded: one column. Every place is fixed in every state (idle, playing, asleep, offline: gate on
+    // 4f36e1e, ruling (a)), so nothing under his thumb ever moves: the picture beside the pad, the bar, the transport, the
+    // episode line, the keys' row, volume, the apps. Nothing is ever an empty place: idle, the bar is a bare track and the
+    // transport is there, dimmed and still. The height left over goes to the controls, not to gaps (ruling (b), G-TV-12
+    // "the buttons r so small dude"): the keys as big as the lower part allows, the pad and the transport as big as the
+    // upper part allows. Open upright the fold gets a clear band of 12 pt either side: the picture's group above it, the
+    // keys below (gate: the Mint row and the film's scrub times sat across it).
+    func uprightColumn(width: CGFloat, height: CGFloat, margin: CGFloat = 20, crease fold: CGRect? = nil) -> some View {
+        // Only a fold that really runs through the middle of the column splits it.
+        let crease = fold.flatMap { $0.minY > 190 && $0.maxY < height - 300 ? $0 : nil }
+        let w = width - 2 * margin
         let gap: CGFloat = height < 600 ? 10 : 14
         let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
-        // One arrangement whatever is on: the picture beside the pad, and places kept for the bar, the transport and the
-        // episode line. It was two (the picture over the pad when nothing was on), and the first reading, about 1.5 s after
-        // opening, moved everything from one to the other in a spring (audit of 5b7b503). What's on only fills the places.
-        let rows: CGFloat = 5
-        let fixed = 2 * grid.key + Self.barSlot + grid.play + 46 + strip + 8
-        let room = max(0, height - fixed - gap * rows)
-        let w = grid.width
-        let d = max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
-        let pw = min(w - 16 - d, d * 16 / 9)
-        // Only the places with something in them: kept empty, the bar's, the transport's and the episode line's places
-        // were an 80-210 pt hole under the picture paused, offline or idle (gate 5, items 3 and 4). The picture and the pad
-        // keep their size whatever is on (it's worked out as if every place were there), so the flick still lands on the
-        // picture where it stays; only the rows under it make room, once, with a spring.
-        let hasBar = !musicShown && barContent
-        let hasTransport = musicShown || session
-        let hasEpisodes = seriesOn && (session || musicShown)
-        return VStack(spacing: 0) {
-            VStack(spacing: gap) {
-                HStack(spacing: max(16, w - pw - d)) {
-                    picture(closable: true).frame(width: pw, height: pw * 9 / 16)
-                    pad.frame(width: d, height: d)
-                }
-                .frame(width: w)
-                if hasBar { ZStack { Color.clear; progress }.frame(width: grid.width, height: Self.barSlot).transition(.opacity) }
-                if hasTransport {
-                    ZStack {
-                        Color.clear
-                        if musicShown { music }
-                        else { Transport(size: grid.key, playSize: grid.play).frame(width: grid.width + grid.gap) }
-                    }
-                    .frame(width: grid.width, height: grid.play)
-                    .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
-                    .transition(.opacity)
-                }
-                if hasEpisodes { ZStack { Color.clear; episodes }.frame(width: grid.width, height: 46).transition(.opacity) }
-            }
-            // The spare height shared evenly: between what's on and the keys, and between the keys and the apps, never one
-            // hole in the middle.
-            Spacer(minLength: gap)
-                VStack(spacing: gap) {
-                    keysBlock(grid, transport: false)
-                    HStack(spacing: RemoteGrid.sideGap) {
-                        VolumeKey(down: true, size: grid.key)
-                        VolumeBar().padding(.horizontal, 16)
-                        VolumeKey(down: false, size: grid.key)
-                    }
-                    .frame(width: grid.width)
-                    .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
-                }
-                .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
-                .modifier(KeysArrive(gate: keysGate))
-            Spacer(minLength: 8)
-            AppStrip(inset: margin).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).padding(.bottom, 8)
+        let line: CGFloat = 46
+        func grid(_ k: CGFloat) -> RemoteGrid {
+            var g = RemoteGrid.keys(w, maxKey: k)
+            g.width = max(g.width, w)
+            g.play = min(g.key + 8, 104)
+            return g
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: hasBar)
-        .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: hasTransport)
-        .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: hasEpisodes)
+        // The picture and the pad share a row at one height: the most the width gives both.
+        let dWide = max(110, ((w - 16) * 9 / 25).rounded(.down))
+        // The four groups: A the picture's row and its bar; B the transport and the episode line; C the keys' row and
+        // volume; D the apps.
+        func hA(_ d: CGFloat) -> CGFloat { d + gap + Self.barSlot }
+        func hB(_ g: RemoteGrid) -> CGFloat { g.play + gap + line }
+        func hC(_ g: RemoteGrid) -> CGFloat { g.key + gap + g.key }
+        let hD = strip + 8
+        var g = grid(72), d = dWide
+        if let crease {
+            // A above the fold, the rest under it, 12 pt clear of it either side.
+            let upRoom = max(0, crease.minY - 12)
+            let lowRoom = max(0, height - crease.maxY - 12)
+            d = max(110, min(dWide, upRoom - gap - Self.barSlot))
+            var k: CGFloat = 96
+            while k > 52, hB(grid(k)) + gap + hC(grid(k)) + gap + hD > lowRoom { k -= 2 }
+            g = grid(k)
+        } else {
+            // One part: the keys from 72 down until the pad has room, the pad up to its best, then the keys grow back
+            // into whatever is still over.
+            func rest(_ k: CGFloat) -> CGFloat { height - (gap + Self.barSlot) - hB(grid(k)) - hC(grid(k)) - hD - 3 * gap }
+            var k: CGFloat = 72
+            while k > 52, rest(k) < 110 { k -= 2 }
+            d = max(110, min(dWide, rest(k)))
+            while k < 92, rest(k + 2) >= d { k += 2 }
+            g = grid(k)
+        }
+        let pw = min(w - 16 - d, d * 16 / 9)
+        let idle = !session && !musicShown
+        let groupA = VStack(spacing: gap) {
+            HStack(spacing: max(16, w - pw - d)) {
+                picture(closable: true).frame(width: pw, height: pw * 9 / 16)
+                pad.frame(width: d, height: d)
+            }
+            .frame(width: w)
+            ZStack {
+                if !musicShown && barContent { progress }
+                // Nothing on: the bar's bare track, quiet, so its place reads as the bar it is, never a hole.
+                else { Capsule().fill(.white.opacity(0.1)).frame(height: RemoteGrid.barH).frame(maxHeight: .infinity, alignment: .top).padding(.top, 8) }
+            }
+            .frame(width: g.width, height: Self.barSlot)
+        }
+        let groupB = VStack(spacing: gap) {
+            ZStack {
+                if musicShown { music.transition(MirrorView.dip) }
+                else {
+                    // Idle, still there, dimmed and still: a place kept, never a hole, and nothing to press that does nothing.
+                    Transport(size: g.key, playSize: g.play).frame(width: g.width + g.gap)
+                        .opacity(idle ? 0.35 : 1).allowsHitTesting(!idle).accessibilityHidden(idle)
+                        .transition(MirrorView.dip)
+                }
+            }
+            .frame(width: g.width, height: g.play)
+            .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+            ZStack { Color.clear; if seriesOn && (session || musicShown) { episodes } }.frame(width: g.width, height: line)
+        }
+        .animation(.easeOut(duration: 0.2), value: musicShown)
+        let groupC = VStack(spacing: gap) {
+            keysBlock(g, transport: false)
+            HStack(spacing: RemoteGrid.sideGap) {
+                VolumeKey(down: true, size: g.key)
+                VolumeBar().padding(.horizontal, 16)
+                VolumeKey(down: false, size: g.key)
+            }
+            .frame(width: g.width)
+            .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
+        }
+        .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
+        .modifier(KeysArrive(gate: keysGate))
+        let groupD = AppStrip(inset: margin).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).padding(.bottom, 8)
+        return Group {
+            if let crease {
+                VStack(spacing: 0) {
+                    groupA.frame(height: max(0, crease.minY - 12), alignment: .top)
+                    Color.clear.frame(height: crease.height + 24)
+                    VStack(spacing: gap) { groupB; groupC; Spacer(minLength: 0); groupD }
+                }
+            } else {
+                VStack(spacing: gap) { groupA; groupB; groupC; Spacer(minLength: 0); groupD }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     // Whether the bar's place has anything to show: a start under way (its stand-in or its note), or the session that's on.
     var barContent: Bool {
@@ -1829,7 +1898,7 @@ struct RemoteTab: View {
                         // above, the picture was a sliver (CI 53b4243) and then the pad a 100 pt miniature whose wake key
                         // read "Wake the…" (CI b88affc). Now the picture and the pad share the top row at one height, the
                         // bar and the transport hang from the picture, and every key is one size: 72 pt, ⏯ 80.
-                        uprightColumn(width: g.size.width, height: g.size.height)
+                        uprightColumn(width: g.size.width, height: g.size.height, crease: Self.crease(in: g))
                     }
                 }
                 .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
@@ -2302,16 +2371,24 @@ struct AppStrip: View {
     @Environment(\.pagePush) private var pagePush
     static let tile: CGFloat = 96
     var inset: CGFloat = 14
+    @State private var rowWidth: CGFloat = 0
     var body: some View {
         let apps = AppsTab.watching(model.status?.apps ?? [])
         let all = apps.isEmpty ? (model.status?.apps ?? []) : apps
         let h = Self.tile * TVLook.bannerSize.height / TVLook.bannerSize.width
         // The banners slide; the key to all of them stays whole at the row's end (it was the last thing in the slide, cut
         // by the screen's edge: gate on cbfc0b5).
+        // Whole tiles only at rest: their width shares the row out so the last one ends at the row's edge, never cut by it
+        // (Plex, open upright, gate on 4f36e1e). The rest are a swipe away.
+        let n = max(1, ((rowWidth + 8) / (Self.tile + 8)).rounded(.up))
+        let tw = rowWidth > 0 ? ((rowWidth - (n - 1) * 8) / n).rounded(.down) : Self.tile
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) { ForEach(all.prefix(8)) { Banner(app: $0, browses: false, width: Self.tile) } }
+                HStack(spacing: 8) { ForEach(all.prefix(8)) { Banner(app: $0, browses: false, width: tw) } }
+                    .scrollTargetLayout()
             }
+            .scrollTargetBehavior(.viewAligned)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs($0 - rowWidth) > 0.5 { rowWidth = $0 } }
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
             Button { model.tick(); pagePush.push(AppsRoute.all) } label: {
                 Image(systemName: "square.grid.2x2").font(.system(size: 18, weight: .semibold))
@@ -2594,7 +2671,10 @@ struct Banner: View {
                     Art(url: u) { i in
                         // A banner that came out blank, a white logo flattened onto white, is never shown as it is.
                         if ImageStore.shared.isFlat(u) { BannerFallback(app: app) }
-                        else if app.wide == true { i.resizable().scaledToFill() }
+                        // A wide banner, its logo inset a little from the tile's edge (YouTube's ran flush to it folded):
+                        // the banner itself fills behind as the ground, the same banner a little smaller over it, so its
+                        // own colour runs to the edge.
+                        else if app.wide == true { ZStack { i.resizable().scaledToFill(); i.resizable().scaledToFit().scaleEffect(0.84) } }
                         else {
                             VStack(spacing: 4) { i.resizable().scaledToFit().frame(width: 30, height: 30); Text(app.name).font(.caption.weight(.medium)).lineLimit(1).padding(.horizontal, 8) }
                         }
@@ -2637,9 +2717,10 @@ private struct OnTVMark: View {
     let pkg: String
     var body: some View {
         let on = model.frontApp == pkg && model.openingApp?.pkg != pkg
-        Image(systemName: "tv.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(.black.opacity(0.85))
-            .frame(width: 20, height: 20).background(TVLook.accent, in: Circle())
-            .padding(5)
+        // Small and tucked into the corner, clear of the logo (it covered Stremio's O, gate on 4f36e1e).
+        Image(systemName: "tv.fill").font(.system(size: 7, weight: .bold)).foregroundStyle(.black.opacity(0.85))
+            .frame(width: 15, height: 15).background(TVLook.accent, in: Circle())
+            .padding(3)
             .opacity(on ? 1 : 0)
             .settledAnimation(.easeOut(duration: 0.15), value: on)
             .accessibilityHidden(true)
@@ -3693,8 +3774,11 @@ struct DiscoverColumn: View {
     // left of the short ones goes together at the end, as "More to watch", once each, if there are enough of them.
     // Worked out when the lists change, not on every redraw of the column.
     @State private var built: [MediaRow]?
-    // How many shelves are drawn so far (the rest follow a few frames later).
-    @State private var budget = 3
+    // How many shelves are drawn so far (the rest follow a few frames later). Built unseen ahead of time, one shelf, and
+    // the rest one at a time only while he isn't touching the phone, so no single turn of the build is long.
+    @State private var budgetSet: Int?
+    @Environment(\.tabInFront) private var front
+    var budget: Int { budgetSet ?? (front ? 3 : 1) }
     // Not asked yet counts as waiting: on the first frame, before the load had begun, the page said "No results" and then
     // put up the waiting shelves (gate 5: the skeleton changing shape twice).
     var waitingForRows: Bool { !store.failed && (store.loading || !store.asked) }
@@ -3836,10 +3920,15 @@ struct DiscoverColumn: View {
         // The shelves come in a few at a time after the first frame: the first open of Watch built every shelf in one turn
         // (485 ms in the tour, 11-22). Only the ones on screen first; the rest within a few frames, long before a fling
         // could reach them, so the page's height is whole by then.
-        .task(id: shown.count) {
+        .task(id: shown.count * 2 + (front ? 1 : 0)) {
             while budget < shown.count && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 34_000_000)
-                budget += 2
+                if front {
+                    try? await Task.sleep(nanoseconds: 34_000_000)
+                    budgetSet = budget + 2
+                } else {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    if TouchClock.idle(0.4) { budgetSet = budget + 1 }
+                }
             }
         }
         .task(id: kind) { await store.load() }
@@ -3898,12 +3987,16 @@ struct PlaceholderShelf: View {
                         Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
                     }
                 } else {
-                    Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16)
+                    // The heading's height kept, and nothing drawn in it: a grey bar beside real headings read as a
+                    // different kind of thing (gate on 4f36e1e).
+                    Color.clear.frame(width: 150, height: 16)
                 }
             }
                 .frame(height: headed ? 25 : 16, alignment: .leading).padding(.leading, 20)
             // Each waiting card in the cover's own waiting look, the light running round it (ruling 9), never a flat grey slab (r20).
-            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in CoverWait().frame(width: cardWidth, height: cardHeight).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)).overlay { LoadingRing(radius: 6) } } }
+            // Each waiting card in the cover's own waiting look, breathing as one row; no light on each of the twelve (its
+            // running segments read as stray cyan corners, gate on 4f36e1e).
+            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in CoverWait().frame(width: cardWidth, height: cardHeight).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)) } }
                 .padding(.leading, 20)
         }
         // minWidth 0: four cards are wider than a folded column, and without it their width widened the whole page,
@@ -4198,6 +4291,10 @@ private struct Untitled: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if on { content.navigationTitle("").navigationBarTitleDisplayMode(.inline) } else { content }
     }
+}
+extension View {
+    // A key that does nothing while the TV sleeps: dimmed and not pressable then.
+    func sleepDim(_ on: Bool) -> some View { opacity(on ? RemoteTab.dim : 1).allowsHitTesting(!on).animation(.easeOut(duration: 0.25), value: on) }
 }
 extension View { func underFlick(barHidden: Bool = false, warms: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden, warms: warms)) } }
 

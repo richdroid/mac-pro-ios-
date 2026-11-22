@@ -55,6 +55,7 @@ struct TVNow: Equatable {
 struct Lip: View {
     @Environment(TVModel.self) private var model
     @Environment(\.pagePush) private var pagePush
+    @Environment(\.paneLayout) private var panes
     // The tab it sits on: only the one showing says where the lip is.
     let tab: Int
     static let height: CGFloat = 56
@@ -100,7 +101,9 @@ struct Lip: View {
         .frame(height: Self.height)
         .background { LipGlass() }
         .offset(y: pull)
-        .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 6)
+        // On the page's own left edge (20 pt, 34 open flat where the left pane's content starts), not 12 pt in (gate on
+        // 4f36e1e).
+        .padding(.leading, panes ? 34 : 20).padding(.trailing, 12).padding(.top, 2).padding(.bottom, 6)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
             place.rect = r
             guard model.tab == tab, r.width > 40 else { return }
