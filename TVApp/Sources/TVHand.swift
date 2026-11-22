@@ -526,11 +526,12 @@ final class LiftPress: UILongPressGestureRecognizer {
         if from == nil, let t = touches.first {
             let p = t.location(in: t.window)
             from = p; now = p; touched = t.view
+            samples = []; sample(t, event)
             HandLog.note(String(format: "lift touch %.0f,%.0f quickUp=%@ shelf=%@", p.x, p.y, quickUp ? "yes" : "no", Self.onShelf(t.view) ? "yes" : "no"))
         }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let t = touches.first { now = t.location(in: t.window) }
+        if let t = touches.first { now = t.location(in: t.window); sample(t, event) }
         if state == .possible, quickUp, let f = from, let p = now {
             let dx = p.x - f.x, dy = p.y - f.y
             if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, Self.onShelf(touched) {
@@ -557,10 +558,37 @@ final class LiftPress: UILongPressGestureRecognizer {
         return Self.onShelf(touched)
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let t = touches.first { now = t.location(in: t.window) }
+        if let t = touches.first { now = t.location(in: t.window); sample(t, event) }
         super.touchesEnded(touches, with: event)
     }
-    override func reset() { super.reset(); from = nil; now = nil; touched = nil }
+    override func reset() { super.reset(); from = nil; now = nil; touched = nil; samples = [] }
+    // The finger's own history, by the touches' timestamps (the event's, coalesced moves included), for the speed at
+    // release. Timed by when the action ran, the last two moves of a fast flick came with one time and the speed read a
+    // quarter of what it was (CI cc2617a: 238 pt in 0.12 s read as 504 pt/s, and the throw sprang back).
+    private var samples: [(t: TimeInterval, p: CGPoint)] = []
+    private func sample(_ touch: UITouch, _ event: UIEvent?) {
+        for c in event?.coalescedTouches(for: touch) ?? [touch] {
+            let p = c.location(in: c.window)
+            // Two at one time: the later place stands, never a step of zero time.
+            if let l = samples.last, c.timestamp - l.t < 0.0005 { samples[samples.count - 1] = (max(l.t, c.timestamp), p); continue }
+            samples.append((c.timestamp, p))
+        }
+        if let last = samples.last { samples.removeAll { last.t - $0.t > 0.2 } }
+    }
+    // Over the last 50-80 ms before the finger lifted (or the longest stretch there is, if shorter), and the samples used.
+    var releaseVelocity: (v: CGSize, used: String) {
+        var samples = samples
+        // The lift's own sample, at the last move's place a moment after it, is the finger leaving, not stopping: left out
+        // when it comes within 50 ms, as UIKit's own pans do.
+        if samples.count >= 3, let l = samples.last, l.p == samples[samples.count - 2].p, l.t - samples[samples.count - 2].t < 0.05 { samples.removeLast() }
+        guard let last = samples.last else { return (.zero, "none") }
+        let window = samples.filter { last.t - $0.t <= 0.08 }
+        guard let first = (window.count >= 2 ? window.first : samples.dropLast().last), last.t - first.t > 0.004 else { return (.zero, "one sample") }
+        let dt = CGFloat(last.t - first.t)
+        let v = CGSize(width: (last.p.x - first.p.x) / dt, height: (last.p.y - first.p.y) / dt)
+        let used = samples.filter { $0.t >= first.t }.map { String(format: "%.0f@%.3f", $0.p.y, $0.t - first.t) }.joined(separator: " ")
+        return (v, used)
+    }
     // The nearest scroll view around it scrolls sideways and not up and down.
     static func onShelf(_ view: UIView?) -> Bool {
         var v = view
@@ -618,7 +646,9 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
             c.track.add(p, at: t)
             c.lifting = false
             LiftHold.release()
-            ended(g.state == .ended ? c.track.velocity : .zero)
+            let r = g.releaseVelocity
+            if g.state == .ended { HandLog.note(String(format: "release speed %.0f,%.0f from y@s: %@", r.v.width, r.v.height, r.used)) }
+            ended(g.state == .ended ? r.v : .zero)
         default: break
         }
     }
