@@ -86,16 +86,23 @@ struct DashboardTab: View {
         guard ready, running, let st else { return nil }
         let bed = ConsolePlace.fromBed(st, pose: model.pose)
         let name = bed ? "From bed" : "At the desk", symbol = bed ? "bed.double" : "desktopcomputer"
-        if st.glance == true { return (name, symbol, "Glance covers the boards until you turn it off") }
+        if st.glance == true { return (name, symbol, "Glance covers the boards with big, dim figures until you turn it off") }
         guard st.board != nil else { return (name, symbol, "A page stays up until you pick a board") }
-        guard st.rotate == true else { return (name, symbol, bed ? "Staying on this board, in large text" : "Staying on this board") }
+        let large = st.text == "room" ? ", in large text" : ""
+        guard st.rotate == true else { return (name, symbol, "Staying on this board\(large)") }
+        // The boards the Console says are taking turns, and its own pace (an older bridge: the phone's reckoning).
         let turns = ConsolePlace.turns(st, pose: model.pose).map(\.name)
-        let every = st.rotateSecs.map { $0 > 0 ? " every \(Int($0)) s" : "" } ?? ""
-        if bed { return (name, symbol, "\(turns.dropLast().joined(separator: ", ")) and \(turns.last ?? "") take turns\(every), in large text") }
-        return (name, symbol, "All \(turns.count) boards take turns\(every)")
+        let every = " every \(secs) s"
+        if turns.count == ConsolePlace.boards.count { return (name, symbol, "All \(turns.count) boards take turns\(every)\(large)") }
+        if turns.count == 1 { return (name, symbol, "Only \(turns[0]) is in the turns\(large)") }
+        return (name, symbol, "\(turns.dropLast().joined(separator: ", ")) and \(turns.last ?? "") take turns\(every)\(large)")
     }
-    // The board before or after the one up now, among those whose turn it can be.
+    // The Console's pace between boards; 45 s, its default, until it says.
+    var secs: Int { st?.rotateSecs.map { $0 > 0 ? Int($0) : 45 } ?? 45 }
+    // The board before or after the one up now. The Console steps through its own turns (board next|previous) and
+    // restarts its timer; an older bridge without its mode gets the board the phone works out.
     func step(_ by: Int) {
+        if st?.mode != nil || st?.rotating != nil { remote.send(model, by > 0 ? "next" : "previous", "board", by > 0 ? "next" : "previous"); return }
         let turns = ConsolePlace.turns(st, pose: model.pose)
         guard !turns.isEmpty else { return }
         let i = turns.firstIndex { $0.id == st?.board }
@@ -257,17 +264,17 @@ struct DashboardTab: View {
                 guard remote.busy == nil else { return }
                 asked["show"] = want
                 remote.send(model, "show", want ? "show" : "hide")
-            })) { row("On screen", "Full screen", "rectangle.inset.filled") }
+            })) { row("On screen", "Over other apps", "rectangle.inset.filled") }
                 .accessibilityIdentifier("switch.show")
-            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Until turned off", "sun.max") }
+            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Until you turn it off", "sun.max") }
                 .accessibilityIdentifier("switch.display")
             Group {
-                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "Every \(st?.rotateSecs.map { $0 > 0 ? "\(Int($0))" : "45" } ?? "45") s", "arrow.triangle.2.circlepath") }
+                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "Every \(secs) s", "arrow.triangle.2.circlepath") }
                     .accessibilityIdentifier("switch.rotate")
                 Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "Across the room", "textformat.size") }
                     .accessibilityIdentifier("switch.text")
-                // Glance in plain words, one switch (Richard, 2026-11-21: "glance is so confusing").
-                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "A few huge numbers", "eye") }
+                // Glance in plain words, one switch (Richard, 2026-11-21: "glance is so confusing"): its one line says what it does; the name stays the Mac's own ("Glance from Bed" in its menu).
+                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "Time, alarm and TV in big, dim figures", "eye") }
                     .accessibilityIdentifier("switch.glance")
             }
             .disabled(!running)
