@@ -649,7 +649,7 @@ struct RootView: View {
                 // foot (Richard, 2026-11-21: "this is what iphone duo apps look like"). The system's TabView put them
                 // there folded and open flat, but drew a bar across the foot open upright. The same rail as the Mac Pro
                 // app's (SideRailTabs); each tab's pages keep clear of it (railRoom, in tabPage).
-                SideRailTabs(selection: TabReset.binding($model.tab) { retap($0) }, items: Self.tabs, badge: { _ in 0 }) { t in
+                SideRailTabs(selection: TabReset.binding($model.tab) { retap($0) }, items: Self.tabs, badge: { _ in 0 }, prewarm: UserDefaults.standard.bool(forKey: "noPrewarm") ? [] : [1, 2, 3, 4]) { t in
                     NavigationStack { page(t).tabPage(t, model) }.id(resets[t, default: 0])
                 }
                 .onChange(of: model.tab) { _, t in Haptic.fire(.tick); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }

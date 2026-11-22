@@ -560,13 +560,17 @@ struct SideRailTabs<Content: View>: View {
     @Binding var selection: Int
     let items: [RailItem]
     let badge: (Int) -> Int
+    // The tabs to build ahead, after the first frame, one per idle turn, so a tab's first open isn't its first build (a
+    // 250-1300 ms freeze, Mint Remote audit 11-22). Opt-in: only tabs whose pages do nothing on appearing but load.
+    var prewarm: [Int] = []
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
     @State private var edge: CGFloat = 0
     @Environment(\.colorScheme) private var scheme
-    // The system's own rail, measured on the build's "before" shot at 859 x 604 pt (CI d8bbee4): 45 pt wide, an icon
-    // every 49 pt, 26 pt clear of the foot, the tab in front on a dark inset capsule (designer gate 1, 2026-11-20).
-    static var cell: CGFloat { 39 }
+    // The system's own rail, measured on the build's "before" shot at 859 x 604 pt (CI d8bbee4): an icon every 49 pt,
+    // 26 pt clear of the foot, the tab in front on a dark inset capsule (designer gate 1, 2026-11-20). Each cell 44 pt
+    // wide, the HIG's least tap target (it was 39, the system's look; HIG gate 11-22).
+    static var cell: CGFloat { 44 }
     static var cellHeight: CGFloat { 49 }
     static var inset: CGFloat { 3 }
     static var margin: CGFloat { 10 }
@@ -596,6 +600,15 @@ struct SideRailTabs<Content: View>: View {
         .environment(\.sideRail, column)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        .task {
+            guard !prewarm.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            for t in prewarm where !shown.contains(t) {
+                await Task.yield()
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                shown.insert(t)
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             // On the status column's centre line, measured from the display's edge; its foot 26 pt from the display's bottom edge, as
             // the system's rail stands (measured from the bottom safe area it stood about 62 pt up: Chumby gate, 11-22).

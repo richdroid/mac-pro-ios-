@@ -92,6 +92,14 @@ jobs:
             xcrun simctl ui "$DEVICE" appearance dark
             shot home-dark$2 $1 9 $M -tab 0
           }
+          # First opens with and without the tabs built ahead: late frames and busy turns through the tab hop, folded.
+          for W in prewarm noprewarm; do
+            EXTRA=""; [ $W = noprewarm ] && EXTRA="-noPrewarm YES"
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 0 -pose tabhop -swipeLog YES $EXTRA
+            sleep 16
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && cp "$C/Library/Caches/swipe-log.txt" dist/logo-hop-$W.log; rm -f "$C/Library/Caches/swipe-log.txt"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          done
           set_ 1 ""
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
