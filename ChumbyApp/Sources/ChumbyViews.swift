@@ -968,6 +968,11 @@ struct HomeTab: View {
     @State private var fitRoom: CGFloat = 0
     @State private var controlsFoot: CGFloat = 0
     @State private var slotFoot: CGFloat = 0
+    // The stage's width when each foot was read: a reading taken before the last change of width is worked from the width
+    // it was taken at. Worked from the new width instead, a stale reading narrowed the device a second time (the build's
+    // log, 11-21: 330 → 273 → 250 folded, where 273 fits).
+    @State private var slotWidth: CGFloat = 0
+    @State private var captionWidth: CGFloat = 0
     @State private var room: CGFloat = 0
     static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340
     // Allowance for the tallest everyday state over the one measured.
@@ -986,12 +991,13 @@ struct HomeTab: View {
         // Sized for Home at rest: the feet are read less the snooze ring's room (taken off as each is measured), so a
         // ring never narrows the device for the rest of the posture.
         let fitFoot = wide ? controlsFoot : slotFoot
-        let target = min(maxWidth, max(Self.minStage, w - (fitFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
+        let at = (wide ? captionWidth : slotWidth) > 0 ? (wide ? captionWidth : slotWidth) : w
+        let target = min(maxWidth, max(Self.minStage, at - (fitFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
         if target < w - 0.6 { fitWidth = target }
-        SwipeLog.mark("home fit room \(Int(room)) slot \(Int(slotFoot)) caption \(Int(controlsFoot)) w \(Int(w)) target \(Int(target)) wide \(wide)")
+        SwipeLog.mark("home fit room \(Int(room)) slot \(Int(slotFoot))@\(Int(slotWidth)) caption \(Int(controlsFoot)) w \(Int(w)) target \(Int(target)) wide \(wide)")
         // Where the caption would stand at the width it ends up with.
         let end = min(target, w)
-        let foot = controlsFoot - (w - end) * Self.footPerWidth
+        let foot = controlsFoot - ((captionWidth > 0 ? captionWidth : w) - end) * Self.footPerWidth
         let top = foot - captionHeight
         let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room - top + 4) : 0
         if abs(push - captionPush) > 0.5 { captionPush = push }
@@ -1200,7 +1206,7 @@ struct HomeTab: View {
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { captionHeight = $0; refit() }
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0 - captionPush - snoozeRoom; refit() }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0 - captionPush - snoozeRoom; captionWidth = stageWidth; refit() }
             .padding(.bottom, 16)
             Grid(horizontalSpacing: 12, verticalSpacing: 5) {
                 if !name.isEmpty { spec("Name", name) }
@@ -1425,7 +1431,7 @@ struct HomeTab: View {
                             .frame(maxWidth: Self.column)
                             .padding(.top, Self.underDevice)
                             // What the fit ends on, one column: the foot of the last control.
-                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { slotFoot = $0 - snoozeRoom; refit() }
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { slotFoot = $0 - snoozeRoom; slotWidth = stageWidth; refit() }
                         Color.clear.frame(height: 1).id("homebar")
                         about.padding(.top, Self.sectionGap)
                         if moreInfo { more.frame(maxWidth: Self.column) }
