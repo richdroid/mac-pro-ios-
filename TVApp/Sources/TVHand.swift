@@ -426,7 +426,10 @@ struct Liftable: ViewModifier {
     func began() {
         var r = rect?() ?? .zero
         if r.width < 4 { r = place.rect ?? .zero }
-        guard r.width > 4, Hand.shared.lifted == nil else { return }
+        guard r.width > 4, Hand.shared.lifted == nil else {
+            HandLog.note("lift refused \(item.title): \(r.width > 4 ? "another in the hand" : "no place")")
+            return
+        }
         far = false
         if source == .stremio, !item.isYouTube { StreamCache.shared.prefetch(item); Prepare.arm(); NextUp.prefetch(item) }
         let c = Hand.shared.liftCarry
@@ -510,17 +513,36 @@ final class LiftPress: UILongPressGestureRecognizer {
     private(set) var from: CGPoint?
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
-        if from == nil { from = touches.first?.location(in: nil) }
+        if from == nil, let p = touches.first?.location(in: nil) {
+            from = p
+            HandLog.note(String(format: "lift touch %.0f,%.0f quickUp=%@ shelf=%@", p.x, p.y, quickUp ? "yes" : "no", Self.onShelf(view) ? "yes" : "no"))
+        }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         if state == .possible, quickUp, let f = from, let p = touches.first?.location(in: nil) {
             let dx = p.x - f.x, dy = p.y - f.y
             if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, Self.onShelf(view) {
+                HandLog.note("lift quick-up")
                 state = .began
                 return
             }
         }
+        let was = state
         super.touchesMoved(touches, with: event)
+        if was == .possible, state == .failed { HandLog.note("lift failed: moved before the hold") }
+    }
+    // Only a scroll that has begun can keep the lift from beginning (moved first, the touch is the scroll's). The card's
+    // own press, and SwiftUI's gestures around it, can't: on the shelf films no lift ever began under a held finger
+    // (CI 5226eb3). The tap after a lift is the card's to ignore (ShelfHand.handledAt), and the lift cancels the press's
+    // touch as it begins.
+    override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
+        other is UIPanGestureRecognizer && other.view is UIScrollView
+    }
+    // The scrolls wait for the quick lift to be ruled out (10 pt, or the hold), so an upward drag on a shelf is the hand's
+    // and not the page's. The recognizer's own answer, not a delegate's: SwiftUI's gesture bridge owns the delegate.
+    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
+        guard quickUp, other is UIPanGestureRecognizer, other.view is UIScrollView else { return false }
+        return Self.onShelf(view)
     }
     override func reset() { super.reset(); from = nil }
     // The nearest scroll view around it scrolls sideways and not up and down.
@@ -542,16 +564,10 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
     let began: () -> Void
     let moved: (CGSize, CGSize) -> Void
     let ended: (CGSize) -> Void
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    final class Coordinator {
         var start: CGPoint = .zero
         var track = VelocityTrack()
         var lifting = false
-        // On a shelf, the scrolls wait for the quick lift to be ruled out (10 pt, or the hold), so an upward drag is the
-        // hand's and not the page's.
-        func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-            guard let p = g as? LiftPress, p.quickUp, other.view is UIScrollView, other is UIPanGestureRecognizer else { return false }
-            return LiftPress.onShelf(p.view)
-        }
         // Torn down mid-lift (the view gone with the card in the hand): the held scrolls move again.
         deinit { if lifting { MainActor.assumeIsolated { LiftHold.release() } } }
     }
@@ -562,7 +578,6 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
         g.allowableMovement = 10
         g.cancelsTouchesInView = true
         g.quickUp = quickUp
-        g.delegate = context.coordinator
         return g
     }
     func updateUIGestureRecognizer(_ g: LiftPress, context: Context) { g.quickUp = quickUp }
@@ -572,6 +587,7 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
         let t = CACurrentMediaTime()
         switch g.state {
         case .began:
+            HandLog.note("lift press began")
             // From where the finger came down, so a quick lift's first 10 pt are the card's too, point for point.
             c.start = g.from ?? p; c.track.reset(); c.track.add(p, at: t)
             c.lifting = true
@@ -582,6 +598,7 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
             c.track.add(p, at: t)
             moved(CGSize(width: p.x - c.start.x, height: p.y - c.start.y), c.track.velocity)
         case .ended, .cancelled, .failed:
+            if g.state != .ended { HandLog.note("lift press \(g.state == .cancelled ? "cancelled" : "failed")") }
             c.track.add(p, at: t)
             c.lifting = false
             LiftHold.release()
