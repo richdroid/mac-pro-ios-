@@ -558,6 +558,9 @@ struct SideRailTabs<Content: View>: View {
     @Binding var selection: Int
     let items: [RailItem]
     let badge: (Int) -> Int
+    // Stepped aside while the keyboard is up, as the system's rail does: above the keyboard it ran into the status at the
+    // top folded on its side. The page keeps the room, so nothing on it moves as the rail goes and comes back.
+    var hidden = false
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
     @State private var edge: CGFloat = 0
@@ -594,6 +597,8 @@ struct SideRailTabs<Content: View>: View {
             rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.foot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .ignoresSafeArea(.container, edges: .trailing)
+                .opacity(hidden ? 0 : 1).allowsHitTesting(!hidden).accessibilityHidden(hidden)
+                .animation(.easeOut(duration: 0.25), value: hidden)
         }
     }
     private var rail: some View {

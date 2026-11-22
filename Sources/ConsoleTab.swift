@@ -23,6 +23,10 @@ struct ConsoleState: Codable, Equatable {
     // The boards' text: "desk", or "room" to read from bed.
     var text: String?
     var rotateSecs: Double?
+    // The Console's own mode ("bed" or "desk") and the boards taking turns now, in order. A bridge from before
+    // 2026-11-22 sends neither, and the phone then works them out as it used to.
+    var mode: String?
+    var rotating: [String]?
 }
 
 enum ConsolePlace {
@@ -43,16 +47,18 @@ enum ConsolePlace {
     ]
     // The boards that read from bed; the dense ones sit out until morning (the Console's rule, macpro-console e18fc99).
     static let bedBoards: Set<String> = ["tonight", "home", "media"]
-    // Read from bed: he chose text for across the room, or it's 10 PM to 9 AM. The Console decides this by the Mac's
-    // clock and doesn't say which it chose, so the phone works it out the same way (the two share a room and a time).
+    // Read from bed: as the Console says. An older bridge doesn't say, so then: he chose text for across the room, or
+    // it's 10 PM to 9 AM by the phone's clock, the Console's own rule.
     static func fromBed(_ s: ConsoleState?, pose: String = "") -> Bool {
+        if let m = s?.mode { return m == "bed" }
         if s?.text == "room" { return true }
         if !pose.isEmpty { return false }
         let h = Calendar.current.component(.hour, from: Date()); return h >= 22 || h < 9
     }
     // Whose turn it can be now, in order.
     static func turns(_ s: ConsoleState?, pose: String = "") -> [(id: String, name: String, symbol: String, about: String)] {
-        fromBed(s, pose: pose) ? boards.filter { bedBoards.contains($0.id) } : boards
+        if let r = s?.rotating, !r.isEmpty { return r.compactMap { id in boards.first { $0.id == id } } }
+        return fromBed(s, pose: pose) ? boards.filter { bedBoards.contains($0.id) } : boards
     }
     static func name(_ s: ConsoleState) -> (String, String) {
         // Glance draws over every page and board on the Mac, so it is what the screen shows while it's on.
@@ -128,11 +134,12 @@ final class ConsoleRemote: ObservableObject {
         case "hide": return "The dashboard is hidden"
         case "board":
             if arg == "off" { return "Back to the pages" }
+            if arg == "next" || arg == "previous" { return "\(ConsolePlace.boards.first { $0.id == st?.board }?.name ?? "The next board") is on the Mac" }
             return "\(ConsolePlace.boards.first { $0.id == arg }?.name ?? "The board") is on the Mac"
         case "page": return "\(ConsolePlace.pages.first { $0.id == arg }?.name ?? "The page") is on the Mac"
         case "rotate": return arg == "on" ? "The boards take turns" : "The boards stay put"
         case "text": return arg == "room" ? "Large text, to read across the room" : "Desk-size text"
-        case "glance": return arg == "on" ? "Glance is on" : "Glance is off"
+        case "glance": return arg == "on" ? "Glance is on: big, dim figures" : "Glance is off"
         case "display": return arg == "on" || arg == "wake" ? "The display is on" : "The display is off"
         default: return "Done"
         }
@@ -173,7 +180,7 @@ final class ConsoleRemote: ObservableObject {
                 }
                 withAnimation(Motion.quick) {
                     busy = nil; answered += 1
-                    confirm(cmd == "display" && arg == "on" ? "The display stays on until you turn it off." : Self.done(cmd, arg, state))
+                    defer { confirm(cmd == "display" && arg == "on" ? "The display stays on until you turn it off." : Self.done(cmd, arg, state)) }
                     switch cmd {
                     case "show": state = ConsoleState(running: true, frontmost: true, fullscreen: true, page: state?.page ?? "home", board: state?.board, rotate: state?.rotate ?? false, animations: state?.animations ?? "full", display: "awake", glance: state?.glance ?? false)
                     case "hide": state?.frontmost = false
@@ -183,7 +190,14 @@ final class ConsoleRemote: ObservableObject {
                         if arg == "on" || arg == "off" { state?.keepOn = arg == "on" }
                     case "text": state?.text = arg
                     case "page": state?.page = arg; state?.board = nil
-                    case "board": state?.board = arg == "off" ? nil : arg; if arg != "off" { state?.page = "boards" }
+                    case "board":
+                        var to: String? = arg == "off" ? nil : arg
+                        if arg == "next" || arg == "previous" {
+                            let t = ConsolePlace.turns(state, pose: model.pose)
+                            let i = t.firstIndex { $0.id == state?.board }
+                            to = t.isEmpty ? state?.board : t[i.map { ($0 + (arg == "next" ? 1 : -1) + t.count) % t.count } ?? 0].id
+                        }
+                        state?.board = to; if arg != "off" { state?.page = "boards" }
                     case "rotate": state?.rotate = arg == "on"
                     case "animations": state?.animations = arg
                     default: break
@@ -206,11 +220,11 @@ final class ConsoleRemote: ObservableObject {
     static func posed(_ pose: String) -> ConsoleState? {
         switch pose {
         case "console", "glancefilm": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
-        case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "desk")
-        // From bed: Tonight up, large text, the display held on.
-        case "consolebed": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "tonight", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "room")
+        case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "desk", rotateSecs: 45, mode: "desk", rotating: ["machine", "media", "home", "work", "tonight"])
+        // From bed: Tonight up, the display held on, desk text (as the live Mac was on 2026-11-22: bed mode is not large text).
+        case "consolebed": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "tonight", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "desk", rotateSecs: 45, mode: "bed", rotating: ["media", "home", "tonight"])
         // Glance on the Mac's screen, the display awake.
-        case "consoleglance": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: true)
+        case "consoleglance": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: true, mode: "bed")
         case "consoleoff", "consolestarting": return ConsoleState(running: false)
         case "consolefail": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: false)
         // Open but not in front (another app is), and the display asleep under Glance, as the Mac was on 2026-11-16.

@@ -314,6 +314,8 @@ private struct QueueRow: View {
 // The whole queue as one scrolling list, in a sheet or, open flat, in the right pane. While it is up it follows the TV.
 struct QueueList: View {
     @ObservedObject private var queue = QueueStore.shared
+    // Open flat it's a pane on the Music page, kept under the rail when he leaves the tab: read only while it's in front.
+    @Environment(\.tabInFront) private var front
     let dismiss: () -> Void
     @State private var position = ScrollPosition(edge: .top)
     @State private var scrollY: CGFloat = 0
@@ -350,7 +352,8 @@ struct QueueList: View {
             CGPoint(x: $0.contentOffset.y + $0.contentInsets.top, y: max(0, $0.contentSize.height - $0.containerSize.height + $0.contentInsets.top + $0.contentInsets.bottom))
         } action: { _, p in scrollY = p.x; maxY = p.y }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { viewport = $0 }
-        .task {
+        .task(id: front) {
+            guard front else { queue.want(12); return }
             queue.want(500)
             await queue.read()
             while !Task.isCancelled {
