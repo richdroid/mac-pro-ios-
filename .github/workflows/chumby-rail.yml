@@ -71,9 +71,13 @@ jobs:
             shot settings$2 $1 10 $M -tab 2 -pose calsettings
             # A second tap on the tab: scrolled down at 4 s, back at its top by 9 s.
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 2 -pose retap
-            sleep 6; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/logo-retap-down$2.png
-            sleep 5; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/logo-retap-top$2.png
+            sleep 8; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/logo-retap-down$2.png
+            sleep 4; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/logo-retap-top$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # Motion: the tabs hopping (Alarms, Home, Sounds, Home), the push of Calendar settings, and the retap.
+            film tabhop$2 $1 10 $M -tab 0 -pose tabhop
+            film push$2 $1 6 $M -tab 2 -pose calsettings
+            film retapfilm$2 $1 10 $M -tab 2 -pose retap
             xcrun simctl ui "$DEVICE" appearance dark
             shot home-dark$2 $1 9 $M -tab 0
           }
@@ -91,7 +95,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../logo.zip . -i '*.png' '*.log' || zip -q ../logo.zip /dev/null)
+          (cd dist && zip -qr ../logo.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../logo.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view chumby-rail >/dev/null 2>&1 || gh release create chumby-rail --prerelease --title "Chumby rail checks" --notes "Work in progress: shots and logs from the chumby-rail branch."
           for f in logo.zip status.txt; do

@@ -1084,7 +1084,9 @@ struct AlarmsTab: View {
             guard !posed else { return }
             posed = true
             switch ChumbyModel.pose {
-            case "calsettings": openSettings()
+            // A moment late: on the first appearance the posture isn't read yet (PaneReader starts wide), and open
+            // upright the pose opened the pane that isn't shown there instead of pushing the page.
+            case "calsettings": Task { try? await Task.sleep(nanoseconds: 1_200_000_000); openSettings() }
             case "template": if wide { show(.template) } else { openSettings() }
             case "calday": if let k = wake.plan.first?.key { openDay(k) }
             // A day with its own settings: a set time 25 minutes earlier than usual and a label of its own.

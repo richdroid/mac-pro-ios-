@@ -673,7 +673,7 @@ struct RootView: View {
         }
         .task {
             guard ChumbyModel.pose == "retap" else { return }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
             TabTop.scrollDown(model.tab)
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             retap(model.tab)

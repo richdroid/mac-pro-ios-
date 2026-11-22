@@ -592,10 +592,11 @@ struct SideRailTabs<Content: View>: View {
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
         .overlay(alignment: .bottomTrailing) {
-            // Centred in the strip, measured from the display's edge.
+            // Centred in the strip, measured from the display's edge; its foot 26 pt from the display's bottom edge, as
+            // the system's rail stands (measured from the bottom safe area it stood about 62 pt up: Chumby gate, 11-22).
             rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.foot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .ignoresSafeArea(.container, edges: .trailing)
+                .ignoresSafeArea(.container, edges: [.trailing, .bottom])
         }
     }
     private var rail: some View {
