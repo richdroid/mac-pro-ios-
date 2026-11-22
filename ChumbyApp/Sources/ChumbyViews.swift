@@ -569,37 +569,24 @@ struct TabBarFade: ViewModifier {
     }
 }
 
-// The page's own frame against the safe area, both on screen. Its height less its safe-area insets read the insets off
-// twice where the frame already leaves them out (as the scroll page's does): open upright the room read 621 pt of the 786
-// pt there are, and folded 610 of 644, which held the wordmark, octopus and device at their 250 pt floor (Richard, 11-21:
-// "chumby logo now too small revert back to old size").
+// The page's own height. It used to be taken less its safe-area insets, but its frame already leaves them out (it runs
+// from under the status bar's inset to the top of the tab bar or the home indicator's inset, measured in all three
+// postures), and the insets came off twice: open upright the fit read 621 pt of the 786 there are, folded 610 of 644,
+// open flat 601 of 635. That held the wordmark, octopus and device at their 250 pt floor folded and open upright
+// (Richard, 11-21: "chumby logo now too small revert back to old size").
 struct HomeRoomReader: ViewModifier {
     let set: (CGFloat) -> Void
-    @State private var mine: CGRect = .zero
-    @State private var safe: CGRect = .zero
-    func report() {
-        guard mine.height > 0, safe.height > 0 else { return }
-        let room = min(mine.maxY, safe.maxY) - max(mine.minY, safe.minY)
-        SwipeLog.mark("home room page \(Int(mine.minY))-\(Int(mine.maxY)) safe \(Int(safe.minY))-\(Int(safe.maxY)) room \(Int(room))")
-        set(room)
-    }
     func body(content: Content) -> some View {
-        content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mine = $0; report() }
-            .background {
-                Color.clear.ignoresSafeArea()
-                    .onGeometryChange(for: CGRect.self) { g in
-                        let f = g.frame(in: .global), i = g.safeAreaInsets
-                        return CGRect(x: f.minX, y: f.minY + i.top, width: f.width, height: max(0, f.height - i.top - i.bottom))
-                    } action: { safe = $0; report() }
-                    .allowsHitTesting(false).accessibilityHidden(true)
-            }
+        content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+            SwipeLog.mark("home room page \(Int(f.minY))-\(Int(f.maxY)) room \(Int(f.height))")
+            set(f.height)
+        }
     }
 }
 
 extension View {
-    // The room a scroll page has for its content: the part of its frame inside the safe area (clear of the status bar, the
-    // tab bar and the home indicator), whichever of them its frame already leaves out.
+    // The room a scroll page has for its content: its own frame, which is already clear of the status bar, the tab bar
+    // and the home indicator.
     func homeRoom(_ set: @escaping (CGFloat) -> Void) -> some View { modifier(HomeRoomReader(set: set)) }
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
