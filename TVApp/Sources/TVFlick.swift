@@ -491,7 +491,7 @@ struct ShelfFlick: ViewModifier {
     // The pebble (TVHand): held still 0.15 s it lifts and is his finger's, point for point; moved first, the touch is the
     // scroll's and it never lifts (brief 8.2 and 8.3: one touch, one owner).
     func body(content: Content) -> some View {
-        content.modifier(Liftable(item: item, source: source, wide: still != nil, art: still, onThrow: onThrow.map { f in { _ in f() } }, onTap: onTap, rect: rect, hides: still == nil))
+        content.modifier(Liftable(item: item, source: source, wide: still != nil, art: still, onThrow: onThrow.map { f in { _ in f() } }, onTap: onTap, rect: rect, hides: still == nil, quickUp: still == nil))
     }
 }
 

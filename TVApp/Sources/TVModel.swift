@@ -233,6 +233,9 @@ final class TVModel {
         var phaseAt = Date()
         var tryKind: String?
         var tries = 1
+        // What the lip says in place of its own line: "Finding the stream…" while a shelf throw looks for one, and why it
+        // failed when nothing could be sent.
+        var note: String? = nil
     }
     var starting: Starting?
     // What to reopen for "Choose another", with the streams that didn't start set apart.
@@ -283,6 +286,12 @@ final class TVModel {
         startingAvoid.formUnion(tokens)
         Haptic.fire(.fail)
         withAnimation(.easeOut(duration: 0.25)) { starting?.failed = true }
+    }
+    // A throw that never reached the TV (no stream, no episode): said on the lip, where the card went, not in a toast.
+    func failStart(_ reason: String) {
+        guard starting != nil else { return }
+        Haptic.fire(.fail)
+        withAnimation(.easeOut(duration: 0.25)) { starting?.note = reason; starting?.failed = true }
     }
     // Called off from the Remote (holding ⏯), or done with after a failure.
     func clearStart() { shelfStart?.cancel(); shelfStart = nil; startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }

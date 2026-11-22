@@ -14,13 +14,17 @@ enum ThrowRules {
     static let throwSpeed: CGFloat = 700
     // Above the commit line, a release moving down faster than this is put back.
     static let downCancel: CGFloat = 200
-    // The commit line: this share of the screen's height above the card's rest.
+    // The commit line: this share of the screen's height above the card's rest, but never more than this share of the
+    // way to the lip, so a card resting low on the page can still reach it (the line sat at or above the lip for them).
     static let commitShare: CGFloat = 0.3
+    static let commitReach: CGFloat = 0.55
     // The flight never dawdles, and is gone within this long.
     static let floorSpeed: CGFloat = 1600
     static let flightMax: Double = 0.22
     // The size at the lip, against 1 at rest.
     static let lipScale: CGFloat = 0.7
+    // What a thrown card shrinks to as it lands: the lip's own picture.
+    static let lipPicture = CGSize(width: 64, height: 40)
     static let maxTilt: Double = 6
 }
 
@@ -132,7 +136,7 @@ enum ThrowRules {
     private var restCenter: CGPoint { CGPoint(x: rest.midX, y: rest.midY) }
     private var lipY: CGFloat { let l = Hand.shared.lipFrame; return l.height > 0 ? l.midY : 30 }
     private var screenH: CGFloat { let s = Hand.shared.screen; return s.height > 0 ? s.height : 800 }
-    var commitY: CGFloat { restCenter.y - ThrowRules.commitShare * screenH }
+    var commitY: CGFloat { restCenter.y - min(ThrowRules.commitShare * screenH, ThrowRules.commitReach * max(0, restCenter.y - lipY)) }
     // 0 at rest, 1 with the card's middle at the lip.
     func progress(_ dy: CGFloat) -> CGFloat {
         let span = max(1, restCenter.y - lipY)
@@ -176,6 +180,9 @@ enum ThrowRules {
     // What his release means, by the brief's rule.
     func judge(_ v: CGSize) -> Outcome {
         let above = restCenter.y + offset.height < commitY
+        // Let go with the card in the lip is a throw, however slowly it got there.
+        let lip = Hand.shared.lipFrame
+        if lip.height > 0, lip.contains(CGPoint(x: restCenter.x + offset.width, y: restCenter.y + offset.height)) { return .thrown }
         if v.height <= -ThrowRules.throwSpeed { return .thrown }
         if above && v.height < ThrowRules.downCancel { return .thrown }
         return .back
@@ -198,32 +205,33 @@ enum ThrowRules {
             then?()
         }
     }
-    // Thrown: on with his own speed and direction (never slower, gone within 220 ms), out through the top. `landed` runs as
-    // it leaves, with the thud.
+    // Thrown: on with his own speed (never slower, gone within 220 ms) into the lip, shrinking to the lip's picture, where it
+    // lands with the thud. It flew off the top of the screen before, past the lip it was meant to land in. `landed` runs as
+    // it lands.
     func fly(_ v: CGSize, landed: @escaping () -> Void) {
         phase = .flying
         Hand.shared.carrying = false
         if over { over = false; Hand.shared.committed = false }
-        var dx = v.width, dy = v.height
-        let sp = sqrt(dx * dx + dy * dy)
-        // Let go nearly still above the line: straight up at the lip.
-        if sp < 120 || dy > -60 { dx = 0; dy = -1 }
-        let len = sqrt(dx * dx + dy * dy)
-        dx /= len; dy /= len
+        let sp = sqrt(v.width * v.width + v.height * v.height)
         let center = CGPoint(x: restCenter.x + offset.width, y: restCenter.y + offset.height)
-        let h = rest.height * scale
-        // How far until the card's foot is past the lip's top, along his direction.
-        let exitY = min(Hand.shared.lipFrame.minY, 0) - h / 2 - 8
-        let dist = max(40, (center.y - exitY) / max(0.2, -dy))
+        let lip = Hand.shared.lipFrame
+        // Where it lands: the lip's middle line, along his direction (straight up when let go nearly still or downward),
+        // kept inside the lip's ends.
+        var dx = v.width, dy = v.height
+        if sp < 120 || dy > -60 { dx = 0; dy = -1 }
+        let rise = max(0, center.y - lipY)
+        var x = center.x + (dy < 0 ? dx / -dy * rise : 0)
+        if lip.width > 0 { x = min(max(x, lip.minX + ThrowRules.lipPicture.width / 2 + 8), lip.maxX - ThrowRules.lipPicture.width / 2 - 8) }
+        let to = CGSize(width: offset.width + x - center.x, height: offset.height + lipY - center.y)
+        let ddx = to.width - offset.width, ddy = to.height - offset.height
+        let dist = max(1, sqrt(ddx * ddx + ddy * ddy))
         let speed = max(sp, ThrowRules.floorSpeed)
-        var dur = Double(dist / speed)
-        if dur > ThrowRules.flightMax { dur = ThrowRules.flightMax }
-        let flown = dist
-        let to = CGSize(width: offset.width + dx * flown, height: offset.height + dy * flown)
-        HandLog.note(String(format: "release thrown v=%.0f,%.0f speed=%.0f flight=%.0fpt %.3fs (%.0f pt/s)", v.width, v.height, sp, flown, dur, Double(flown) / dur))
+        let dur = min(Double(dist / speed), ThrowRules.flightMax)
+        let small = rest.width > 0 && rest.height > 0 ? min(ThrowRules.lipPicture.width / rest.width, ThrowRules.lipPicture.height / rest.height) : ThrowRules.lipScale
+        HandLog.note(String(format: "release thrown v=%.0f,%.0f speed=%.0f flight=%.0fpt %.3fs to lip %.0f,%.0f", v.width, v.height, sp, dist, dur, x, lipY))
         withAnimation(.easeOut(duration: 0.15)) { Hand.shared.glow = 1 }
-        withAnimation(.linear(duration: dur)) {
-            offset = to; scale = scale * 0.82
+        withAnimation(.easeOut(duration: dur)) {
+            offset = to; scale = small; tilt = 0
         } completion: { [weak self] in
             guard let self else { return }
             var t = Transaction(); t.disablesAnimations = true
@@ -244,6 +252,16 @@ enum ThrowRules {
             phase = .rest
             withAnimation(.easeOut(duration: 0.3)) { opacity = 1 }
         }
+    }
+    // The card's view went with it still in the hand (its row scrolled away, the page closed): at rest, nothing sent.
+    func drop() {
+        guard phase == .held || phase == .returning else { return }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { offset = .zero; scale = 1; tilt = 0; opacity = 1; phase = .rest }
+        Hand.shared.carrying = false
+        Hand.shared.glow = 0
+        if over { over = false; Hand.shared.committed = false }
+        HandLog.note("dropped: view gone")
     }
     // A throw the TV refused: the card drops back out of the lip to its place.
     func dropBack() {
@@ -329,24 +347,33 @@ struct VelocityTrack {
     // if it isn't in hand. A show not at an episode goes at its next one.
     static func sendBest(_ model: TVModel, item: MediaItem, velocity: CGSize) {
         guard let ref = item.stremioRef else { sendPlain(model, target: FlickTarget(item: item, source: .stremio)); return }
+        // The lip has the title from the release on, while the stream is looked for: never the TV's old state first.
+        model.beginStart(.init(title: item.title, art: item.art, line: nil, note: "Finding the stream…"), target: FlickTarget(item: item, source: .stremio))
+        let lineage = model.startingTarget?.lineage
+        // A newer start (or one called off) owns the lip by the time an answer comes: this one says nothing over it.
+        let ours = { model.startingTarget?.lineage == lineage && model.starting != nil }
         Task { @MainActor in
             var it = item
             var video: String? = ref.type == "series" ? ref.video : ref.imdb
             if ref.type == "series", video == nil {
                 guard let m = await NextUp.meta(ref.imdb), let e = TitleState.resumeEpisode(item: item, meta: m, model: model) else {
-                    model.say("Couldn’t find an episode to play"); return
+                    if ours() { model.failStart("No episode to play") }
+                    return
                 }
                 video = e.id
                 it = MediaItem(title: item.title, subtitle: "S\(e.season) E\(e.episode)", art: item.art, id: NextUp.link(ref.imdb, e.id), kind: "series", progress: item.progress)
             }
-            guard let v = video else { return }
+            guard let v = video else { if ours() { model.failStart("Nothing to play") }; return }
             var list = StreamCache.shared.inHand(type: ref.type, imdb: ref.imdb, video: v) ?? []
             if list.isEmpty { list = await StreamCache.shared.streams(type: ref.type, imdb: ref.imdb, video: v) ?? [] }
+            guard ours() else { return }
             guard let s = TitleState.preferred(list, key: ref.imdb + "/" + (ref.type == "series" ? v : "")) else {
                 Hand.shared.lifted = nil
-                model.say("No streams found for \(item.title)")
+                model.failStart("No streams found")
                 return
             }
+            // The episode he's up to is already on: nothing to start.
+            if model.isOnTV(it, .stremio) { model.clearStart() }
             sendStream(model, item: it, stream: s, list: list, velocity: velocity)
         }
     }
@@ -371,6 +398,9 @@ struct Liftable: ViewModifier {
     var rect: (() -> CGRect)? = nil
     // Whether the whole view leaves its place while lifted; a row whose still lifts hides only that still (HiddenInHand).
     var hides = true
+    // On a sideways shelf, a drag that starts upward lifts at once, without the hold (the shelf only scrolls sideways, so
+    // up can only mean the TV). Lists keep the hold: up there is the page's scroll.
+    var quickUp = true
     @State private var place = FrameBox()
     @State private var far = false
     func body(content: Content) -> some View {
@@ -378,8 +408,16 @@ struct Liftable: ViewModifier {
         content
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             .modifier(HiddenWhileLifted(id: hides ? liftID : ""))
-            .gesture(LiftRecognizer(began: { began() }, moved: { moved($0, $1) }, ended: { ended($0) }))
+            .gesture(LiftRecognizer(quickUp: quickUp, began: { began() }, moved: { moved($0, $1) }, ended: { ended($0) }))
             .accessibilityAction(named: "Play on the TV") { send(CGSize(width: 0, height: -2000)) }
+            // Gone while in the hand: the scrolls it held still move again, and nothing is left floating at the finger.
+            .onDisappear {
+                guard Hand.shared.lifted?.id == liftID else { return }
+                LiftHold.release()
+                Hand.shared.liftCarry.drop()
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { Hand.shared.lifted = nil }
+            }
         #else
         content
         #endif
@@ -439,51 +477,114 @@ private struct HiddenWhileLifted: ViewModifier {
     func body(content: Content) -> some View { content.opacity(!id.isEmpty && Hand.shared.lifted?.id == id ? 0 : 1) }
 }
 extension View {
-    func liftable(_ item: MediaItem, _ source: MediaSource, wide: Bool = false, onThrow: ((CGSize) -> Void)? = nil) -> some View {
-        modifier(Liftable(item: item, source: source, wide: wide, onThrow: onThrow))
+    func liftable(_ item: MediaItem, _ source: MediaSource, wide: Bool = false, quickUp: Bool = true, onThrow: ((CGSize) -> Void)? = nil) -> some View {
+        modifier(Liftable(item: item, source: source, wide: wide, onThrow: onThrow, quickUp: quickUp))
     }
 }
 
 #if canImport(UIKit)
+// The scroll views a lift holds still, one lift at a time. Freed when the lift ends, and also when the recognizer or the
+// lifted view goes first, so a page is never left unable to scroll.
+@MainActor enum LiftHold {
+    static var held: [UIScrollView] = []
+    static func hold(from view: UIView?) {
+        release()
+        var v = view
+        while let s = v { if let sv = s as? UIScrollView, sv.isScrollEnabled { held.append(sv) }; v = s.superview }
+        for s in held { s.panGestureRecognizer.isEnabled = false; s.panGestureRecognizer.isEnabled = true; s.isScrollEnabled = false }
+    }
+    static func release() {
+        for s in held { s.isScrollEnabled = true }
+        held = []
+    }
+}
+#else
+@MainActor enum LiftHold { static func release() {} }
+#endif
+
+#if canImport(UIKit)
+// The long press, plus the shelf's quick lift: on a shelf that scrolls only sideways, 10 pt of travel upward, within 30° of
+// straight up, begins it at once. Any other first 10 pt fails it as before, and the scroll has the touch.
+final class LiftPress: UILongPressGestureRecognizer {
+    var quickUp = false
+    private(set) var from: CGPoint?
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        if from == nil { from = touches.first?.location(in: nil) }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .possible, quickUp, let f = from, let p = touches.first?.location(in: nil) {
+            let dx = p.x - f.x, dy = p.y - f.y
+            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, Self.onShelf(view) {
+                state = .began
+                return
+            }
+        }
+        super.touchesMoved(touches, with: event)
+    }
+    override func reset() { super.reset(); from = nil }
+    // The nearest scroll view around it scrolls sideways and not up and down.
+    static func onShelf(_ view: UIView?) -> Bool {
+        var v = view?.superview
+        while let s = v {
+            if let sv = s as? UIScrollView { return sv.contentSize.width > sv.bounds.width + 1 && sv.contentSize.height <= sv.bounds.height + 1 }
+            v = s.superview
+        }
+        return false
+    }
+}
+
 // The press that lifts: the system's long press at 0.15 s with 10 pt of slop, so a finger that moves first was scrolling and
-// the scroll has it. It doesn't cancel the item's own tap (a press let go without moving is a tap). Once it begins it holds
-// every scroll view above it still, by turning their pans off and on (which ends any scroll they had started).
+// the scroll has it (on a shelf, unless it moved up: LiftPress). It doesn't cancel the item's own tap (a press let go
+// without moving is a tap). Once it begins it holds every scroll view above it still (LiftHold).
 struct LiftRecognizer: UIGestureRecognizerRepresentable {
+    var quickUp = false
     let began: () -> Void
     let moved: (CGSize, CGSize) -> Void
     let ended: (CGSize) -> Void
-    final class Coordinator {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var start: CGPoint = .zero
         var track = VelocityTrack()
-        var held: [UIScrollView] = []
+        var lifting = false
+        // On a shelf, the scrolls wait for the quick lift to be ruled out (10 pt, or the hold), so an upward drag is the
+        // hand's and not the page's.
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard let p = g as? LiftPress, p.quickUp, other.view is UIScrollView, other is UIPanGestureRecognizer else { return false }
+            return LiftPress.onShelf(p.view)
+        }
+        // Torn down mid-lift (the view gone with the card in the hand): the held scrolls move again.
+        deinit { if lifting { MainActor.assumeIsolated { LiftHold.release() } } }
     }
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
-    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
-        let g = UILongPressGestureRecognizer()
+    func makeUIGestureRecognizer(context: Context) -> LiftPress {
+        let g = LiftPress()
         g.minimumPressDuration = 0.15
         g.allowableMovement = 10
         g.cancelsTouchesInView = true
+        g.quickUp = quickUp
+        g.delegate = context.coordinator
         return g
     }
-    func handleUIGestureRecognizerAction(_ g: UILongPressGestureRecognizer, context: Context) {
+    func updateUIGestureRecognizer(_ g: LiftPress, context: Context) { g.quickUp = quickUp }
+    func handleUIGestureRecognizerAction(_ g: LiftPress, context: Context) {
         let c = context.coordinator
         let p = g.location(in: nil)
         let t = CACurrentMediaTime()
         switch g.state {
         case .began:
-            c.start = p; c.track.reset(); c.track.add(p, at: t)
-            var v: UIView? = g.view
-            c.held = []
-            while let s = v { if let sv = s as? UIScrollView, sv.isScrollEnabled { c.held.append(sv) }; v = s.superview }
-            for s in c.held { s.panGestureRecognizer.isEnabled = false; s.panGestureRecognizer.isEnabled = true; s.isScrollEnabled = false }
+            // From where the finger came down, so a quick lift's first 10 pt are the card's too, point for point.
+            c.start = g.from ?? p; c.track.reset(); c.track.add(p, at: t)
+            c.lifting = true
+            LiftHold.hold(from: g.view)
             began()
+            if p != c.start { moved(CGSize(width: p.x - c.start.x, height: p.y - c.start.y), c.track.velocity) }
         case .changed:
             c.track.add(p, at: t)
             moved(CGSize(width: p.x - c.start.x, height: p.y - c.start.y), c.track.velocity)
         case .ended, .cancelled, .failed:
             c.track.add(p, at: t)
-            for s in c.held { s.isScrollEnabled = true }
-            c.held = []
+            c.lifting = false
+            LiftHold.release()
             ended(g.state == .ended ? c.track.velocity : .zero)
         default: break
         }
