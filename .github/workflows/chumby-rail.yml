@@ -15,6 +15,8 @@ jobs:
   quick:
     runs-on: xcode-27
     timeout-minutes: 60
+    env:
+      PUSH_ONLY: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,6 +95,7 @@ jobs:
             shot home-dark$2 $1 9 $M -tab 0
           }
           # First opens with and without the tabs built ahead: late frames and busy turns through the tab hop, folded.
+          if [ -z "$PUSH_ONLY" ]; then
           for W in prewarm noprewarm; do
             EXTRA=""; [ $W = noprewarm ] && EXTRA="-noPrewarm YES"
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 0 -pose tabhop -swipeLog YES $EXTRA
@@ -101,13 +104,22 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           done
           set_ 1 ""
+          fi
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
           $D "$DEVICE" pose open; sleep 5
-          set_ 3 "-open"
+          [ -z "$PUSH_ONLY" ] && set_ 3 "-open"
           $D "$DEVICE" rotate 1; sleep 5
-          set_ 3 "-portrait"
+          [ -z "$PUSH_ONLY" ] && set_ 3 "-portrait"
+          # Open upright: Calendar settings pushed by a real tap on its row, and by the pose with time to settle.
+          xcrun simctl ui "$DEVICE" appearance light
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 2 -pose calendar
+          sleep 10; xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-tap-before-portrait.png
+          $D "$DEVICE" touch 0.4 0.796 0.1; sleep 3
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-tap-after-portrait.png
+          xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          shot settings2-portrait 3 16 $M -tab 2 -pose calsettings
           ls dist
       - name: Publish
         if: always()
