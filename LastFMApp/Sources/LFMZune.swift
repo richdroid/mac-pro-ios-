@@ -507,6 +507,13 @@ struct ArtWall: View {
             ctx.setBlendMode(.destinationIn)
             ctx.drawLinearGradient(fade, start: .zero, end: CGPoint(x: 0, y: h), options: [])
         }
+        // And in from its top over its first 64 pt: the page is cut just under the pivot's names, 20 pt into the wall,
+        // and the wall's first row met that line as a hard edge under the shade (run 49 gate).
+        let top = min(64 * scale, CGFloat(h) / 2)
+        if let fadeIn = CGGradient(colorsSpace: space, colors: [CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 0.35), CGColor(gray: 0, alpha: 0)] as CFArray, locations: [0, 0.6, 1]) {
+            ctx.setBlendMode(.destinationIn)
+            ctx.drawLinearGradient(fadeIn, start: CGPoint(x: 0, y: CGFloat(h) - top), end: CGPoint(x: 0, y: h), options: [.drawsBeforeStartLocation])
+        }
         return ctx.makeImage()
     }
 }

@@ -157,11 +157,21 @@ struct Pager: View {
                 // under them: what scrolls up fades out beneath the names.
                 // A shade, not a box: it runs out under the side bars too and thins over a long tail, so no edge of it shows
                 // against the cover's colour (run 40: a black rectangle with a hard right edge).
-                // Nearly solid down to where the pages are cut (below the names' descenders), then thinning over 34 pt, so
-                // what scrolls up comes in dim and is never read against a name (run 48 gate, blocker 5).
-                LinearGradient(stops: [.init(color: S.ground.opacity(0.95), location: 0), .init(color: S.ground.opacity(0.93), location: (head - S.head + 6) / (head + 28)), .init(color: S.ground.opacity(0), location: 1)],
-                               startPoint: .top, endPoint: .bottom)
-                    .frame(width: W, height: head + 28)
+                // Nearly solid behind the names, so what scrolls up is never read against a name (run 48 gate, blocker 5),
+                // and already thinning before the line where the pages are cut, then easing out over 60 pt: it was 0.93
+                // right to the cut and gone 34 pt later, a flat dark bar with a hard foot over today's wall with a song
+                // on (run 49 gate).
+                let cut = head - S.head + 6, H = cut + 60
+                LinearGradient(stops: [
+                    .init(color: S.ground.opacity(0.95), location: 0),
+                    .init(color: S.ground.opacity(0.93), location: max(0, cut - 24) / H),
+                    .init(color: S.ground.opacity(0.8), location: cut / H),
+                    .init(color: S.ground.opacity(0.5), location: (cut + 14) / H),
+                    .init(color: S.ground.opacity(0.22), location: (cut + 30) / H),
+                    .init(color: S.ground.opacity(0.07), location: (cut + 46) / H),
+                    .init(color: S.ground.opacity(0), location: 1),
+                ], startPoint: .top, endPoint: .bottom)
+                    .frame(width: W, height: H)
                     .allowsHitTesting(false)
                 VStack(alignment: .leading, spacing: S.head) {
                     PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw, size: nameSize,
