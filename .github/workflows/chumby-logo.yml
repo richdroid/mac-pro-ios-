@@ -1,0 +1,99 @@
+name: Chumby logo checks (branch)
+# The chumby-logo branch's own short run (never main): Home at rest, ringing and snoozed, folded, open flat and open
+# portrait, light and dark, and the ring film (ring, Snooze, Stop), to show the wordmark, octopus and device back at their
+# size. Published to the chumby-logo release. Temporary: goes when the branch merges.
+on:
+  push:
+    branches: [chumby-logo]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chumby-logo
+  cancel-in-progress: true
+jobs:
+  quick:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | grep -E "error:|warning: unre|BUILD" | tail -40
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          node ci/mock-chumby.js & MOCK=$!
+          sleep 2
+          M=http://127.0.0.1:9000
+          remock() { kill $MOCK 2>/dev/null; wait $MOCK 2>/dev/null; node ci/mock-chumby.js & MOCK=$!; sleep 2; }
+          shot() { # name, display, wait, address, args
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/logo-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          film() { # name, display, seconds, address, args
+            local name=$1 display=$2 secs=$3 address=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/logo-$name.mp4 > /dev/null 2>&1 &
+            local rec=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            local i=0
+            while [ $i -lt $secs ]; do sleep 1.5; i=$((i + 1)); [ $((i % 2)) = 0 ] && xcrun simctl io "$DEVICE" screenshot --display=$display dist/logo-$name-$i.png; done
+            kill -INT $rec; wait $rec
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          set_() { # display, suffix
+            xcrun simctl ui "$DEVICE" appearance light
+            shot home$2 $1 9 $M -tab 0 -swipeLog YES
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && grep "home " "$C/Library/Caches/swipe-log.txt" > dist/logo-home$2-fit.log; rm -f "$C/Library/Caches/swipe-log.txt"
+            shot home-ringing$2 $1 9 $M/ringing -tab 0 -swipeLog YES
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && grep "home " "$C/Library/Caches/swipe-log.txt" > dist/logo-home-ringing$2-fit.log; rm -f "$C/Library/Caches/swipe-log.txt"
+            shot home-snoozed$2 $1 9 $M/snoozed -tab 0
+            shot home-nap$2 $1 9 $M/nap -tab 0
+            shot home-playing$2 $1 9 $M/playing -tab 0
+            remock; film ringdemo$2 $1 14 $M/liveringing -tab 0 -pose ringdemo
+            xcrun simctl ui "$DEVICE" appearance dark
+            shot home-dark$2 $1 9 $M -tab 0
+          }
+          set_ 1 ""
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          $D "$DEVICE" pose open; sleep 5
+          set_ 3 "-open"
+          $D "$DEVICE" rotate 1; sleep 5
+          set_ 3 "-portrait"
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../logo.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../logo.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-logo >/dev/null 2>&1 || gh release create chumby-logo --prerelease --title "Chumby logo checks" --notes "Work in progress: shots and logs from the chumby-logo branch."
+          for f in logo.zip status.txt; do
+            for i in 1 2 3; do gh release upload chumby-logo "$f" --clobber && break; sleep 15; done
+          done
