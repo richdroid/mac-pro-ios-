@@ -69,6 +69,7 @@ jobs:
             sleep $secs
             kill -INT $rec; wait $rec
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/p-$name-swipe.log || true
           }
           warm() { xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $1 -tab 0; sleep 10; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; sleep 1; }
           gallery() { # page, display, name
@@ -96,7 +97,7 @@ jobs:
           # The ringing page's slide to stop under a finger: a short slide let go (the key must travel home over frames),
           # then the whole run (the Chumby stops, the page leaves).
           slide() { # name, display, x of the key at rest, x at the run's end, y of the bar
-            remock; warm $M/liveringing; rec $1 $2 $M/liveringing -tab 0 -pose ringscreen
+            remock; warm $M/liveringing; rec $1 $2 $M/liveringing -tab 0 -pose ringscreen -swipeLog YES
             sleep 16
             local mid=$(echo "$3 + ($4 - $3) * 0.35" | bc -l)
             $D "$DEVICE" drag $3 $5 $mid $5 0.8 || echo "slide failed"; sleep 2
@@ -119,9 +120,11 @@ jobs:
             shot alarms-nap$2 $1 11 $M/nap -tab 2 -pose napset
             shot alarms-editor$2 $1 10 $M -tab 2 -pose editor
             # Ring, Snooze (3.5 s in), Stop (4 s later) on Home's card: the leaving card says "Stopping…" alone.
-            remock; warm $M/liveringing; film ringdemo$2 $1 16 $M/liveringing -tab 0 -pose ringdemo
+            remock; warm $M/liveringing; film ringdemo$2 $1 16 $M/liveringing -tab 0 -pose ringdemo -swipeLog YES
             # The ringing page: Snooze at 5 s, slid to Stop at 10 s.
-            remock; warm $M/liveringing; film ringpage$2 $1 18 $M/liveringing -tab 0 -pose ringpagedemo
+            remock; warm $M/liveringing; film ringpage$2 $1 18 $M/liveringing -tab 0 -pose ringpagedemo -swipeLog YES
+            # A nap set from its chip, counting down, and called off (the row keeps its own words as it fades).
+            remock; film napdemo$2 $1 18 $M/live -tab 2 -pose napdemo
           }
           xcrun simctl ui "$DEVICE" appearance light
           # Folded.
@@ -129,8 +132,16 @@ jobs:
           tabs 1 ""
           # Snooze, then Stop, pressed as the Lock Screen's card and the notification press them, through an old copy of sys.
           remock; warm $M/livestale; film ringdoor 1 16 $M/livestale -tab 0 -pose ringdoor
-          # A nap set, counting down, and called off (the row keeps its own words as it fades).
-          remock; film alarmsdemo 1 30 $M/live -tab 2 -pose alarmsdemo
+          # Calendar settings pushed over Alarms, then Back tapped at the top of the side column (a still first, to show
+          # where it is); then pushed again and swiped away from the display's leading edge.
+          remock; rec backtap 1 $M/live -tab 2 -pose calsettings
+          sleep 12; xcrun simctl io "$DEVICE" screenshot --display=1 dist/p-backtap-pushed.png
+          $D "$DEVICE" tap 0.898 0.29 || echo "tap failed"; sleep 4
+          cut backtap 1
+          remock; rec swipeback 1 $M/live -tab 2 -pose calsettings
+          sleep 12
+          $D "$DEVICE" drag 0.01 0.5 0.75 0.5 0.45 || echo "swipe failed"; sleep 4
+          cut swipeback 1
           # Channels: a channel of six in Edit, the last widget dragged to the top by its grip, then the second down two.
           remock; rec chdrag 1 $M/livemany -tab 1 -pose chedit -swipeLog YES
           sleep 18
@@ -138,7 +149,7 @@ jobs:
           $D "$DEVICE" drag 0.75 0.324 0.75 0.55 1.5 || echo "drag failed"; sleep 2
           $D "$DEVICE" drag 0.75 0.55 0.75 0.40 1.0 || echo "drag failed"; sleep 3
           cut chdrag 1
-          slide ringslide 1 0.12 0.93 0.864
+          slide ringslide 1 0.12 0.80 0.864
           gallery 4 1 card
           gallery 7 1 card-long
           gallery 5 1 island
@@ -146,11 +157,25 @@ jobs:
           # Open flat.
           $D "$DEVICE" pose open; sleep 5
           tabs 3 "-open"
-          slide ringslide-open 3 0.58 0.96 0.58
+          slide ringslide-open 3 0.585 0.88 0.58
           # Open upright (his posture).
           $D "$DEVICE" rotate 1; sleep 5
           tabs 3 "-portrait"
-          remock; film alarmsdemo-portrait 3 30 $M/live -tab 2 -pose alarmsdemo
+          slide ringslide-portrait 3 0.17 0.80 0.65
+          # A channel of six in Edit, open upright: the last widget dragged up past the first and let go over the
+          # channel's heading (it must land at the top), then the second down two.
+          remock; rec chdrag-portrait 3 $M/livemany -tab 1 -pose chedit -swipeLog YES
+          sleep 16
+          $D "$DEVICE" drag 0.827 0.603 0.827 0.19 2.5 || echo "drag failed"; sleep 2
+          $D "$DEVICE" drag 0.827 0.317 0.827 0.46 1.5 || echo "drag failed"; sleep 3
+          cut chdrag-portrait 3
+          # A posture change with the app up: open upright to open flat and back (filmed as the display is mounted).
+          remock; rec posture-native 3 $M -tab 2
+          sleep 10; $D "$DEVICE" rotate 0 || true; sleep 6; $D "$DEVICE" rotate 1 || true; sleep 6
+          cut posture-native 3
+          # Films the right way up: open flat a quarter turn, open upright a half (simctl records the display as mounted).
+          for f in dist/p-*-open*.mp4; do [ -f "$f" ] && swift ci/film-turn.swift "$f" "$f.t.mp4" 90 && mv "$f.t.mp4" "$f"; done
+          for f in dist/p-*-portrait.mp4; do [ -f "$f" ] && swift ci/film-turn.swift "$f" "$f.t.mp4" 180 && mv "$f.t.mp4" "$f"; done
           ls dist
       - name: Publish
         if: always()

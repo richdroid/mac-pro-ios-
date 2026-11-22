@@ -1116,8 +1116,10 @@ struct AlarmsTab: View {
                 }
             // A calendar day moved for that day alone by "just this once": its own time, 25 minutes later than usual.
             case "calonce": if let w = wake.plan.first { wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(25 * 60).timeIntervalSince1970) }
-            case "editor": edit(mine.first ?? Alarm())
-            case "editornew": edit(nil)
+            // Once the posture is read (open upright, the first frame can take the open-flat layout, and the editor went to a
+            // right pane that then wasn't there: gate 11-22, p-alarms-editor-portrait showed the list).
+            case "editor": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); edit(mine.first ?? Alarm()) }
+            case "editornew": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); edit(nil) }
             // For the build's film: a new alarm made and saved (the editor saves it itself), the list taking it in.
             case "newalarmdemo": Task { try? await Task.sleep(nanoseconds: 2_500_000_000); edit(nil) }
             // His own alarms and the nap brought on screen, folded, for their shot.
@@ -1150,6 +1152,14 @@ struct AlarmsTab: View {
                     try? await Task.sleep(nanoseconds: 1_200_000_000); scrollTo = "nap"
                     try? await Task.sleep(nanoseconds: 1_200_000_000); UserDefaults.standard.set(10, forKey: "napLength"); await model.nap(10)
                     try? await Task.sleep(nanoseconds: 4_500_000_000); await model.cancelNap()
+                }
+            // For the build's film: straight to the nap, a 10-minute nap set, counting down, then called off (gate, 11-22:
+            // the long alarmsdemo could run past the film's end before the nap).
+            case "napdemo":
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap"
+                    try? await Task.sleep(nanoseconds: 1_500_000_000); UserDefaults.standard.set(10, forKey: "napLength"); await model.nap(10)
+                    try? await Task.sleep(nanoseconds: 6_000_000_000); await model.cancelNap()
                 }
             default: break
             }
@@ -1808,22 +1818,27 @@ struct AlarmEditor: View {
 
     var body: some View {
         if let close {
-            // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
-            // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
-            let buttons = HStack(spacing: 16) {
-                Button("Cancel") { stopTest(); close() }.disabled(saving)
-                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold).disabled(ringingNow) }
-            }
-            .foregroundStyle(.tint)
+            // In the right pane: its own list, its title row, then the same sections, clear of the fold. Cancel and Save
+            // are the system's ✕ and ✓ in the side column, Cancel at the top where Back goes and Save under it, as when
+            // the editor fills the display folded: one place for them in every posture (gate, 11-22; it had words in its
+            // title row open flat). The title row stays pinned once the page is scrolled.
             List {
-                PageTitle(title, pins: true) { buttons }
+                PageTitle(title, pins: true)
                 sections.listRowBackground(GlassRow())
             }
-            .pinsTitle { PageTitle(title) { buttons } }
+            .pinsTitle { PageTitle(title) }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { stopTest(); close() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold).disabled(ringingNow) }
+                }
+            }
             // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
             // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
-            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-            .onDisappear { model.editingAlarm = false }
+            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; model.paneEditor = true; posedJustOnce() }
+            .onDisappear { model.editingAlarm = false; model.paneEditor = false }
             .fillCover(isPresented: $justOnce) { justOnceSheet }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the

@@ -67,6 +67,8 @@ struct RingKeys: View {
     // A key pressed and not yet answered: both dim, so the press is seen to have landed. They stay pressable: a second
     // press joins the first (RingDesk), and a card whose app was ended mid-press must never be left with dead keys.
     var working = false
+    // The card's orange; the island's blue (the lead's ruling, 11-22: the whole Dynamic Island is blue, expanded too).
+    var stopColor: Color = ChumbyPalette.orange
     var body: some View { keys.opacity(working ? 0.45 : 1) }
     // The CI gallery draws the card in a plain app, where the Lock Screen's intent keys have nothing to run in.
     #if GALLERY
@@ -87,7 +89,7 @@ struct RingKeys: View {
             key(ChumbyRingStopIntent()) {
                 Label("Stop", systemImage: "stop.fill").font(RingCardLook.face(17)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: height)
-                    .background(ChumbyPalette.orange, in: Capsule())
+                    .background(stopColor, in: Capsule())
             }
             .buttonStyle(.plain)
         }
@@ -102,20 +104,28 @@ struct RingKeys: View {
 struct RingNameBlock: View {
     let state: ChumbyRingAttributes.ContentState
     let stale: Bool
-    var head: some View {
-        Text(RingCardLook.headline(state, stale: stale)).font(RingCardLook.face(14))
-            .foregroundStyle(state.snoozed || stale ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f)).lineLimit(1)
+    // A press that didn't land is said in the headline's own place (the keys are back, so it is plainly still going): on a
+    // line of its own under the name it took the card to 179 pt, past iOS's 160 (gate, 11-22).
+    @ViewBuilder var head: some View {
+        if let p = state.problem, !stale {
+            Label(p, systemImage: "exclamationmark.circle.fill").font(RingCardLook.face(14)).foregroundStyle(ChumbyPalette.warn(true))
+                .lineLimit(1).minimumScaleFactor(0.75)
+        } else {
+            Text(RingCardLook.headline(state, stale: stale)).font(RingCardLook.face(14))
+                .foregroundStyle(state.snoozed || stale ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f)).lineLimit(1)
+        }
     }
     var detail: some View {
         RingDetail(forms: RingCardLook.details(state, stale: stale)).font(RingCardLook.face(14, bold: false)).foregroundStyle(RingCardLook.soft)
     }
     func name(_ size: CGFloat) -> some View { Text(state.title).font(RingCardLook.face(size)).foregroundStyle(.white) }
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            VStack(alignment: .leading, spacing: 1) { head; name(22).lineLimit(1).fixedSize(); detail }
-            VStack(alignment: .leading, spacing: 1) { head; name(18).lineLimit(1).fixedSize(); detail }
-            VStack(alignment: .leading, spacing: 1) {
-                head
+        VStack(alignment: .leading, spacing: 1) {
+            head
+            // Chosen by the name's width alone (a long headline or failure line shrinks within its own line).
+            ViewThatFits(in: .horizontal) {
+                VStack(alignment: .leading, spacing: 1) { name(22).lineLimit(1).fixedSize(); detail }
+                VStack(alignment: .leading, spacing: 1) { name(18).lineLimit(1).fixedSize(); detail }
                 name(19).lineLimit(2).minimumScaleFactor(0.75).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -126,7 +136,7 @@ struct RingLockCard: View {
     let state: ChumbyRingAttributes.ContentState
     let stale: Bool
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 RingOctopus(snoozed: state.snoozed || stale).frame(width: 44)
                 RingNameBlock(state: state, stale: stale)
@@ -135,12 +145,9 @@ struct RingLockCard: View {
                     RingCountdown(until: again).font(RingCardLook.face(22)).foregroundStyle(.white).frame(maxWidth: 76)
                 }
             }
-            if let p = state.problem, !stale {
-                Label(p, systemImage: "exclamationmark.circle.fill").font(RingCardLook.face(14, bold: false))
-                    .foregroundStyle(ChumbyPalette.warn(true)).fixedSize(horizontal: false, vertical: true)
-            }
             // A card nothing has reached in half an hour can't say what the Chumby is doing: no keys that may do nothing.
-            if !stale { RingKeys(snoozed: state.snoozed, working: state.working != nil) }
+            // Never squeezed: the words give way first.
+            if !stale { RingKeys(snoozed: state.snoozed, working: state.working != nil).fixedSize(horizontal: false, vertical: true) }
         }
         .padding(16)
     }
@@ -202,7 +209,7 @@ enum RingIsland {
                 if let p = state.problem, !stale {
                     Text(p).font(RingCardLook.face(13, bold: false)).foregroundStyle(ChumbyPalette.warn(true)).fixedSize(horizontal: false, vertical: true)
                 }
-                if !stale { RingKeys(snoozed: state.snoozed, height: 42, working: state.working != nil) }
+                if !stale { RingKeys(snoozed: state.snoozed, height: 42, working: state.working != nil, stopColor: ChumbyPalette.ring) }
             }
             .padding(.top, 4)
         }

@@ -123,6 +123,9 @@ struct RingScreen: View {
     @State private var nothing = false
     // The Chumby's readings as the page opened: one more is the first it has heard since.
     @State private var readingsAtOpen: Int?
+    // "Reaching the Chumby…" only once nothing has come for 1.5 s: the page never opens on it, and a line that comes and
+    // goes within half a second can't be read (gate, 11-22: 0.3 s on opening).
+    @State private var reachSaid = false
 
     var live: Shown? {
         guard let r = model.sys.ringing else { return nil }
@@ -144,7 +147,7 @@ struct RingScreen: View {
         // A press from here, the card or the notification, until the Chumby confirms it (the same words everywhere).
         if let w = model.ringWorking { return w }
         if away { return model.reachWords }
-        guard let s = shown else { return "Reaching the Chumby…" }
+        guard let s = shown else { return reachSaid ? "Reaching the Chumby…" : " " }
         if s.snoozed { return s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" }
         return "Ringing"
     }
@@ -158,8 +161,9 @@ struct RingScreen: View {
         guard let s = shown else { return "" }
         return [s.at.map { "\($0.formatted(date: .omitted, time: .shortened)) alarm" } ?? "", s.sound].filter { !$0.isEmpty }.joined(separator: " · ")
     }
+    // From the alarm the page shows (the Chumby's reading or the tap's word), so it comes with the alarm's name, not after.
     var snoozeLength: String? {
-        guard let r = model.sys.ringing, let m = model.state.alarms.first(where: { $0.name == r.name })?.snooze, Int(m) != nil else { return nil }
+        guard let n = shown?.name, let m = model.state.alarms.first(where: { $0.name == n })?.snooze, Int(m) != nil else { return nil }
         return "\(m) min"
     }
 
@@ -182,8 +186,10 @@ struct RingScreen: View {
                             keys.frame(width: column).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         }
                     } else if let c = fold {
-                        // Open flat: the fold runs down. The clock left of it, the keys right of it.
-                        let left = max(c.midX - air, 0)
+                        // Open flat: the fold runs down. The clock left of it, the keys right of it. The columns start
+                        // inside the page's 20 pt side padding, so that is taken off the left one: measured from the
+                        // reader's edge it ran 20 pt into the hinge's band (gate, 11-22: right edge 472, fold 455–495).
+                        let left = max(c.midX - air - 20, 0)
                         HStack(spacing: 0) {
                             face(big: min(g.size.height * 0.26, left * 0.24, 104)).frame(maxWidth: .infinity, maxHeight: .infinity).frame(width: left)
                             Color.clear.frame(width: air * 2)
@@ -211,14 +217,15 @@ struct RingScreen: View {
             .background { SeaBackground().ignoresSafeArea() }
             .font(.custom("Trebuchet MS", size: 16))
             .foregroundStyle(ChumbyPalette.ink(dark))
-            // The way out without touching the alarm is the system's own item. One key, so the bar stays across the top
-            // (the app's ruling for a page with a single close button), never a side column holding one glyph.
+            // The way out without touching the alarm is the system's own item, at the top of the side column where Close
+            // goes on the Duo, as on every page of the app. It had a bar across the top: the clock and Wi-Fi then stood
+            // in a row while the page was up and jumped back into their column as it left (gate, 11-22).
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button { close() } label: { Label("Close", systemImage: "xmark") } }
             }
-            .horizontalBars()
         }
         .tint(ChumbyPalette.acc(dark))
+        .task { try? await Task.sleep(nanoseconds: 1_500_000_000); reachSaid = true }
         .onAppear {
             if readingsAtOpen == nil { readingsAtOpen = model.ringReadings }
             if let l = live { sawRing = true; frozen = l }
@@ -337,7 +344,7 @@ struct RingScreen: View {
                     HStack(spacing: 8) {
                         HStack(spacing: 8) { Image(systemName: "water.waves"); Text("Snooze") }.geometryGroup()
                         // Its room is kept while the first reading is on its way, as the card's lines are.
-                        if let m = snoozeLength ?? (model.sys.ringing == nil ? "9 min" : nil) {
+                        if let m = snoozeLength ?? (shown == nil ? "9 min" : nil) {
                             Text(m).fontWeight(.regular).foregroundStyle(ChumbyPalette.sub(dark)).opacity(snoozeLength == nil ? 0 : 1).transition(.opacity)
                         }
                     }
@@ -396,6 +403,16 @@ struct SlideToStop: View {
     @GestureState private var touching = false
     @State private var landed = false
     static let back = Animation.spring(response: 0.32, dampingFraction: 0.78)
+    // Home from wherever the finger left it, on the next turn of the run loop: a slow slide let go short reaches here
+    // through the gesture's own ending or its cancel, and inside that transaction the spring was dropped and the key
+    // was home in one frame (gate, 11-22: p-ringslide 45.07 → 45.08). Out of it, the spring always runs.
+    func goHome() {
+        DispatchQueue.main.async {
+            guard !landed, !busy, pull != 0 else { return }
+            var t = Transaction(animation: Self.back); t.disablesAnimations = false
+            withTransaction(t) { pull = 0 }
+        }
+    }
     static let height: CGFloat = 76, key: CGFloat = 60, inset: CGFloat = 8
     var body: some View {
         GeometryReader { g in
@@ -443,7 +460,7 @@ struct SlideToStop: View {
                             done()
                         } else {
                             // Short: back to the start over a third of a second, "Slide to stop" fading in as it goes.
-                            withAnimation(Self.back) { pull = 0 }
+                            goHome()
                         }
                     }
             )
@@ -452,7 +469,7 @@ struct SlideToStop: View {
         // Back from a Stop the Chumby didn't take: the key returns to its start, ready to be slid again.
         .onChange(of: busy) { _, b in if !b { withAnimation(Self.back) { landed = false; pull = 0 } } }
         // A touch the system took away: the key goes home as it does when let go short.
-        .onChange(of: touching) { _, t in if !t, !landed, !busy, pull != 0 { withAnimation(Self.back) { pull = 0 } } }
+        .onChange(of: touching) { _, t in if !t, !landed, !busy, pull != 0 { goHome() } }
         .accessibilityElement()
         .accessibilityLabel("Stop the alarm")
         .accessibilityAddTraits(.isButton)

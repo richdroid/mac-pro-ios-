@@ -105,6 +105,8 @@ final class ChumbyModel: ObservableObject {
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
     // controls out in another place of the tree when the phone opens flat, and a sheet held by the view went with it.
     @Published var justOnceSheetOpen = false
+    // An alarm's editor is open in Alarms' right pane (open flat): its ✕ and ✓ take the side column (tabPage).
+    @Published var paneEditor = false
     @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() }; if alarmsPage != oldValue { SwipeLog.note("alarmsPage \(alarmsPage)") } } }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?
@@ -141,6 +143,29 @@ final class ChumbyModel: ObservableObject {
     // Retried every two seconds while in trouble, on whichever route is next, rather than at the route's usual pace.
     var retrying: Bool { troubleSince != nil || downSince != nil }
     private var sysBytes = Data(), stateBytes = Data(), channelBytes = Data(), shotBytes = Data()
+    // The last reading of sys was the Mac's old copy (more than 10 s old), which never starts a ring.
+    private var sysOld = false
+    // The kept copy said an alarm was ringing or snoozing: Home holds its alarm slot empty until a fresh reading says what
+    // is so, rather than opening on "Next alarm" and swapping it for the ringing card a moment later (gate, 11-22). A
+    // kept ring is never shown as one (only a fresh reading may say his alarm is going off). At most 3 s.
+    @Published private(set) var ringSettling = false
+    private func settleRing() {
+        guard ringSettling, let api else { ringSettling = false; return }
+        Task { [weak self] in
+            // The Chumby's own a=ring answers at once and is never kept by the Mac.
+            async let read = try? await RingDesk.ringLine(api)
+            async let cap: Void? = try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if let r = await read, r.age <= 10, let line = try? JSONDecoder().decode(RingDesk.RingLine.self, from: r.data), let self, self.ringSettling {
+                let ring = RingReading.believed(line.ring, shown: self.sys.ring, takenAt: Date().addingTimeInterval(-r.age), stoppedAt: self.ringStoppedAt, snoozedAt: self.ringSnoozedAt)
+                if ring != self.sys.ring { self.sys.ring = ring }
+                SwipeLog.note("ring settled by a=ring")
+                self.ringSettling = false
+                return
+            }
+            _ = await cap
+            if self?.ringSettling == true { SwipeLog.note("ring settle timed out"); self?.ringSettling = false }
+        }
+    }
     private var sysHold = Date.distantPast, stateHold = Date.distantPast
     // The Chumby's own list as last read or saved, with nothing of ours laid over it.
     private(set) var deviceState = ChumbyState()
@@ -172,7 +197,7 @@ final class ChumbyModel: ObservableObject {
         // Open with what we last knew. The app is always faster than the device. (The first-run shot starts with nothing.)
         if Self.pose != "firstrun" {
             // Never a ring from what was kept: only a fresh reading may say his alarm is going off.
-            if let d = try? Data(contentsOf: Self.cache("sys")), var v = try? JSONDecoder().decode(Sys.self, from: d) { v.ring = ""; sys = v }
+            if let d = try? Data(contentsOf: Self.cache("sys")), var v = try? JSONDecoder().decode(Sys.self, from: d) { ringSettling = v.ringing != nil; v.ring = ""; sys = v }
             if let d = try? Data(contentsOf: Self.cache("state")), let v = try? JSONDecoder().decode(ChumbyState.self, from: d) { deviceState = v; state = v; stateBytes = d; stateKnown = true }
             if let d = try? Data(contentsOf: Self.cache("chlist")), let v = try? JSONDecoder().decode(ChannelList.self, from: d) { channelData = v; channelBytes = d }
             if let d = try? Data(contentsOf: Self.cache("shot")) { shot = PlatformImage(data: d) }
@@ -236,9 +261,20 @@ final class ChumbyModel: ObservableObject {
         downSince = recentlyLeft && dead ? .distantPast : nil
         if !recentlyLeft { staleReadings = 0; set(\.offline, false); set(\.dead, false) }
         set(\.struggling, recentlyLeft && unreachable)
+        settleRing()
         loops = [
             // Through the Mac's cache these are cheap. Straight to the 64 MB Chumby they are not, so go far slower there.
-            Task { [weak self] in while !Task.isCancelled { await self?.loadSys(); try? await Task.sleep(nanoseconds: self?.retrying == true ? 2_000_000_000 : self?.direct == true ? 30_000_000_000 : 4_000_000_000) } },
+            // An old copy from the Mac (as on opening) is asked for again in 0.7 s, a few times, as the list is: an old
+            // copy never starts a ring, so an alarm going off as the app opened waited out the next four-second turn and
+            // Home showed "Next alarm" over it (gate, 11-22: 4 s).
+            Task { [weak self] in
+                var quick = 0
+                while !Task.isCancelled {
+                    await self?.loadSys()
+                    quick = self?.sysOld == true && self?.direct != true ? quick + 1 : 0
+                    try? await Task.sleep(nanoseconds: self?.retrying == true ? 2_000_000_000 : self?.direct == true ? 30_000_000_000 : quick > 0 && quick <= 8 ? 700_000_000 : 4_000_000_000)
+                }
+            },
             // On opening, the Mac's copy of the list is as old as the last visit; asking is what makes it read a new one,
             // which is there about two seconds later (measured 2026-11-10: 2.1 s). So an old answer is asked for again
             // in 0.7 s, a few times, and not at the next six-second turn: the list is confirmed in about 2.5 s after
@@ -287,6 +323,7 @@ final class ChumbyModel: ObservableObject {
         let began = Date()
         do {
             let r = try await fetch("sys", from: api)
+            sysOld = r.age > 10
             // The cache stops refreshing when nobody is looking, so an old answer on opening means nothing; six in a row
             // (about 25 s) does.
             staleReadings = r.age > 60 ? staleReadings + 1 : 0
@@ -338,6 +375,7 @@ final class ChumbyModel: ObservableObject {
     }
     private func applySys(_ s: Sys, data: Data, fresh: Bool, takenAt: Date) {
         sysBytes = fresh ? data : Data()
+        if fresh, ringSettling { ringSettling = false }
         // A level he just set shows until a reading taken after it could have landed says otherwise (VolumeHold), the
         // same rule for every reading, parked or not. While it shows over the reading, the same bytes are read again
         // rather than skipped, so the Chumby's own level comes back if the hold lets go.

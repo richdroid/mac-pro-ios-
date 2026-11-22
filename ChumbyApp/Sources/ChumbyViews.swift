@@ -597,7 +597,10 @@ extension View {
     // A tab's own page: its title is the first row, so no empty bar sits above it and every tab starts at the same height.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
         // Clear of the rail, less the list's own 20 pt margin, which a tab's list sets beside the room open upright (RailRoom).
-        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)").toolbar(.hidden, for: .navigationBar).railRoom(listMargin: 20)
+        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)")
+            // The bar stays hidden but for an editor open in Alarms' right pane, whose Cancel and Save are the system's
+            // ✕ and ✓ in the side column, as the folded editor's are (gate, 11-22: words in a row across the top open flat).
+            .toolbar(tab == 2 && model.paneEditor ? .visible : .hidden, for: .navigationBar).railRoom(listMargin: 20)
             .background { TabTop.Marker(tab: tab) }
     }
     // For the build's films of Back (-swipeLog YES, never on the phone): where this view is, its size and its safe area,
@@ -1433,10 +1436,12 @@ struct HomeTab: View {
             // second as the ringing card's: the two fades overlap, so the slot is never bare (gate, 11-20). Put back by
             // a transition instead, it could come back while the ringing page covered Home and stay unseen for good
             // (film, 11-20: Home with no next alarm after a slide to stop).
+            // Opening on a kept ring, the slot waits (unseen, its room kept) for the first fresh word (ChumbyModel.ringSettling).
+            let nextShown = model.sys.ringing == nil && !model.ringSettling
             SkipCard().padding(.top, Self.sectionGap)
-                .opacity(model.sys.ringing == nil ? 1 : 0)
-                .animation(.easeOut(duration: ChumbyModel.slotFade), value: model.sys.ringing == nil)
-                .allowsHitTesting(model.sys.ringing == nil).accessibilityHidden(model.sys.ringing != nil)
+                .opacity(nextShown ? 1 : 0)
+                .animation(.easeOut(duration: ChumbyModel.slotFade), value: nextShown)
+                .allowsHitTesting(nextShown).accessibilityHidden(!nextShown)
         }
         // room for the cards' shadows inside the clip
         .padding(.horizontal, 16).padding(.bottom, 16).clipped().padding(.horizontal, -16).padding(.bottom, -16)
@@ -2098,10 +2103,12 @@ struct ChannelsTab: View {
         SwipeLog.mark("chrow \(w.name)")
         return HStack(alignment: .center, spacing: 16) {
             // The app's one remove control while editing (LeadingRemove), sliding in with the name in the same spring.
-            LeadingRemove(editing: reordering, label: "Remove \(w.name) from \(pickedTitle)") { remove(w.id) }
-                .padding(.trailing, reordering ? -23 : -16)
-            // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
-            Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
+            HStack(spacing: 0) {
+                LeadingRemove(editing: reordering, label: "Remove \(w.name) from \(pickedTitle)") { remove(w.id) }
+                // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
+                Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+            .layoutPriority(1)
             Spacer(minLength: 12)
             // While editing the row is its name alone, between the delete control and the grip, at the same height.
             if !reordering {
@@ -2150,36 +2157,12 @@ struct ChannelsTab: View {
     // was being edited (Richard, 2026-11-03: "be logical", when the two didn't move together; 2026-11-09: "the logic of all
     // the layouts … some of it is confusing"). Editing follows what plays (followPlaying), so there is nothing left for a
     // second chooser to choose.
+    // The channel's heading is a row of its own, not the section's header: a widget dragged up past the first row and let
+    // go over a header has nowhere to land, and flew back to where it started (gate, 11-22: p-chdrag 36–55 s). Over a
+    // row it lands at the top. Drawn as the header was, on no glass.
     var channelSection: some View {
-        Section {
-            // Said as Alarms says it has nothing set: the octopus, quiet, beside the line.
-            if shown.isEmpty && !picked.isEmpty {
-                HStack(spacing: 10) {
-                    OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34).accessibilityHidden(true)
-                    Text("Nothing in this channel yet.").foregroundStyle(.secondary)
-                }
-            }
-            // By id, never by index: following the playing channel swaps `rows` under the list.
-            ForEach(shown, id: \.id) { widgetRow($0) }
-                .onMove { from, to in
-                    SwipeLog.note("chmove \(Array(from)) -> \(to)")
-                    var on = shown
-                    on.move(fromOffsets: from, toOffset: to)
-                    // The list has already carried the row to its place under the finger: the new order is taken with
-                    // no animation of its own, which redrew the dropped row (blank for a few frames, then back; film, 11-20).
-                    var plain = Transaction(); plain.disablesAnimations = true
-                    withTransaction(plain) { rows = on + rows.filter { !$0.on }; changed() }
-                    model.tick()
-                }
-                .deleteDisabled(true)
-            if !picked.isEmpty { addRow }
-            // A save held under an alarm is said calmly, in the secondary ink, and stays until it has gone; a real failure
-            // is the warning note.
-            if heldForAlarm, let f = model.failed("chedit") { RowNote(icon: "clock", text: f, color: .secondary) }
-            else if let f = model.failed("chedit") { FailNote(text: f) }
-            if let f = model.failed("nowPlaying") { FailNote(text: f) }
-        } header: {
-            // The channel is the header itself: its name, with the others in its menu (the tick on the one showing).
+        Group {
+            // The channel is the heading itself: its name, with the others in its menu (the tick on the one showing).
             HStack(alignment: .firstTextBaseline) {
                 Menu {
                     Section("Channel") {
@@ -2213,13 +2196,47 @@ struct ChannelsTab: View {
             }
             .textCase(nil)
             .frame(minHeight: 32, alignment: .bottom)
+            .headRow(top: 14)
+            Section {
+            // Said as Alarms says it has nothing set: the octopus, quiet, beside the line.
+            if shown.isEmpty && !picked.isEmpty {
+                HStack(spacing: 10) {
+                    OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34).accessibilityHidden(true)
+                    Text("Nothing in this channel yet.").foregroundStyle(.secondary)
+                }
+            }
+            // By id, never by index: following the playing channel swaps `rows` under the list.
+            ForEach(shown, id: \.id) { widgetRow($0) }
+                .onMove { from, to in
+                    SwipeLog.note("chmove \(Array(from)) -> \(to)")
+                    var on = shown
+                    on.move(fromOffsets: from, toOffset: to)
+                    // The list has already carried the row to its place under the finger: the new order is taken with
+                    // no animation of its own, which redrew the dropped row (blank for a few frames, then back; film, 11-20).
+                    var plain = Transaction(); plain.disablesAnimations = true
+                    withTransaction(plain) { rows = on + rows.filter { !$0.on }; changed() }
+                    model.tick()
+                }
+                .deleteDisabled(true)
+            if !picked.isEmpty { addRow }
+            // A save held under an alarm is said calmly, in the secondary ink, and stays until it has gone; a real failure
+            // is the warning note.
+            if heldForAlarm, let f = model.failed("chedit") { RowNote(icon: "clock", text: f, color: .secondary) }
+            else if let f = model.failed("chedit") { FailNote(text: f) }
+            if let f = model.failed("nowPlaying") { FailNote(text: f) }
         } footer: {
             if model.state.shuffle == 1 { SectionFoot("Shuffle is on, so your order won’t show until you turn it off.") }
+            }
         }
     }
     // What the screen is doing right now, apart from which channel: a jump to one widget, and shuffle. Named for the screen,
     // not "Now playing", which on Sounds means music.
     var onScreen: some View {
+        Group {
+        // A heading row, as the channel's is, so the two panes' cards start level open; folded, the space above is the
+        // gap between sections.
+        SectionHead(icon: "tv", text: "On screen").frame(maxWidth: .infinity, minHeight: wide ? 32 : 0, alignment: .bottomLeading)
+            .headRow(top: wide ? 14 : 0)
         Section {
             // Open flat and open in portrait (the posture he holds, whose page was half bare sea); folded, Home has it.
             if wide || size == .regular { ScreenRow() }
@@ -2236,10 +2253,7 @@ struct ChannelsTab: View {
             .disabled(jumpable.isEmpty)
             .id("jumprow")
             Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
-        } header: {
-            // Open, as tall as the channel header across the fold, so the two panes' cards start level.
-            SectionHead(icon: "tv", text: "On screen")
-                .frame(minHeight: wide ? 32 : 0, alignment: .bottomLeading)
+        }
         }
     }
 
@@ -2781,9 +2795,8 @@ struct SoundsTab: View {
                 ForEach(model.state.streams, id: \.key) { s in
                     // Taken out as every list's rows are (11-18: "the right side minus sign for delete ... makes no sense"):
                     // Edit in the heading, the red disc at the row's start. It was the last ⊖ at a row's end.
-                    HStack(spacing: 12) {
+                    HStack(spacing: 0) {
                         LeadingRemove(editing: editingStreams, label: "Remove \(s.name.isEmpty ? "this stream" : s.name)") { pendingRemoval = s }
-                            .padding(.trailing, editingStreams ? -19 : -12)
                         Label(s.name.isEmpty ? s.url : s.name, systemImage: "dot.radiowaves.left.and.right").lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -2942,12 +2955,11 @@ struct TinkerTab: View {
     @ViewBuilder var xWidget: some View {
         Section {
             ForEach(model.sys.tw, id: \.self) { h in
-                HStack(spacing: 12) {
+                HStack(spacing: 0) {
                     LeadingRemove(editing: editingX, label: "Stop showing @\(h)") {
                         saveAccounts(model.sys.tw.filter { $0 != h })
                         if model.sys.tw.count <= 1 { withAnimation(.snappy) { editingX = false } }
                     }
-                    .padding(.trailing, editingX ? -19 : -12)
                     Text("@" + h).lineLimit(1)
                     Spacer(minLength: 8)
                 }
@@ -3121,6 +3133,7 @@ struct RowRemove: View {
 // mark at all, and never a swipe (11-05). Always in the row, opening from no width, so it slides and fades in step with
 // the row's words; a 44 pt target laid out as the 21 pt disc.
 struct LeadingRemove: View {
+    static let column: CGFloat = 37
     let editing: Bool
     let label: String
     let action: () -> Void
@@ -3132,7 +3145,10 @@ struct LeadingRemove: View {
                 .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .frame(width: editing ? 44 : 0, alignment: .trailing).clipped()
+        // Its column is the disc and its gap to the words (21 + 16 pt) while editing, and nothing at all otherwise. Callers
+        // put it flush against the words (HStack spacing 0): offset by a negative padding as before, the hidden column
+        // couldn't go below nothing, and every row's words sat 12–16 pt right of the page's other rows (gate, 11-22).
+        .frame(width: editing ? Self.column : 0, alignment: .leading).clipped()
         .opacity(editing ? 1 : 0)
         .padding(.vertical, -11.5)
         .allowsHitTesting(editing).accessibilityHidden(!editing)
@@ -3266,15 +3282,17 @@ struct NightSettings: View {
             ForEach($model.state.schedule) { $e in
                 HStack(spacing: 12) {
                     // Taking a time out (Richard, 2026-11-09: "i should be able to delete an entry for the night time
-                    // thing"): Edit's disc at the row's start, as every list in the app (11-18).
-                    LeadingRemove(editing: editingTimes, label: "Remove the \(words(e).lowercased()) time") {
-                        remove(e.id)
-                        if model.state.schedule.count <= 1 { withAnimation(.snappy) { editingTimes = false } }
-                    }
-                    .padding(.trailing, editingTimes ? -19 : -12)
-                    Image(systemName: e.cmd == "night" ? (e.val == "off" ? "sun.max.fill" : "moon.fill") : e.cmd == "screen" ? "sun.min" : "tv")
+                    // thing"): Edit's disc at the row's start, as every list in the app (11-18). Flush against the glyph,
+                    // so at rest the glyph sits in the add rows' icon column.
+                    HStack(spacing: 0) {
+                        LeadingRemove(editing: editingTimes, label: "Remove the \(words(e).lowercased()) time") {
+                            remove(e.id)
+                            if model.state.schedule.count <= 1 { withAnimation(.snappy) { editingTimes = false } }
+                        }
+                        Image(systemName: e.cmd == "night" ? (e.val == "off" ? "sun.max.fill" : "moon.fill") : e.cmd == "screen" ? "sun.min" : "tv")
                         .font(.body.weight(.semibold)).frame(width: 24)
                         .foregroundStyle(e.cmd == "night" && e.val == "off" ? ChumbyPalette.hex(0xe59a2e) : ChumbyPalette.hex(0xa4b7d6))
+                    }
                     // The time as a control he can see: the accent's words on the accent's own capsule, as "Turn on" and the
                     // Add rows, with the system's time picker under it to take the tap (Richard, 2026-11-09: "i should be
                     // able to delete an entry for the night time thing or edit it"; the compact picker's grey chip in ink
@@ -3388,6 +3406,11 @@ struct NightStyleTile: View {
 }
 
 extension View {
+    // A section's heading drawn as a plain row on no glass, where the section's header would sit (ChannelsTab).
+    func headRow(top: CGFloat) -> some View {
+        self.listRowBackground(Color.clear).listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: 0, trailing: 20)).moveDisabled(true).deleteDisabled(true)
+    }
     @ViewBuilder func dragToReorder(_ on: Bool) -> some View {
         #if os(iOS)
         self.environment(\.editMode, .constant(on ? .active : .inactive))
