@@ -305,6 +305,13 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
 }
 #endif
 
+// A moment in which no settled fade runs: the first reading after opening is applied as it is.
+@MainActor enum SettleQuiet {
+    static var until = Date.distantPast
+    static func now() { until = Date().addingTimeInterval(0.15) }
+    static var quiet: Bool { Date() < until }
+}
+
 // Whether the tab a view is on is the one in front (RootView sets it on each tab under the rail).
 private struct TabInFrontKey: EnvironmentKey { static let defaultValue = true }
 extension EnvironmentValues { var tabInFront: Bool { get { self[TabInFrontKey.self] } set { self[TabInFrontKey.self] = newValue } } }
@@ -322,7 +329,7 @@ struct SettledAnimation<V: Equatable>: ViewModifier {
     @State private var settled = false
     func body(content: Content) -> some View {
         content
-            .animation(settled ? animation : nil, value: value)
+            .animation(settled && !SettleQuiet.quiet ? animation : nil, value: value)
             .task(id: front) { guard front else { settled = false; return }; try? await Task.sleep(nanoseconds: 400_000_000); if !Task.isCancelled { settled = true } }
             .onDisappear { settled = false }
     }

@@ -446,6 +446,16 @@ struct Page<C: View>: View {
     var retaps = 0
     @ViewBuilder let content: () -> C
     @State private var path = NavigationPath()
+    // Where Settings sits on this stack, while it's open: the gear tapped on Settings, or on a page under it, pushed a second
+    // Settings over the first (audit of 5b7b503).
+    @State private var settingsAt: Int?
+    func push(_ v: any Hashable) {
+        if let r = v as? SettingsRoute, r == .root {
+            guard settingsAt == nil else { return }
+            settingsAt = path.count
+        }
+        path.append(v)
+    }
     @State private var top = 0
     @State private var scrolled = PageScrollY()
     // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
@@ -459,7 +469,7 @@ struct Page<C: View>: View {
         // The lip: the TV, along the top of this tab and of every page opened on it. Above the stack, not in it, so a push
         // moves under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
         VStack(spacing: 0) {
-        Lip(tab: tab).environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
+        Lip(tab: tab).environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
             // Its right end in line with the page's under it, the rail's column clear from top to foot.
             .railRoom()
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
@@ -488,7 +498,7 @@ struct Page<C: View>: View {
                 .offset(y: -barRoom)
                 .toolbar(showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
-                .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
+                .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).railRoom() }
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
@@ -496,7 +506,7 @@ struct Page<C: View>: View {
                     if let t = TitleRoutes.target(r) { TitlePage(target: t).railRoom() }
                 }
                 .modifier(SettingsPages(tab: tab))
-                .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
+                .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
@@ -525,6 +535,7 @@ struct Page<C: View>: View {
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
         .onChange(of: path) { was, now in
+            if let at = settingsAt, now.count <= at { settingsAt = nil }
             Keyboard.dismiss()
             PageMoves.count += 1
             #if os(iOS)
@@ -953,6 +964,9 @@ struct MirrorView: View {
     // A playing film is black on any capture of the screen, so its poster stands in, sat on a blurred copy of itself.
     // So does one just flicked, until the TV says it's playing.
     var film: URL? {
+        // Mint's song: its cover, sharp on its blur, never the dark box the capture of Mint's screen often was (audit of
+        // 5b7b503).
+        if model.musicIsCurrent, let m = model.nowMusic, !m.art.isEmpty { return URL(string: m.art) }
         guard model.mirrorLive else { return nil }
         // Including the status kept from last time, on opening, so the first frame is the poster it'll stay, not the last
         // still of the screen swapped for the poster a moment later (r17).
@@ -980,12 +994,13 @@ struct MirrorView: View {
                 .transition(.opacity)
             } else if let s = model.starting, !s.played {
                 // While a flicked film starts, never the TV's own picture under its poster: a launcher still read through
-                // PosterOnBlur's first frames (r26). Black until the poster's in; the TV's picture only once it plays.
-                Color.black
+                // PosterOnBlur's first frames (r26). Dark until the poster's in; the TV's picture only once it plays.
+                NoPictureSoon()
             } else if self.film != nil {
                 // A poster on its way (a film following a show): the dark glass until it's loaded and fades in, never the
-                // new film's TV glyph for the moment between (Remote gate 3: a grey glyph flashed for 0.25 s).
-                Color.clear
+                // new film's TV glyph for the moment between (Remote gate 3: a grey glyph flashed for 0.25 s), unless it
+                // takes longer than that.
+                NoPictureSoon()
             } else if model.mirrorLive && model.filmOnScreen {
                 // A film playing with no poster to stand in (YouTube, a stream without art): the stream is stopped for it, and
                 // the frame it left was the launcher from before the film, dimmed with a spinner for as long as it played
@@ -1067,13 +1082,12 @@ private struct ScreenPicture: View {
                         if live.stalled { NoPicture() }
                         // With no art either, the TV's glyph under the light, never an empty box (gate 3, first arrival).
                         else if art == nil { NoPicture().overlay { LoadingRing(radius: TVLook.card) } }
-                        else {
-                            Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                                .clipped().blur(radius: 26).opacity(0.5)
-                                // Waiting on the TV's picture: the light running round the picture's edge, as it does round
-                                // every card that's loading and round a flick's start (tv-iphone.md ruling 9), not a spinner.
-                                .overlay { LoadingRing(radius: TVLook.card) }
-                        }
+                        else if let u = art.flatMap(URL.init(string:)) {
+                            // What's on, sharp on its blur, while the TV's picture comes: the half-dark blur alone read as an
+                            // empty box (audit of 5b7b503). The light runs round the picture's edge, as it does round every
+                            // card that's loading and round a flick's start (tv-iphone.md ruling 9), not a spinner.
+                            PosterOnBlur(url: u).overlay { LoadingRing(radius: TVLook.card) }
+                        } else { NoPicture() }
                     }
                     .animation(.easeOut(duration: 0.3), value: live.stalled)
                 }
@@ -1088,7 +1102,9 @@ private struct ScreenPicture: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: live.showing)
-        .onAppear { shownAt = Date(); liveIn = live.showing }
+        // Each return to the Remote counts as a showing, the tab being kept rather than shown afresh: the frame kept from a
+        // moment ago is up bright at once, not dimmed as old.
+        .onScreen { on in if on { shownAt = Date(); liveIn = live.showing } }
         .task(id: live.showing) {
             guard live.showing else { liveIn = false; return }
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -1099,6 +1115,22 @@ private struct ScreenPicture: View {
     @State private var liveIn = false
 }
 #endif
+
+// A picture on its way: the dark glass for a moment, then the TV's glyph, so a picture that doesn't come is never an empty
+// box (audit of 5b7b503: the Remote's picture sat as a dark box).
+struct NoPictureSoon: View {
+    @State private var late = false
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.25)
+            if late { NoPicture().transition(.opacity) }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if !Task.isCancelled { withAnimation(.easeOut(duration: 0.2)) { late = true } }
+        }
+    }
+}
 
 // A picture that can't be had: a TV, not a moon (an awake TV whose picture can't be had isn't asleep; asleep, the Remote
 // lays its own moon over everything).
@@ -1128,6 +1160,9 @@ struct EpisodeStill: View {
                 Cover(url: u, mode: .fill) { Color.clear }.transition(.opacity)
             } else if looked {
                 NoPicture()
+            } else {
+                // Looked for a moment without an answer yet: the glyph, rather than dark glass for as long as that takes.
+                NoPictureSoon()
             }
             // Until it's known there's no still, the dark glass: a cold launch on a show flashed the TV glyph for 0.4 s
             // before the still (Remote gate 4).
@@ -1642,28 +1677,23 @@ struct RemoteTab: View {
         // Folded there is less height: the same rows, 10 pt apart rather than 14.
         let gap: CGFloat = height < 600 ? 10 : 14
         let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
-        // Nothing on: no places are kept for the bar, the transport or the episode line (a 230 pt hole, gate on 654ff00).
-        // The picture sits over the pad and both take the room; when something starts they move beside each other in
-        // one spring and the rows come in under them. The episode line has a place only for a show.
-        let idle = !session && !musicShown
-        let lined = !idle && seriesOn
-        let rows: CGFloat = idle ? 2 : lined ? 5 : 4
-        let fixed = 2 * grid.key + (idle ? 0 : Self.barSlot + grid.play) + (lined ? 46 : 0) + strip + 8
+        // One arrangement whatever is on: the picture beside the pad, and places kept for the bar, the transport and the
+        // episode line. It was two (the picture over the pad when nothing was on), and the first reading, about 1.5 s after
+        // opening, moved everything from one to the other in a spring (audit of 5b7b503). What's on only fills the places.
+        let rows: CGFloat = 5
+        let fixed = 2 * grid.key + Self.barSlot + grid.play + 46 + strip + 8
         let room = max(0, height - fixed - gap * rows)
         let w = grid.width
-        // Idle: the pad a little under half the room, the picture the rest. Busy: one row, as tall as the room allows.
-        let d = idle ? max(120, min(room * 0.46, w * 0.62)).rounded(.down) : max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
-        let pw = idle ? min(w, max(0, room - gap - d) * 16 / 9) : min(w - 16 - d, d * 16 / 9)
-        let top = idle ? AnyLayout(VStackLayout(spacing: gap)) : AnyLayout(HStackLayout(spacing: max(16, w - pw - d)))
+        let d = max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
+        let pw = min(w - 16 - d, d * 16 / 9)
         return VStack(spacing: 0) {
             VStack(spacing: gap) {
-                top {
+                HStack(spacing: max(16, w - pw - d)) {
                     picture(closable: true).frame(width: pw, height: pw * 9 / 16)
                     pad.frame(width: d, height: d)
                 }
                 .frame(width: w)
-                if !idle {
-                ZStack { Color.clear; if !musicShown { progress } }.frame(width: grid.width, height: Self.barSlot).transition(.opacity)
+                ZStack { Color.clear; if !musicShown { progress } }.frame(width: grid.width, height: Self.barSlot)
                 ZStack {
                     Color.clear
                     if musicShown { music }
@@ -1671,9 +1701,7 @@ struct RemoteTab: View {
                 }
                 .frame(width: grid.width, height: grid.play)
                 .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
-                .transition(.opacity)
-                }
-                if lined { ZStack { Color.clear; episodes }.frame(width: grid.width, height: 46).transition(.opacity) }
+                ZStack { Color.clear; if seriesOn && (session || musicShown) { episodes } }.frame(width: grid.width, height: 46)
                 VStack(spacing: gap) {
                     keysBlock(grid, transport: false)
                     HStack(spacing: RemoteGrid.sideGap) {
@@ -1687,8 +1715,6 @@ struct RemoteTab: View {
                 .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
                 .modifier(KeysArrive(gate: keysGate))
             }
-            .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: idle)
-            .settledAnimation(.easeOut(duration: 0.25), value: lined)
             Spacer(minLength: 8)
             AppStrip(inset: margin).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).padding(.bottom, 8)
         }
@@ -2346,7 +2372,8 @@ struct MiniPlayer: View {
         .padding(10)
         // Mint's own colour, or the song's, never the colour of whatever else is on the page (r24: a Mint song sat on
         // Stremio purple).
-        .background((band ?? Color(hex: 0x3EB489)).opacity(0.32), in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
+        // From the image cache on the first draw when it's known, so the card doesn't change colour after it's up.
+        .background((band ?? ImageStore.shared.cachedBand(URL(string: music.art)) ?? Color(hex: 0x3EB489)).opacity(0.32), in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         .tvCard()
         .task(id: music.art) {
             guard let u = URL(string: music.art) else { band = nil; return }
@@ -3010,7 +3037,8 @@ struct MusicTransport: View {
     let playing: Bool?
     // Shuffle and repeat at the ends: Mint's alone, so the phone's own song has the three keys only.
     var modes = true
-    static let key: CGFloat = 58, play: CGFloat = 68, mode: CGFloat = 44
+    // Shuffle and repeat as big as previous and next: at 44 pt they were small targets beside them (audit of 5b7b503).
+    static let key: CGFloat = 58, play: CGFloat = 68, mode: CGFloat = 58
     var body: some View {
         HStack(spacing: 0) {
             if modes { PlayModes(keys: [.shuffle], size: Self.mode) }
@@ -3024,24 +3052,6 @@ struct MusicTransport: View {
             if modes { PlayModes(keys: [.repeatMode], size: Self.mode) }
         }
         .frame(maxWidth: .infinity)
-    }
-}
-// "South Park is on the TV": the one line Music says about a film or show, and the way to its Remote.
-struct OnTVLine: View {
-    @Environment(TVModel.self) var model
-    let name: String
-    var body: some View {
-        Button { model.tick(); model.tab = 0 } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "tv").font(.system(size: 17, weight: .semibold))
-                Text("\(name) is on the TV").font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-            }
-            .padding(.horizontal, 18).frame(height: 56).contentShape(Rectangle())
-            .tvCard(18)
-        }
-        .buttonStyle(.plain)
     }
 }
 struct NowControls: View {
@@ -3153,6 +3163,12 @@ struct ProgressTrack: View {
 struct PlayingTab: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
+    // Folded and turned on its side the display is short: the cover goes beside the names and keys, as the Remote's
+    // picture goes beside its pad, or the play key was cut off at the foot (audit of 5b7b503).
+    @Environment(\.verticalSizeClass) private var vSize
+    var sideways: Bool { !panes && vSize == .compact }
+    // The names, bar and keys under the cover, as tall as they really are: the cover takes what they leave.
+    @State private var under: CGFloat = 0
     @ObservedObject private var phone = PhonePlayer.shared
     @ObservedObject private var nextUp = NextUp.shared
     @State private var query = ""
@@ -3182,16 +3198,15 @@ struct PlayingTab: View {
                 Text(a.title?.isEmpty == false ? a.title! : "From this iPhone").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : a.title?.isEmpty == false ? "Playing from this iPhone" : "AirPlay").font(.subheadline).foregroundStyle(.secondary)
             } else {
-                // A film or show on the TV is the Remote's: said here in one line, with his last music kept ready under
-                // it. Music never says a song is playing while it isn't, and never shows the film as its own.
-                if otherAppIsActive, let s = model.status?.session, !s.showName.isEmpty { OnTVLine(name: s.showName) }
+                // A film or show on the TV is the Remote's and the lip's: Music doesn't caption it, and doesn't show Mint's
+                // last song as a full player under it as though it were playing (audit of 5b7b503).
                 if phone.drives, let song = phone.song, !otherAppIsActive {
                     songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
                               titles(song.title, [song.artist, song.album], upNext: false), PhoneControls(song: song))
-                } else if let m = music {
+                } else if let m = music, !otherAppIsActive {
                     songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
                               titles(m.title, [m.artist, m.album]), NowControls(music: m))
-                } else if !otherAppIsActive {
+                } else {
                     ContentUnavailableView("Nothing playing", systemImage: "music.note")
                 }
             }
@@ -3205,8 +3220,8 @@ struct PlayingTab: View {
     var nowKind: Int {
         if model.otherAirPlay, model.status?.airplay != nil { return 0 }
         if phone.drives, phone.song != nil, !otherAppIsActive { return 1 }
-        if music != nil { return otherAppIsActive ? 3 : 2 }
-        return otherAppIsActive ? 5 : 4
+        if music != nil, !otherAppIsActive { return 2 }
+        return 4
     }
     static func atEnd(_ s: TVStatus.Session) -> Bool {
         guard s.playing, let p = s.position, let d = s.duration, d > 0 else { return false }
@@ -3216,23 +3231,41 @@ struct PlayingTab: View {
     // A song as one stack on one rhythm: the cover, 20 pt, its names, 18 pt, the bar with its times tucked under it, the
     // keys, then "Show on TV" close under them. Richard, 2026-11-07, of the open-portrait Playing tab: "spacing here is
     // fucked" (a small cover, a wide gap over the bar, the times 27 pt under it, and the next section 60 pt away).
-    func songStack(_ art: some View, _ names: some View, _ controls: some View) -> some View {
-        VStack(spacing: 0) {
-            art
-            names.padding(.top, 20)
-            controls.padding(.top, 12)
+    @ViewBuilder func songStack(_ art: some View, _ names: some View, _ controls: some View) -> some View {
+        if sideways {
+            HStack(alignment: .center, spacing: 20) {
+                art
+                VStack(spacing: 0) {
+                    names
+                    controls.padding(.top, 12)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        } else {
+            VStack(spacing: 0) {
+                art
+                VStack(spacing: 0) {
+                    names.padding(.top, 20)
+                    controls.padding(.top, 12)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in if abs(under - h) > 1 { under = h } }
+            }
         }
     }
-    // What the stack needs under the cover: the names (one line each) and their 20 pt, the bar and its times with 12 pt,
-    // the 10 pt and the row of keys, and 16 pt to the page's foot.
-    static let underCover: CGFloat = 20 + 54 + 12 + 40 + 10 + MusicTransport.play + 16
+    // Until the names, bar and keys have been measured: their usual height (the names on one line each and 20 pt, the bar
+    // and its times with 12 pt, the 10 pt and the row of keys), so the first draw is already about right.
+    static let underCover: CGFloat = 20 + 54 + 12 + 40 + 10 + MusicTransport.play
+    // The foot's air under the keys.
+    static let coverFoot: CGFloat = 16
     func cover(_ c: some View) -> some View {
-        // As wide as the column, and as tall as the screen leaves it, never a stamp (r35): Richard, 2026-11-21, of a 280 pt
-        // cover inset in a 336 pt column, "terrible".
-        let room = seen > 0 ? max(160, seen - Self.underCover - (panes ? Self.paneTop : 0)) : .infinity
+        // As wide as the column, and as tall as the screen leaves it once the names, bar and keys have their measured room,
+        // never a stamp (r35): Richard, 2026-11-21, of a 280 pt cover inset in a 336 pt column, "terrible". Beside them,
+        // folded on its side, as tall as the page shows.
+        let below = sideways ? 0 : (under > 0 ? under : Self.underCover)
+        let room = seen > 0 ? max(120, seen - below - Self.coverFoot - (panes ? Self.paneTop : 0)) : .infinity
         return c.aspectRatio(1, contentMode: .fit).frame(maxWidth: room, maxHeight: room)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: sideways ? nil : .infinity)
     }
     // The song's name and who it's by, at the column's left under the cover, as Apple Music's player sets them; Mint's
     // Up next beside them, where his thumb finds the queue.

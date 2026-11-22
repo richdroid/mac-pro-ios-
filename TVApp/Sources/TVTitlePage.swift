@@ -449,7 +449,7 @@ struct TitlePage: View {
             HStack(alignment: .top, spacing: 14) {
                 Art(url: URL(string: e.thumb.isEmpty ? st.item.art : e.thumb)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() }
                     .frame(width: 128, height: 72).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .liftable(item, .stremio, wide: true) { v in Thrower.sendBest(model, item: item, velocity: v) }
+                    .liftable(item, .stremio, wide: true, quickUp: false) { v in Thrower.sendBest(model, item: item, velocity: v) }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(e.title).font(.system(size: 17, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
