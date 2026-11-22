@@ -574,12 +574,14 @@ struct TabBarFade: ViewModifier {
 // postures), and the insets came off twice: open upright the fit read 621 pt of the 786 there are, folded 610 of 644,
 // open flat 601 of 635. That held the wordmark, octopus and device at their 250 pt floor folded and open upright
 // (Richard, 11-21: "chumby logo now too small revert back to old size").
+// With it, how far the page's content still runs on under the bottom bar or the home indicator, where a line would be
+// seen half (the bottom inset, as the page reads it).
 struct HomeRoomReader: ViewModifier {
-    let set: (CGFloat) -> Void
+    let set: (CGFloat, CGFloat) -> Void
     func body(content: Content) -> some View {
-        content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
-            SwipeLog.mark("home room page \(Int(f.minY))-\(Int(f.maxY)) room \(Int(f.height))")
-            set(f.height)
+        content.onGeometryChange(for: [CGFloat].self) { [$0.size.height, $0.safeAreaInsets.bottom] } action: { v in
+            SwipeLog.mark("home room \(Int(v[0])) under \(Int(v[1]))")
+            set(v[0], v[1])
         }
     }
 }
@@ -587,7 +589,7 @@ struct HomeRoomReader: ViewModifier {
 extension View {
     // The room a scroll page has for its content: its own frame, which is already clear of the status bar, the tab bar
     // and the home indicator.
-    func homeRoom(_ set: @escaping (CGFloat) -> Void) -> some View { modifier(HomeRoomReader(set: set)) }
+    func homeRoom(_ set: @escaping (CGFloat, CGFloat) -> Void) -> some View { modifier(HomeRoomReader(set: set)) }
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
         self.background { if shown { ZStack { SeaBackground(active: active); GhostOctopus(active: active) }.ignoresSafeArea() } }
@@ -974,6 +976,7 @@ struct HomeTab: View {
     @State private var slotWidth: CGFloat = 0
     @State private var captionWidth: CGFloat = 0
     @State private var room: CGFloat = 0
+    @State private var under: CGFloat = 0
     static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340
     // Allowance for the tallest everyday state over the one measured.
     static let tallestExtra: CGFloat = 40
@@ -999,7 +1002,9 @@ struct HomeTab: View {
         let end = min(target, w)
         let foot = controlsFoot - ((captionWidth > 0 ? captionWidth : w) - end) * Self.footPerWidth
         let top = foot - captionHeight
-        let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room - top + 4) : 0
+        // Wholly below: past the bottom bar or the home indicator too, where the page still draws (the room's own foot left
+        // it half seen there, folded).
+        let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room + under - top + 4) : 0
         if abs(push - captionPush) > 0.5 { captionPush = push }
     }
     var k: CGFloat { stageWidth / 380 }
@@ -1407,7 +1412,7 @@ struct HomeTab: View {
                     // The wordmark is part of the stage, so it is spaced off the octopus the same way in both layouts.
                     // The reach line arriving or going moves what's under it in one spring, never in one frame.
                     ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12).coordinateSpace(name: "homeContent").animation(.snappy, value: model.unreachable) }.roomyIndicators()
-                        .homeRoom { room = $0; refit() }
+                        .homeRoom { room = $0; under = $1; refit() }
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -1439,7 +1444,7 @@ struct HomeTab: View {
                     .coordinateSpace(name: "homeContent")
                     .animation(.snappy, value: model.unreachable)
                 }.roomyIndicators()
-                .homeRoom { room = $0; refit() }
+                .homeRoom { room = $0; under = $1; refit() }
                 // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
                 // "Chumby Classic" through it. homecard: Home scrolled to its Playing card (the playing scene), folded.
                 .task {
