@@ -280,34 +280,45 @@ struct ArtistPage: View {
             .padding(.horizontal, S.margin)
         }
     }
+    // Everything is asked for at once and laid out after the push (see afterPush), in two goes: his story and
+    // Last.fm's page, then the similar artists with their covers. It came in nine and more separate changes, each
+    // building the whole page again, most of them inside the zoom (run 49 gate: 380-1600 ms without a frame).
     private func load() async {
+        let opened = Date()
         let median = LengthFill.shared.median
         async let st = HistoryDB.reader.story(artist: name, median: median)
         async let c = ArtistArt.ref(name)
-        story = await st
-        // Changed only if it's really another cover, so the seeded one isn't drawn again.
-        let cv = await c
-        if cv.key != cover?.key { cover = cv }
-        Self.kept[name] = (cover, story)
-        let i = await ArtistInfo.load(name)
-        info = i
+        async let inf = ArtistInfo.load(name)
+        let story0 = await st, cv = await c, i = await inf
         // Last.fm's top tracks, each with his own plays of it, and covers from his history where he has them.
         let mine = await HistoryDB.reader.playsOf(artist: name, tracks: i.top.map(\.track))
-        mineOnTheirs = mine
+        // Changed only if it's really another cover, so the seeded one isn't drawn again.
+        let cover0 = cv.key != cover?.key ? cv : cover
         var t = i.top
         for k in t.indices {
-            if let hit = story?.top.first(where: { $0.track.lowercased() == t[k].track.lowercased() }) { t[k] = t[k].with(album: hit.album, image: hit.image) }
-            else if let c = cover { t[k] = t[k].with(album: c.album, image: c.url) }
+            if let hit = story0.top.first(where: { $0.track.lowercased() == t[k].track.lowercased() }) { t[k] = t[k].with(album: hit.album, image: hit.image) }
+            else if let c = cover0 { t[k] = t[k].with(album: c.album, image: c.url) }
         }
+        await afterPush(opened)
+        guard !Task.isCancelled else { return }
+        story = story0
+        if cv.key != cover?.key { cover = cv }
+        Self.kept[name] = (cover, story)
+        info = i
+        mineOnTheirs = mine
         theirs = t
-        apple = await AppleMusic.shared.link(.artist, artist: name)
-        // Similar artists, his plays of each, then their covers as they come.
+        // Similar artists, his plays of each and their covers, shown together.
         let counts = await HistoryDB.reader.playsOf(artists: i.similar.map(\.name))
-        similar = i.similar.prefix(14).map { Entry(kind: .artists, artist: $0.name, album: "", track: "", plays: counts[$0.name.lowercased()] ?? 0) }
-        for k in similar.indices {
-            let r = await ArtistArt.ref(similar[k].artist)
-            if k < similar.count { similar[k] = similar[k].with(album: r.album, image: r.url) }
+        var sim = i.similar.prefix(14).map { Entry(kind: .artists, artist: $0.name, album: "", track: "", plays: counts[$0.name.lowercased()] ?? 0) }
+        for k in sim.indices {
+            let r = await ArtistArt.ref(sim[k].artist)
+            if Task.isCancelled { return }
+            sim[k] = sim[k].with(album: r.album, image: r.url)
         }
+        let link = await AppleMusic.shared.link(.artist, artist: name)
+        guard !Task.isCancelled else { return }
+        similar = sim
+        apple = link
     }
 }
 
@@ -389,14 +400,22 @@ struct AlbumPage: View {
             .padding(.horizontal, S.margin)
         }
     }
+    // The cover's address at once (the zoom grows into the cover); the rest asked for together and laid out in one go
+    // after the push (see afterPush).
     private func load() async {
+        let opened = Date()
+        async let st = HistoryDB.reader.story(artist: artist, album: album, median: LengthFill.shared.median)
+        async let inf = AlbumInfo.load(artist: artist, album: album)
         image = await HistoryDB.reader.artURL(artist, album)
-        story = await HistoryDB.reader.story(artist: artist, album: album, median: LengthFill.shared.median)
-        let i = await AlbumInfo.load(artist: artist, album: album)
+        let story0 = await st, i = await inf
+        var link = ArtStore.shared.appleMusic(ArtRef(artist: artist, album: album, url: image ?? i.image))
+        if link == nil { link = await AppleMusic.shared.link(.album, artist: artist, title: album) }
+        await afterPush(opened)
+        guard !Task.isCancelled else { return }
+        story = story0
         info = i
         if image == nil { image = i.image }
-        apple = ArtStore.shared.appleMusic(ArtRef(artist: artist, album: album, url: image))
-        if apple == nil { apple = await AppleMusic.shared.link(.album, artist: artist, title: album) }
+        apple = link
     }
 }
 
@@ -475,11 +494,18 @@ struct TrackPage: View {
             }
         }
     }
+    // Asked for together and laid out after the push (see afterPush): his story and Last.fm's words first, then the
+    // songs like it and the way to Apple Music.
     private func load() async {
+        let opened = Date()
         async let st = HistoryDB.reader.story(artist: s.artist, track: s.title, median: LengthFill.shared.median)
-        story = await st
-        info = await TrackInfo.load(s)
-        if let d = info?.duration { await HistoryDB.shared.keepLengths([(s.artist, s.title, d)]) }
+        async let inf = TrackInfo.load(s)
+        let story0 = await st, info0 = await inf
+        await afterPush(opened)
+        guard !Task.isCancelled else { return }
+        story = story0
+        info = info0
+        if let d = info0?.duration { await HistoryDB.shared.keepLengths([(s.artist, s.title, d)]) }
         var sim = await TrackInfo.similar(s)
         for k in sim.indices {
             let n = await HistoryDB.reader.playsOf(artist: sim[k].artist, tracks: [sim[k].track])[sim[k].track.lowercased()] ?? 0
@@ -487,9 +513,18 @@ struct TrackPage: View {
             if e.image == nil, let c = await HistoryDB.reader.cover(of: e.artist) { e = e.with(album: c.album, image: c.url) }
             sim[k] = e
         }
+        let link = await AppleMusic.shared.link(.song, artist: s.artist, title: s.title)
+        guard !Task.isCancelled else { return }
         similar = Array(sim.prefix(8))
-        apple = await AppleMusic.shared.link(.song, artist: s.artist, title: s.title)
+        apple = link
     }
+}
+
+// Waits out a push's zoom: what a page fetched is laid out once the page has grown in, never in the transition's frames.
+// The time is counted from when the page began asking, so a slow answer waits no longer than it took.
+func afterPush(_ opened: Date, _ length: TimeInterval = 0.55) async {
+    let left = length - Date().timeIntervalSince(opened)
+    if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000)) }
 }
 
 // Words that grow in place: three lines, and "More" only when there's more than three lines of them.

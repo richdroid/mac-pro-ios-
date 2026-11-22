@@ -396,6 +396,7 @@ struct MixView: View {
         return Layout(center: c, points: pts, core: core, small: small, large: large)
     }
     private func load() async {
+        let opened = Date()
         shown = false
         ring = []
         guard let j = try? await LastFM.shared.call("artist.getsimilar", ["artist": artist, "limit": "16", "autocorrect": "1"], fresh: 86400) else { return }
@@ -408,6 +409,9 @@ struct MixView: View {
             if Task.isCancelled { return }
             list.append(Node(name: s.name, match: s.match, plays: counts[s.name.lowercased()] ?? 0, art: r))
         }
+        // On a page just pushed, after its zoom (LFMDetail.swift, afterPush).
+        await afterPush(opened)
+        guard !Task.isCancelled else { return }
         ring = list
         try? await Task.sleep(nanoseconds: 120_000_000)
         withAnimation(still ? nil : .easeOut(duration: 0.3)) { shown = true }

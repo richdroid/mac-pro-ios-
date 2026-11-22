@@ -4,9 +4,17 @@ import Charts
 // The pieces every tab and page shares: how a tap opens a page, the rows and panoramas of covers, movement marks,
 // chips, a tide of plays over the years, and the ways out (Apple Music, Last.fm).
 
-private struct OpenRouteKey: EnvironmentKey { static let defaultValue: (Go) -> Void = { _ in } }
+// How a page is opened on the tab's stack: one object per tab for its whole life, so the value handed down never changes.
+// It was a closure made afresh each time the tab's stack changed, which SwiftUI can't compare: every row, cover and hero
+// that reads it was built again on every push and every Back, inside the transition (run 49 gate: 380-1600 ms gaps).
+final class OpenRoute: Equatable, @unchecked Sendable {
+    var go: (Go) -> Void = { _ in }
+    func callAsFunction(_ g: Go) { go(g) }
+    static func == (a: OpenRoute, b: OpenRoute) -> Bool { a === b }
+}
+private struct OpenRouteKey: EnvironmentKey { static let defaultValue = OpenRoute() }
 extension EnvironmentValues {
-    var openRoute: (Go) -> Void { get { self[OpenRouteKey.self] } set { self[OpenRouteKey.self] = newValue } }
+    var openRoute: OpenRoute { get { self[OpenRouteKey.self] } set { self[OpenRouteKey.self] = newValue } }
 }
 
 // Anything that opens a page: an artist, album or track, from anywhere. With a cover to grow out of, the page zooms

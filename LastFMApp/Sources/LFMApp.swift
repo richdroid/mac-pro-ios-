@@ -67,9 +67,13 @@ struct TabPage<C: View>: View {
     @Namespace private var space
     @State private var path: [Go] = []
     @State private var scrollTop = 0
+    @State private var opener = OpenRoute()
     private var store: Store { Store.shared }
     var body: some View {
-        NavigationStack(path: $path) {
+        // The same opener for the tab's life; only what it does is set here.
+        let stack = $path
+        opener.go = { g in stack.wrappedValue.append(g) }
+        return NavigationStack(path: $path) {
             content(scrollTop)
                 .modifier(BarFade())
                 .background { Backdrop(ref: store.shown?.art) }
@@ -77,7 +81,7 @@ struct TabPage<C: View>: View {
                 .navigationDestination(for: Go.self) { g in RoutePage(go: g, space: space) }
         }
         .environment(\.zoomSpace, space)
-        .environment(\.openRoute) { g in path.append(g) }
+        .environment(\.openRoute, opener)
         .onChange(of: top) { _, _ in if path.isEmpty { scrollTop += 1 } else { path.removeAll() } }
         // A widget's link to this tab's root: back to it.
         .onChange(of: Links.shared.root, initial: true) { _, r in
