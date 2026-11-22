@@ -975,6 +975,7 @@ struct HomeTab: View {
         let fitFoot = wide ? controlsFoot : slotFoot
         let target = min(maxWidth, max(Self.minStage, w - (fitFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
         if target < w - 0.6 { fitWidth = target }
+        SwipeLog.mark("home fit room \(Int(room)) slot \(Int(slotFoot)) caption \(Int(controlsFoot)) w \(Int(w)) target \(Int(target)) wide \(wide)")
         // Where the caption would stand at the width it ends up with.
         let end = min(target, w)
         let foot = controlsFoot - (w - end) * Self.footPerWidth
