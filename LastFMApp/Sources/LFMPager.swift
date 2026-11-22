@@ -85,12 +85,16 @@ struct Pager: View {
             let bars = (top: max(insets.top, g.safeAreaInsets.top), bottom: max(insets.bottom, g.safeAreaInsets.bottom))
             let nameSize = PivotHeaders.size(panels.count, k)
             let head = bars.top + S.head + ceil(nameSize * 1.25) + (accessory == nil ? 0 : S.head + accessoryHeight)
+            // Where the pages are cut: just under the names' descenders; with a pinned row under the names (Charts' kinds),
+            // at that row's foot. It was cut 6 pt above the row's foot there too, and what scrolled up (the "show all"
+            // capsule) sat half under the picker in the shade (run 49 gate).
+            let cut = accessory == nil ? head - S.head + 6 : head
             ZStack(alignment: .topLeading) {
                 ScrollViewReader { _ in
                     ScrollView(.horizontal) {
                         // Every section built at once, at rest: lazily, a section was built whole on its first reveal,
                         // mid-drag (run 39: 180 and 720 ms with no frame on the first swipe to a stretch).
-                        HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, head, bars.bottom, pw, side).frame(width: W).id(p.id) } }
+                        HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, head, cut, bars.bottom, pw, side).frame(width: W).id(p.id) } }
                             .scrollTargetLayout()
                     }
                     // The system's own paging: a light flick turns the page (Richard, 2026-11-15: "too much like weight
@@ -161,7 +165,7 @@ struct Pager: View {
                 // and already thinning before the line where the pages are cut, then easing out over 60 pt: it was 0.93
                 // right to the cut and gone 34 pt later, a flat dark bar with a hard foot over today's wall with a song
                 // on (run 49 gate).
-                let cut = head - S.head + 6, H = cut + 60
+                let H = cut + 60
                 LinearGradient(stops: [
                     .init(color: S.ground.opacity(0.95), location: 0),
                     .init(color: S.ground.opacity(0.93), location: max(0, cut - 24) / H),
@@ -196,7 +200,7 @@ struct Pager: View {
     }
 
     // Each section scrolls on its own, starting under the names and passing beneath them as it goes up.
-    private func panel(_ p: Panel, _ head: CGFloat, _ foot: CGFloat, _ pw: CGFloat, _ side: (leading: CGFloat, trailing: CGFloat)) -> some View {
+    private func panel(_ p: Panel, _ head: CGFloat, _ cut: CGFloat, _ foot: CGFloat, _ pw: CGFloat, _ side: (leading: CGFloat, trailing: CGFloat)) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 Color.clear.frame(height: 0).id("top")
@@ -209,8 +213,9 @@ struct Pager: View {
             }
             // The page is cut just under the names, so nothing scrolled up is ever read through them (run 44,
             // scroll-now at 20 s: a row's title under "sam today"); the shade over that line lets it come in soft.
-            .contentMargins(.top, S.head - 6, for: .scrollContent)
-            .padding(.top, head - S.head + 6)
+            // At rest the content starts where it always has, S.head under the head (its own top air).
+            .contentMargins(.top, head - cut, for: .scrollContent)
+            .padding(.top, cut)
             .contentMargins(.bottom, foot, for: .scrollContent)
             .scrollIndicators(.hidden)
             .environment(\.pageWidth, pw)
