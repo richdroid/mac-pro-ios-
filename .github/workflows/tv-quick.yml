@@ -176,6 +176,8 @@ jobs:
             shot tab3-portrait 3 7 $M -tab 3
             shot tab0-portrait 3 8 $M/repisode -tab 0
             shot tab2-portrait 3 8 $M/repisode -tab 2
+            # Mint playing a song: the Music player itself, not its idle page.
+            shot tab2-mint-portrait 3 8 $M/rmint -tab 2
           fi
           if has tour; then
             [ -z "$OPENED" ] && tourfilm tour 1
