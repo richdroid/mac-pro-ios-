@@ -596,7 +596,9 @@ extension View {
     }
     // A tab's own page: its title is the first row, so no empty bar sits above it and every tab starts at the same height.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
-        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)").toolbar(.hidden, for: .navigationBar)
+        // Clear of the rail, less the list's own 20 pt margin, which a tab's list sets beside the room open upright (RailRoom).
+        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)").toolbar(.hidden, for: .navigationBar).railRoom(listMargin: 20)
+            .background { TabTop.Marker(tab: tab) }
     }
     // For the build's films of Back (-swipeLog YES, never on the phone): where this view is, its size and its safe area,
     // each time any of them changes, to the swipe log. A page or a title row that is moved or resized as a page goes back
@@ -620,19 +622,36 @@ struct RootView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var size
     @State private var resets: [Int: Int] = [:]
+    static let tabs: [RailItem] = [
+        RailItem(value: 0, title: "my chumby", asset: "OctoTab", fit: 34),
+        RailItem(value: 1, title: "channels", symbol: "tv"),
+        RailItem(value: 2, title: "alarms", symbol: "alarm"),
+        RailItem(value: 3, title: "sounds", symbol: "music.note"),
+        RailItem(value: 4, title: "tinker", symbol: "wrench.adjustable"),
+    ]
+    @ViewBuilder func page(_ t: Int) -> some View {
+        switch t {
+        case 0: HomeTab()
+        case 1: ChannelsTab()
+        case 2: AlarmsTab()
+        case 3: SoundsTab()
+        default: TinkerTab()
+        }
+    }
     var body: some View {
         PaneReader {
             ZStack {
                 // The sea's own base colour under everything, so the first frame matches the launch screen.
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()
-                // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area.
+                // The Duo's side column (clock, Wi-Fi and the tabs) is the trailing safe area.
                 Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
-                TabView(selection: TabReset.binding($model.tab) { retap($0) }) {
-                    Tab(value: 0) { NavigationStack { HomeTab().tabPage(0, model) }.id(resets[0, default: 0]) } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
-                    Tab(value: 1) { NavigationStack { ChannelsTab().tabPage(1, model) }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
-                    Tab(value: 2) { NavigationStack { AlarmsTab().tabPage(2, model) }.id(resets[2, default: 0]) } label: { tabLabel("alarms", "alarm") }
-                    Tab(value: 3) { NavigationStack { SoundsTab().tabPage(3, model) }.id(resets[3, default: 0]) } label: { tabLabel("sounds", "music.note") }
-                    Tab(value: 4) { NavigationStack { TinkerTab().tabPage(4, model) }.id(resets[4, default: 0]) } label: { tabLabel("tinker", "wrench.adjustable") }
+                // The tabs as one vertical glass pill at the foot of the right rail, in every posture: the content full
+                // width on the left, the rail with the status at its top and the tabs at its foot. Never a bar along the
+                // foot (Richard, 2026-11-21: "this is what iphone duo apps look like"). The system's TabView put them
+                // there folded and open flat, but drew a bar across the foot open upright. The same rail as the Mac Pro
+                // app's (SideRailTabs); each tab's pages keep clear of it (railRoom, in tabPage).
+                SideRailTabs(selection: TabReset.binding($model.tab) { retap($0) }, items: Self.tabs, badge: { _ in 0 }, prewarm: UserDefaults.standard.bool(forKey: "noPrewarm") ? [] : [1, 2, 3, 4]) { t in
+                    NavigationStack { page(t).tabPage(t, model) }.id(resets[t, default: 0])
                 }
                 .onChange(of: model.tab) { _, t in Haptic.fire(.tick); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
             }
@@ -655,8 +674,8 @@ struct RootView: View {
         }
         .task {
             guard ChumbyModel.pose == "retap" else { return }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            TabTop.scrollDown()
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            TabTop.scrollDown(model.tab)
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             retap(model.tab)
         }
@@ -668,7 +687,7 @@ struct RootView: View {
     // and root is started over.
     func retap(_ t: Int) {
         if t == 2 && model.alarmsPage { model.alarmsPage = false; return }
-        if TabTop.scroll() { if t == 0 { model.homePoke = Date() }; return }
+        if TabTop.scroll(t) { if t == 0 { model.homePoke = Date() }; return }
         resets[t, default: 0] += 1
         // Home again: the octopus answers, as it does to a tap.
         if t == 0 { model.homePoke = Date() }
@@ -679,15 +698,20 @@ struct RootView: View {
 // The lists showing on the tab in front, found the way UIKit's own second tap finds them: the tab bar's selected page and
 // every vertical scroll view in it (both panes open flat). Horizontal strips (Woke up to) and text fields are left alone.
 @MainActor enum TabTop {
-    static func tabPage() -> UIView? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard let root = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow?.rootViewController else { return nil }
-        func find(_ c: UIViewController) -> UITabBarController? {
-            if let t = c as? UITabBarController { return t }
-            for k in c.children { if let t = find(k) { return t } }
-            return nil
+    // Each tab's root page leaves a marker; its navigation stack is found from it, as the tab bar's selected page was.
+    nonisolated(unsafe) static let markers = NSMapTable<NSNumber, UIView>.strongToWeakObjects()
+    struct Marker: UIViewRepresentable {
+        let tab: Int
+        func makeUIView(context: Context) -> UIView { let v = UIView(); v.isUserInteractionEnabled = false; TabTop.markers.setObject(v, forKey: NSNumber(value: tab)); return v }
+        func updateUIView(_ v: UIView, context: Context) { TabTop.markers.setObject(v, forKey: NSNumber(value: tab)) }
+    }
+    static func tabPage(_ tab: Int) -> UIView? {
+        var r: UIResponder? = markers.object(forKey: NSNumber(value: tab))
+        while let n = r {
+            if let c = n as? UIViewController { return (c.navigationController ?? c).view }
+            r = n.next
         }
-        return find(root)?.selectedViewController?.view
+        return nil
     }
     static func lists(in v: UIView, _ each: (UIScrollView) -> Void) {
         if let s = v as? UIScrollView, !(s is UITextView), s.isScrollEnabled, !s.isHidden, s.alpha > 0.01,
@@ -695,8 +719,8 @@ struct RootView: View {
         for k in v.subviews { lists(in: k, each) }
     }
     // Glides each list that isn't at its top back there; true if any moved.
-    static func scroll() -> Bool {
-        guard let page = tabPage() else { return false }
+    static func scroll(_ tab: Int) -> Bool {
+        guard let page = tabPage(tab) else { return false }
         var moved = false
         lists(in: page) { s in
             let top = -s.adjustedContentInset.top
@@ -707,8 +731,8 @@ struct RootView: View {
         return moved
     }
     // The film's setup: each list a good way down.
-    static func scrollDown() {
-        guard let page = tabPage() else { return }
+    static func scrollDown(_ tab: Int) {
+        guard let page = tabPage(tab) else { return }
         lists(in: page) { s in
             let bottom = s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height
             s.setContentOffset(CGPoint(x: s.contentOffset.x, y: max(-s.adjustedContentInset.top, min(bottom, 600))), animated: true)
@@ -716,7 +740,10 @@ struct RootView: View {
     }
 }
 #else
-@MainActor enum TabTop { static func scroll() -> Bool { false }; static func scrollDown() {} }
+@MainActor enum TabTop {
+    struct Marker: View { let tab: Int; var body: some View { Color.clear } }
+    static func scroll(_ tab: Int) -> Bool { false }; static func scrollDown(_ tab: Int) {}
+}
 #endif
 // "Can’t reach the Mac · last seen 7:12" (or "Not answering") as a row under a page's title, never floating over the list; a tap says what to do.
 struct ReachRow: View {
@@ -2816,7 +2843,7 @@ struct SoundsTab: View {
         // Folded and open upright a value's list is pushed (the system's Back); open flat it is the right pane. A turn
         // keeps it: the binding only lets go when the page itself goes back.
         .navigationDestination(isPresented: Binding(get: { choosing != nil && !wide }, set: { if !$0 && !wide { choosing = nil } })) {
-            if let c = choosing { chooserPage(c, pane: false).environmentObject(model) }
+            if let c = choosing { chooserPage(c, pane: false).environmentObject(model).railRoom() }
         }
         .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 && !pickPane { pickSong = false } })) { MacSongPicker(draft: draft, toPane: { pickPane = true }).environmentObject(model) }
         // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held

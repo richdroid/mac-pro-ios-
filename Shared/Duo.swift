@@ -510,14 +510,16 @@ struct RailItem: Identifiable {
     let title: String
     var symbol: String? = nil
     var asset: String? = nil
+    // How large an asset icon is fitted (the Chumby's octopus is drawn small in its box, so it takes 34).
+    var fit: CGFloat = 25
     var id: Int { value }
     @ViewBuilder var label: some View {
-        if let asset { tabLabel(title, asset: asset) } else { tabLabel(title, symbol ?? "circle") }
+        if let asset { tabLabel(title, asset: asset, fit: fit) } else { tabLabel(title, symbol ?? "circle") }
     }
     // The icon alone, fitted the same as in the system's bar.
     var icon: Image {
         #if canImport(UIKit)
-        if let asset { return Image(uiImage: cachedIcon(asset, fit: 25) { UIImage(named: asset) }) }
+        if let asset { return Image(uiImage: cachedIcon(asset, fit: fit) { UIImage(named: asset) }) }
         let name = symbol ?? "circle"
         return Image(uiImage: cachedIcon(name, fit: 25) { UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 60, weight: .regular)) })
         #else
@@ -536,18 +538,23 @@ extension EnvironmentValues { var sideRail: CGFloat { get { self[SideRailKey.sel
 // page takes it here, as it does the rail's.
 private struct BottomBarKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 extension EnvironmentValues { var bottomBar: CGFloat { get { self[BottomBarKey.self] } set { self[BottomBarKey.self] = newValue } } }
+// `listMargin`: what the page adds of its own on top of the room the app gives it. Open upright (no system strip, so the
+// room is the app's) a tab's list and the Mac Pro app's pages set their 20 pt margin beside the room rather than within
+// it, and ended 20 pt short of a pushed Chumby page, which sets it within (gate, 11-22). Taken off here, every page ends
+// 10 pt short of the pill, as it does where the system's strip gives the room.
 struct RailRoom: ViewModifier {
+    var listMargin: CGFloat = 0
     @Environment(\.sideRail) private var rail
     @Environment(\.bottomBar) private var bar
     @State private var has: CGFloat = 0
     func body(content: Content) -> some View {
         content
-            .safeAreaPadding(.trailing, rail > 0 ? max(0, rail - has) : 0)
+            .safeAreaPadding(.trailing, rail > has ? max(0, rail - has - listMargin) : 0)
             .safeAreaPadding(.bottom, bar)
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
     }
 }
-extension View { func railRoom() -> some View { modifier(RailRoom()) } }
+extension View { func railRoom(listMargin: CGFloat = 0) -> some View { modifier(RailRoom(listMargin: listMargin)) } }
 
 // Tabs with the rail drawn along the trailing edge, for where the system's own would hold too few and put the rest
 // under "More" (the Duo folded on its side holds four). Never a More list: every tab is in the rail, one tap away.
@@ -561,19 +568,28 @@ struct SideRailTabs<Content: View>: View {
     // Stepped aside while the keyboard is up, as the system's rail does: above the keyboard it ran into the status at the
     // top folded on its side. The page keeps the room, so nothing on it moves as the rail goes and comes back.
     var hidden = false
+    // The tabs to build ahead, after the first frame, one per idle turn, so a tab's first open isn't its first build (a
+    // 250-1300 ms freeze, Mint Remote audit 11-22). Opt-in: only tabs whose pages do nothing on appearing but load.
+    var prewarm: [Int] = []
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
     @State private var edge: CGFloat = 0
     @Environment(\.colorScheme) private var scheme
-    // The system's own rail, measured on the build's "before" shot at 859 x 604 pt (CI d8bbee4): 45 pt wide, an icon
-    // every 49 pt, 26 pt clear of the foot, the tab in front on a dark inset capsule (designer gate 1, 2026-11-20).
-    static var cell: CGFloat { 39 }
+    // The system's own rail, measured on the build's "before" shot at 859 x 604 pt (CI d8bbee4): an icon every 49 pt,
+    // 26 pt clear of the foot, the tab in front on a dark inset capsule (designer gate 1, 2026-11-20). Each cell 44 pt
+    // wide, the HIG's least tap target (it was 39, the system's look; HIG gate 11-22).
+    static var cell: CGFloat { 44 }
     static var cellHeight: CGFloat { 49 }
     static var inset: CGFloat { 3 }
     static var margin: CGFloat { 10 }
     static var foot: CGFloat { 26 }
     static var width: CGFloat { cell + inset * 2 }
-    private var column: CGFloat { max(edge, Self.margin * 2 + Self.width) }
+    // The pill's centre line, from the display's trailing edge: the status column's (the clock and Wi-Fi stand 48 pt in,
+    // folded, open flat and open upright alike, and the system's own rail on that line). Centred in the page's clear
+    // column instead, it stood 42 pt in folded and 33 open upright, off the status above it (gate, 11-22).
+    static var centre: CGFloat { 48 }
+    // The page keeps clear of the pill and a margin past it, or of the system's strip where that is wider.
+    private var column: CGFloat { max(edge, Self.centre + Self.width / 2 + Self.margin) }
     var body: some View {
         ZStack {
             ForEach(items) { it in
@@ -592,11 +608,21 @@ struct SideRailTabs<Content: View>: View {
         .environment(\.sideRail, column)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        .task {
+            guard !prewarm.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            for t in prewarm where !shown.contains(t) {
+                await Task.yield()
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                shown.insert(t)
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
-            // Centred in the strip, measured from the display's edge.
-            rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.foot)
+            // On the status column's centre line, measured from the display's edge; its foot 26 pt from the display's bottom edge, as
+            // the system's rail stands (measured from the bottom safe area it stood about 62 pt up: Chumby gate, 11-22).
+            rail.padding(.trailing, Self.centre - Self.width / 2).padding(.bottom, Self.foot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .ignoresSafeArea(.container, edges: .trailing)
+                .ignoresSafeArea(.container, edges: [.trailing, .bottom])
                 .opacity(hidden ? 0 : 1).allowsHitTesting(!hidden).accessibilityHidden(hidden)
                 .animation(.easeOut(duration: 0.25), value: hidden)
         }
