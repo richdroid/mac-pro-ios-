@@ -569,12 +569,27 @@ struct TabBarFade: ViewModifier {
     }
 }
 
-extension View {
-    // The room a scroll page has for its content: its height less the safe areas (the status bar, the tab bar or the home
-    // indicator), read from the page itself, whichever of them its frame already leaves out.
-    func homeRoom(_ set: @escaping (CGFloat) -> Void) -> some View {
-        onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { set($0) }
+// The page's own height. It used to be taken less its safe-area insets, but its frame already leaves them out (it runs
+// from under the status bar's inset to the top of the tab bar or the home indicator's inset, measured in all three
+// postures), and the insets came off twice: open upright the fit read 621 pt of the 786 there are, folded 610 of 644,
+// open flat 601 of 635. That held the wordmark, octopus and device at their 250 pt floor folded and open upright
+// (Richard, 11-21: "chumby logo now too small revert back to old size").
+// With it, how far the page's content still runs on under the bottom bar or the home indicator, where a line would be
+// seen half (the bottom inset, as the page reads it).
+struct HomeRoomReader: ViewModifier {
+    let set: (CGFloat, CGFloat) -> Void
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: [CGFloat].self) { [$0.size.height, $0.safeAreaInsets.bottom] } action: { v in
+            SwipeLog.mark("home room \(Int(v[0])) under \(Int(v[1]))")
+            set(v[0], v[1])
+        }
     }
+}
+
+extension View {
+    // The room a scroll page has for its content: its own frame, which is already clear of the status bar, the tab bar
+    // and the home indicator.
+    func homeRoom(_ set: @escaping (CGFloat, CGFloat) -> Void) -> some View { modifier(HomeRoomReader(set: set)) }
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
         self.background { if shown { ZStack { SeaBackground(active: active); GhostOctopus(active: active) }.ignoresSafeArea() } }
@@ -944,13 +959,30 @@ struct HomeTab: View {
 
     // The web app's proportions: the octopus is 92 wide on a 380 stage and sits 58 above its top edge.
     // The device is sized from the room, one width per posture, for the tallest everyday state (a moved ring's card, the
-    // re-skip note, a nap, a ring), so Skip and Undo never resize it. It is wide as it can be until the caption under the
-    // controls ends at least 16 pt above the bottom of the room (never under 250). Measured, not guessed: the caption's
-    // foot against the room, which only ever narrows the width within a posture (a new room starts over).
+    // re-skip note, a nap, a ring), so Skip and Undo never resize it. It is wide as it can be until the last control under
+    // it ends at least 16 pt above the bottom of the room (never under 250); open flat, where the controls are in the other
+    // pane, until the caption does. Measured, not guessed: that foot against the room, which only ever narrows the width
+    // within a posture (a new room starts over).
+    // One column, the fit ends on the controls, not on the caption under them (Richard, 11-21, on the build of 8fc3cdf:
+    // "chumby logo now too small revert back to old size"). Ending on the caption took the wordmark, octopus and device
+    // down to the 250 floor folded and nearly so open upright; the caption now waits just below the fold, a scroll away.
     @State private var fitWidth: CGFloat?
     @State private var fitRoom: CGFloat = 0
     @State private var controlsFoot: CGFloat = 0
+    @State private var slotFoot: CGFloat = 0
+    // The stage's width when each foot was read: a reading taken before the last change of width is worked from the width
+    // it was taken at. Worked from the new width instead, a stale reading narrowed the device a second time (the build's
+    // log, 11-21: 330 → 273 → 250 folded, where 273 fits).
+    @State private var slotWidth: CGFloat = 0
+    // Whether the controls' foot was read while a ring held Home (its card in the slot, the snooze ring's room made).
+    @State private var slotRing = false
+    // While a ring holds Home, folded and open upright, the device may narrow further so Stop is on screen; the width at
+    // rest is kept apart and comes back on Stop. Home at rest is never sized by a ring's card (it is about 75 pt taller
+    // than the next alarm's): before, one ring narrowed the device for the rest of the posture.
+    @State private var ringFit: CGFloat?
+    @State private var captionWidth: CGFloat = 0
     @State private var room: CGFloat = 0
+    @State private var under: CGFloat = 0
     static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340
     // Allowance for the tallest everyday state over the one measured.
     static let tallestExtra: CGFloat = 40
@@ -960,18 +992,33 @@ struct HomeTab: View {
     // How far the caption's foot moves per point of stage width: the octopus's lift (58/380) and the device's own height.
     static let footPerWidth: CGFloat = 58.0 / 380 + 325.0 / 371
     var maxWidth: CGFloat { wide ? Self.wideStage : Self.maxStage }
-    var stageWidth: CGFloat { min(fitWidth ?? maxWidth, maxWidth) }
+    var stageWidth: CGFloat { min(fitWidth ?? maxWidth, ringHolds && !wide ? (ringFit ?? maxWidth) : maxWidth, maxWidth) }
     func refit() {
-        guard room > 0, controlsFoot > 0 else { return }
-        if abs(fitRoom - room) > 1 { fitRoom = room; fitWidth = nil }
+        guard room > 0, controlsFoot > 0, wide || slotFoot > 0 else { return }
+        if abs(fitRoom - room) > 1 { fitRoom = room; fitWidth = nil; ringFit = nil }
         let w = stageWidth
-        let target = min(maxWidth, max(Self.minStage, w - (controlsFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
+        // A ring's reading sizes only the ring's width; one taken at rest, only the width at rest. A reading left from the
+        // other state (before the page is laid out again) is passed over.
+        if !wide, slotRing != ringHolds { return }
+        if !wide, ringHolds {
+            let t = min(maxWidth, max(Self.minStage, slotWidth - (slotFoot + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
+            if t < w - 0.6 { withAnimation(ChumbyModel.ringChange(to: model.sys.ringing)) { ringFit = t } }
+            return
+        }
+        // Sized for Home at rest: the feet are read less the snooze ring's room (taken off as each is measured), so a
+        // ring never narrows the device for the rest of the posture.
+        let fitFoot = wide ? controlsFoot : slotFoot
+        let at = (wide ? captionWidth : slotWidth) > 0 ? (wide ? captionWidth : slotWidth) : w
+        let target = min(maxWidth, max(Self.minStage, at - (fitFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
         if target < w - 0.6 { fitWidth = target }
+        SwipeLog.mark("home fit room \(Int(room)) slot \(Int(slotFoot))@\(Int(slotWidth)) caption \(Int(controlsFoot)) w \(Int(w)) target \(Int(target)) wide \(wide)")
         // Where the caption would stand at the width it ends up with.
         let end = min(target, w)
-        let foot = controlsFoot - (w - end) * Self.footPerWidth
+        let foot = controlsFoot - ((captionWidth > 0 ? captionWidth : w) - end) * Self.footPerWidth
         let top = foot - captionHeight
-        let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room - top + 4) : 0
+        // Wholly below: past the bottom bar or the home indicator too, where the page still draws (the room's own foot left
+        // it half seen there, folded).
+        let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room + under - top + 4) : 0
         if abs(push - captionPush) > 0.5 { captionPush = push }
     }
     var k: CGFloat { stageWidth / 380 }
@@ -987,11 +1034,15 @@ struct HomeTab: View {
     var octLift: CGFloat { 58 * k + 15 }
     // The snooze ring stands this far above the octopus's top: its extra size, its 2 pt lift and half its 5 pt stroke.
     var ringRise: CGFloat { ringSize - octHeight + 2 + 2.5 }
-    // The room the snooze ring needs above the octopus is always kept, so the ring comes and goes over a still stage: it
-    // used to be made only while snoozed, and the octopus, device and caption dropped about 20 pt on Snooze and came back
-    // on Stop (gate, 11-18). The ring's top keeps the same 6 pt clear of the wordmark.
+    // The room the snooze ring needs above the octopus is made when a ring starts, not on Snooze, so the ring comes and
+    // goes over a still stage: made only while snoozed, the octopus, device and caption dropped about 20 pt on Snooze
+    // (gate, 11-18). The ring's top keeps the same 6 pt clear of the wordmark.
     var snoozeK: CGFloat { snoozing ? 1 : 0 }
-    var snoozeRoom: CGFloat { max(0, ringRise + Self.clearance - restGap) }
+    // Kept from the moment an alarm rings until it is stopped, so Snooze itself still moves nothing; at rest the 14 pt
+    // gap is back (Richard, 11-21: the logo "too small" with the room always kept, which also pushed everything down
+    // about 20 pt). It comes and goes in the ring change's own spring, with the ringing card.
+    var ringHolds: Bool { model.sys.ringing != nil }
+    var snoozeRoom: CGFloat { ringHolds ? max(0, ringRise + Self.clearance - restGap) : 0 }
     // From the octopus's top up to the wordmark's foot.
     var wordGap: CGFloat { restGap + snoozeRoom }
     // How high a bubble may rise, from the octopus's centre: fully gone 8 pt below the wordmark's foot (the y's tail
@@ -1052,6 +1103,8 @@ struct HomeTab: View {
             // The picture goes to static, then black, only when the Chumby itself has gone quiet; a route this phone
             // can't use keeps the last picture (2026-11-11 gate: a black screen read as "so it's off?").
             .onChange(of: model.dead) { _, gone in goneAt = gone ? Date() : nil }
+            // Stopped: back to the width at rest, in the ring change's spring, as the ringing card goes.
+            .onChange(of: ringHolds) { _, holds in if !holds, ringFit != nil { withAnimation(ChumbyModel.ringChange(to: nil)) { ringFit = nil } } }
             // Going quiet mid-snooze moves him too, in the same spring a ring change would.
             .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: snoozing)
             .onAppear {
@@ -1174,7 +1227,7 @@ struct HomeTab: View {
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { captionHeight = $0; refit() }
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0 - captionPush; refit() }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0 - captionPush - snoozeRoom; captionWidth = stageWidth; refit() }
             .padding(.bottom, 16)
             Grid(horizontalSpacing: 12, verticalSpacing: 5) {
                 if !name.isEmpty { spec("Name", name) }
@@ -1375,7 +1428,7 @@ struct HomeTab: View {
                     // The wordmark is part of the stage, so it is spaced off the octopus the same way in both layouts.
                     // The reach line arriving or going moves what's under it in one spring, never in one frame.
                     ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12).coordinateSpace(name: "homeContent").animation(.snappy, value: model.unreachable) }.roomyIndicators()
-                        .homeRoom { room = $0; refit() }
+                        .homeRoom { room = $0; under = $1; refit() }
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -1398,6 +1451,8 @@ struct HomeTab: View {
                         VStack(spacing: 0) { controls }
                             .frame(maxWidth: Self.column)
                             .padding(.top, Self.underDevice)
+                            // What the fit ends on, one column: the foot of the last control.
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { slotFoot = $0; slotRing = ringHolds; slotWidth = stageWidth; refit() }
                         Color.clear.frame(height: 1).id("homebar")
                         about.padding(.top, Self.sectionGap)
                         if moreInfo { more.frame(maxWidth: Self.column) }
@@ -1405,7 +1460,7 @@ struct HomeTab: View {
                     .coordinateSpace(name: "homeContent")
                     .animation(.snappy, value: model.unreachable)
                 }.roomyIndicators()
-                .homeRoom { room = $0; refit() }
+                .homeRoom { room = $0; under = $1; refit() }
                 // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
                 // "Chumby Classic" through it. homecard: Home scrolled to its Playing card (the playing scene), folded.
                 .task {
