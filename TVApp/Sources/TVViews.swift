@@ -279,7 +279,7 @@ struct RootView: View {
             // Content full width on the left, the tabs a glass pill at the foot of one rail on the right, in every posture,
             // as in Mac Pro: never a bar along the foot (Richard's reference of 2026-11-21, "this is what iphone duo apps
             // look like"). The system's TabView drew one open upright.
-            SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, hidden: keyboardUp, prewarm: Self.railItems.map(\.value)) { t in
+            SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, hidden: keyboardUp) { t in
                 tabPage(t).environment(\.tabInFront, model.tab == t)
             }
             .onChange(of: model.tab) { was, t in

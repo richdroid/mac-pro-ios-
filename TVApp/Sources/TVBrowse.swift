@@ -495,7 +495,7 @@ struct FlickCardButton: View {
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             // Held, it lifts off the shelf; thrown up, it goes to the TV (ShelfFlick, the streams page's own hand).
-            .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in place.rect ?? .zero }))
+            .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in var r = place.rect ?? .zero; r.size.height = max(0, r.height - MediaCard.band(width)); return r }))
             // For the build's shelf films: the first card drawn says where it is, so a real finger lands on it.
             .shotSpot(ShelfSpot.claim(item.id) ? "card" : "", pose: "shelf")
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
