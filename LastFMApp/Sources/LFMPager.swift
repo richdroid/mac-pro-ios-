@@ -294,7 +294,17 @@ private struct PivotHeaders: View {
     }
     // Where the row rests for each page: scrolled so the name before the current one leads at the margin (the first two
     // pages rest at the row's start).
-    static func rests(_ names: [String], _ size: CGFloat) -> [CGFloat] {
+    // Measured once per set of names and size, not in every frame of a swipe (the body runs each frame as the names
+    // follow the finger, and Charts' seven names were seven text measurements a frame).
+    @MainActor private static var restsKept: [String: [CGFloat]] = [:]
+    @MainActor static func rests(_ names: [String], _ size: CGFloat) -> [CGFloat] {
+        let key = "\(size)|" + names.joined(separator: "\u{1}")
+        if let hit = restsKept[key] { return hit }
+        let out = measure(names, size)
+        restsKept[key] = out
+        return out
+    }
+    private static func measure(_ names: [String], _ size: CGFloat) -> [CGFloat] {
         var starts: [CGFloat] = [], x: CGFloat = 0
         for n in names { starts.append(x); x += textWidth(n, size: size, tracking: -0.8, weight: -0.4) + gap }
         return names.indices.map { $0 == 0 ? 0 : starts[$0 - 1] }

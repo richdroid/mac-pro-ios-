@@ -176,34 +176,46 @@ struct ChartSummary: Sendable {
     }
 
     // The collage as one picture to share: the covers drawn edge to edge at 2,000 px, made whenever the grid changes.
+    // Drawn off the main thread, a moment after the stretch is landed on, and only when its covers changed: it was drawn
+    // on the main thread at every landing of a pivot swipe, in the swipe's own settle (run 49 gate: Charts' swipes
+    // dropped about a third of their frames while Library held 53-59 fps).
     @ObservationIgnored private var renderTask: Task<Void, Never>?
+    @ObservationIgnored private var renderKey = ""
     func render() {
         let n = size
         let list = collageCells(entries, n * n)
+        let key = "\(n)|" + list.map(\.id).joined(separator: ",")
+        guard key != renderKey else { return }
+        renderKey = key
         renderTask?.cancel()
         shareImage = nil
         guard !list.isEmpty else { return }
+        let refs = list.map(\.art), fills = list.map { Palette.from(name: $0.artist + $0.album).vivid }
         renderTask = Task {
-            let side = 2000, cell = side / n
-            var images: [CGImage?] = []
-            for e in list { images.append(await ArtStore.shared.image(e.art, px: 700)) }
-            guard !Task.isCancelled,
-                  let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-            ctx.setFillColor(CGColor(red: 0.035, green: 0.035, blue: 0.045, alpha: 1))
-            ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
-            ctx.interpolationQuality = .high
-            for (i, img) in images.enumerated() {
-                let r = CGRect(x: (i % n) * cell, y: side - (i / n + 1) * cell, width: cell, height: cell)
-                if let img { ctx.draw(img, in: r) }
-                else {
-                    let p = Palette.from(name: list[i].artist + list[i].album)
-                    ctx.setFillColor(CGColor(red: p.vivid.r, green: p.vivid.g, blue: p.vivid.b, alpha: 1))
-                    ctx.fill(r)
-                }
-            }
-            guard let out = ctx.makeImage(), !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled, let out = await Self.draw(refs, fills, n), !Task.isCancelled else { return }
             shareImage = Image(decorative: out, scale: 1)
         }
+    }
+    nonisolated private static func draw(_ refs: [ArtRef], _ fills: [Palette.RGB], _ n: Int) async -> CGImage? {
+        let side = 2000, cell = side / n
+        var images: [CGImage?] = []
+        for r in refs { images.append(await ArtStore.shared.image(r, px: 700)) }
+        guard !Task.isCancelled,
+              let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(red: 0.035, green: 0.035, blue: 0.045, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        ctx.interpolationQuality = .high
+        for (i, img) in images.enumerated() {
+            let r = CGRect(x: (i % n) * cell, y: side - (i / n + 1) * cell, width: cell, height: cell)
+            if let img { ctx.draw(img, in: r) }
+            else {
+                let p = fills[i]
+                ctx.setFillColor(CGColor(red: p.r, green: p.g, blue: p.b, alpha: 1))
+                ctx.fill(r)
+            }
+        }
+        return ctx.makeImage()
     }
 }
 
@@ -409,19 +421,7 @@ struct ChartsTab: View {
                 SectionHead(text: "collage")
                 HStack(spacing: S.gap) {
                     Segments(items: [3, 4, 5], selection: Binding(get: { m.size }, set: { m.size = $0; m.render() }), fill: true) { "\($0)×\($0)" }
-                    if current, let img = m.shareImage {
-                        ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
-                            Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                                .padding(.horizontal, 16).frame(height: 44)
-                                .glassEffect(.regular.interactive(), in: Capsule())
-                        }
-                        .buttonStyle(Press())
-                    } else {
-                        Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 16).frame(height: 44).foregroundStyle(S.soft)
-                            .glassEffect(.regular, in: Capsule())
-                            .accessibilityLabel("Share, getting the picture ready")
-                    }
+                    CollageShare(current: current)
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: n), spacing: 1) {
                     ForEach(cells) { e in
@@ -457,6 +457,28 @@ struct ChartsTab: View {
                 }
             }
             .padding(.horizontal, S.margin)
+        }
+    }
+}
+
+// The collage's Share, on its own: the picture arriving redraws this button only, not every page of the pivot (the tab
+// read the picture itself, and every stretch's page was built again as it was let go and as it came).
+private struct CollageShare: View {
+    let current: Bool
+    private var m: ChartsModel { ChartsModel.shared }
+    var body: some View {
+        if current, let img = m.shareImage {
+            ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
+                Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 16).frame(height: 44)
+                    .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .buttonStyle(Press())
+        } else {
+            Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 16).frame(height: 44).foregroundStyle(S.soft)
+                .glassEffect(.regular, in: Capsule())
+                .accessibilityLabel("Share, getting the picture ready")
         }
     }
 }
