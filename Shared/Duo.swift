@@ -510,14 +510,16 @@ struct RailItem: Identifiable {
     let title: String
     var symbol: String? = nil
     var asset: String? = nil
+    // How large an asset icon is fitted (the Chumby's octopus is drawn small in its box, so it takes 34).
+    var fit: CGFloat = 25
     var id: Int { value }
     @ViewBuilder var label: some View {
-        if let asset { tabLabel(title, asset: asset) } else { tabLabel(title, symbol ?? "circle") }
+        if let asset { tabLabel(title, asset: asset, fit: fit) } else { tabLabel(title, symbol ?? "circle") }
     }
     // The icon alone, fitted the same as in the system's bar.
     var icon: Image {
         #if canImport(UIKit)
-        if let asset { return Image(uiImage: cachedIcon(asset, fit: 25) { UIImage(named: asset) }) }
+        if let asset { return Image(uiImage: cachedIcon(asset, fit: fit) { UIImage(named: asset) }) }
         let name = symbol ?? "circle"
         return Image(uiImage: cachedIcon(name, fit: 25) { UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 60, weight: .regular)) })
         #else
