@@ -113,6 +113,8 @@ struct TitlePage: View {
     @State private var st: TitleState
     @State private var carry = Carry()
     @State private var groundID = UUID()
+    // How far the list under the poster has scrolled (stacked pages), read by the poster alone.
+    @State private var listY = PageScrollY()
     init(target: FlickTarget) { _st = State(initialValue: TitleState(target)) }
     var body: some View {
         GeometryReader { g in
@@ -140,16 +142,30 @@ struct TitlePage: View {
                         .scrollBounceBehavior(.basedOnSize)
                     }
                 } else {
+                    // The poster leads the page, then gives the streams and episodes the room as he scrolls: it shrinks to
+                    // half as the list comes up under it, its foot always on the list's top, then goes up and away (gate 5:
+                    // pinned, it took 60 % of the open upright page and left the episodes a 250 pt slot). Outside the scroll
+                    // view, so his hand still lifts and throws it, nothing clips it on its way to the lip, and a drag beside
+                    // it scrolls.
+                    let maxW = g.size.width * 0.55
+                    let full = cardSize(maxH: g.size.height * (g.size.height < 560 ? 0.42 : 0.46), maxW: maxW).height
                     VStack(spacing: 0) {
                         header.padding(.horizontal, 20).padding(.top, 4)
-                        card(maxH: g.size.height * (g.size.height < 560 ? 0.42 : 0.46), maxW: g.size.width * 0.55)
-                            .padding(.vertical, 12)
-                            .zIndex(1)
-                        ScrollView {
-                            details.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
+                        ZStack(alignment: .top) {
+                            ScrollView {
+                                VStack(spacing: 0) {
+                                    Color.clear.frame(height: full + 24)
+                                    details.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
+                                }
+                            }
+                            .scrollIndicators(.hidden)
+                            .scrollBounceBehavior(.basedOnSize)
+                            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
+                                if abs(listY.y - y) > 0.25 { listY.y = y }
+                            }
+                            ShrinkingCard(scroll: listY, full: full) { h in card(maxH: h, maxW: maxW) }
+                                .zIndex(1)
                         }
-                        .scrollIndicators(.hidden)
-                        .scrollBounceBehavior(.basedOnSize)
                     }
                 }
             }
@@ -195,11 +211,16 @@ struct TitlePage: View {
     // MARK: the card
     var art: String { st.item.art }
     var wideArt: Bool { st.item.isYouTube || st.target.send != nil || st.item.kind == "link" }
-    func card(maxH: CGFloat, maxW: CGFloat) -> some View {
+    func cardSize(maxH: CGFloat, maxW: CGFloat) -> CGSize {
         let aspect: CGFloat = wideArt ? 16.0 / 9 : st.target.source == .mint ? 1 : 2.0 / 3
         var h = maxH
         var w = h * aspect
         if w > maxW { w = maxW; h = w / aspect }
+        return CGSize(width: w, height: h)
+    }
+    func card(maxH: CGFloat, maxW: CGFloat) -> some View {
+        let size = cardSize(maxH: maxH, maxW: maxW)
+        let w = size.width, h = size.height
         return ZStack(alignment: .bottom) {
             Group {
                 if let i = st.target.image { i.resizable().scaledToFill() }
@@ -576,5 +597,26 @@ struct TitleGround: View {
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
+    }
+}
+
+// The stacked title page's poster over its list: full size at rest; as the list scrolls up it shrinks to half with its
+// foot on the list's top, then rises with the list and fades as it reaches the header. Its own view, so a scroll redraws
+// the poster alone, never the streams and episodes.
+private struct ShrinkingCard<C: View>: View {
+    let scroll: PageScrollY
+    let full: CGFloat
+    @ViewBuilder let card: (CGFloat) -> C
+    var body: some View {
+        let s = max(0, scroll.y)
+        let half = full / 2
+        let h = max(half, full - s)
+        let rise = max(0, s - half)
+        let fade = max(0, min(1, 1 - rise / 60))
+        card(h)
+            .padding(.top, 12 - rise)
+            .opacity(fade)
+            .allowsHitTesting(fade > 0.5)
+            .accessibilityHidden(fade < 0.5)
     }
 }

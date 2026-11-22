@@ -518,6 +518,7 @@ private struct BackToTop: ViewModifier {
     @Environment(\.pageScroll) private var pageScroll
     var posed = true
     @State private var position = ScrollPosition(edge: .top)
+    @State private var scrolled = false
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
@@ -530,9 +531,11 @@ private struct BackToTop: ViewModifier {
             // How far the page has scrolled, for its title to go up with it.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
                 if let pageScroll, abs(pageScroll.y - y) > 0.25 { pageScroll.y = y }
+                if (y > 1) != scrolled { scrolled = y > 1 }
             }
             // Every tab's scrolling page takes this, so it's where the page's top fade goes too, and where it says it's moving.
-            .topFade()
+            // Only once something has scrolled up under it: at rest the first heading is whole and white.
+            .modifier(TopFade(on: scrolled))
             .modifier(ScrollMoving())
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
             // Animated, like a drag, so the bar follows it and folds the title as a real scroll would.

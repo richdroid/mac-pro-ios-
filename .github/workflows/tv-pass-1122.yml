@@ -1,0 +1,108 @@
+name: TV pass 11-22 (branch)
+# Branch-only evidence for the tv-pass-1122 work (remove before merging): the Remote in each state, a title page at rest
+# and scrolled, Search and Watch at rest, and the tab tour cold and after the idle prewarm, folded, open upright and open
+# flat. Published to the tv-pass-1122 release.
+on:
+  push:
+    branches: [tv-pass-1122]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-pass-1122
+  cancel-in-progress: true
+jobs:
+  pass:
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 38
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          tourfilm() {
+            local name=$1 display=$2
+            local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES "${@:3}"
+            sleep 30
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-$name-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-$name-hitches.log
+          }
+          # One posture's set: x is the name's suffix, d the display.
+          set_for() {
+            local x=$1 d=$2
+            for S in repisode rfilm ridle rasleep rtvoff roffline rmint; do shot remote-$S$x $d 9 $M/$S -tab 0; done
+            curl -s $M/real/reset > /dev/null; shot title-series$x $d 14 $M/real -tab 3 -pose realseries
+            # The same page, the list dragged up beside the poster: the poster shrinks and goes, the episodes get the room.
+            curl -s $M/real/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/real -tab 3 -pose realseries
+            sleep 14
+            $D "$DEVICE" drag 0.1 0.88 0.1 0.5 0.6 || echo "drag failed"
+            sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-title-series-scrolled$x.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            shot search$x $d 9 $M -tab 6
+            shot watch-early$x $d 6 $M -tab 3
+            shot watch$x $d 10 $M -tab 3
+            # The first open of each tab, cold (no building ahead), then after the quiet moment that builds them ahead.
+            tourfilm tour-cold$x $d -noPrewarm YES
+            tourfilm tour-warm$x $d -tourDelay 10
+          }
+          set_for "" 1
+          $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5
+          set_for "-portrait" 3
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          set_for "-flat" 3
+          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-pass-1122 >/dev/null 2>&1 || gh release create tv-pass-1122 --prerelease --title "TV pass 11-22" --notes "Branch tv-pass-1122: shots, films and logs."
+          for f in shots.zip films.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-pass-1122 "$f" --clobber && break; sleep 15; done
+          done

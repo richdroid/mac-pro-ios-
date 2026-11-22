@@ -133,8 +133,9 @@ struct Lip: View {
         .frame(width: 64, height: 40).clipShape(shape)
     }
     @ViewBuilder func trailing(_ now: TVNow) -> some View {
+        // On the Remote the big key in the pad's ring wakes it; the lip's own would be a second way on one screen.
         if now.kind == .asleep {
-            LipKey(icon: "power", label: "Turn the TV on") { model.key("wake") }
+            if tab != 0 { LipKey(icon: "power", label: "Turn the TV on") { model.key("wake") } }
         } else if now.playing != nil {
             let shown = model.shownPlaying(now.playing)
             LipKey(icon: shown == true ? "pause.fill" : "play.fill", label: shown == true ? "Pause" : "Play") { model.togglePlay(shown: shown) }
@@ -165,9 +166,13 @@ private struct LipClock: View {
     let session: TVStatus.Session
     let line: String?
     var body: some View {
+        // The time whole, always: the episode's line gives way first (gate 5, item 11: folded it read "1:…").
         TimelineView(.periodic(from: .now, by: 1)) { t in
-            Text(([line] + [clock(at: t.date)]).compactMap { $0 }.joined(separator: " · "))
-                .font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            HStack(spacing: 0) {
+                if let line, !line.isEmpty { Text(line + (clock(at: t.date) == nil ? "" : " · ")).lineLimit(1).truncationMode(.tail) }
+                if let c = clock(at: t.date) { Text(c).lineLimit(1).fixedSize() }
+            }
+            .font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.7))
         }
     }
     func clock(at date: Date) -> String? {

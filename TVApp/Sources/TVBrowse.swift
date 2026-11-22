@@ -48,6 +48,8 @@ final class BrowseStore: ObservableObject {
     @Published var query = ""
     @Published var loading = false
     @Published var failed = false
+    // Whether a load has ever been asked for: until then the page is waiting, not empty.
+    @Published private(set) var asked = false
     private var loadedFor: String?
     private var inFlight: String?
     private var generation = 0
@@ -138,6 +140,7 @@ final class BrowseStore: ObservableObject {
         generation += 1
         let mine = generation
         // Set only when they change: every assignment redraws every shelf that watches this store.
+        if !asked { asked = true }
         if !loading { loading = true }
         if failed { failed = false }
         // Only the newest request gets to say it has finished.

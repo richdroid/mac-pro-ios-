@@ -1,6 +1,7 @@
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 #endif
 
 // Two panes only when there's room side by side. Open in portrait the bars go horizontal and the fold runs across,
@@ -571,6 +572,10 @@ struct SideRailTabs<Content: View>: View {
     // The tabs to build ahead, after the first frame, one per idle turn, so a tab's first open isn't its first build (a
     // 250-1300 ms freeze, Mint Remote audit 11-22). Opt-in: only tabs whose pages do nothing on appearing but load.
     var prewarm: [Int] = []
+    // Build them only while he isn't touching the phone, a tab at a time with a rest between, and none in the first
+    // seconds after launch (Mint Remote: building all three hidden tabs right after launch froze the Remote ~2.4 s, gate on
+    // 598f47a). Each build still costs its time, but in a moment nobody is using, not under his finger.
+    var whenIdle = false
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
     @State private var edge: CGFloat = 0
@@ -607,9 +612,26 @@ struct SideRailTabs<Content: View>: View {
         // only (or of the rail, were it the wider): one column of chrome, not two (gate on e6af881).
         .environment(\.sideRail, column)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
-        .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        .onChange(of: selection, initial: true) { _, s in shown.insert(s); TouchClock.touched() }
         .task {
             guard !prewarm.isEmpty else { return }
+            if whenIdle {
+                #if canImport(UIKit)
+                TouchClock.install()
+                #endif
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                for t in prewarm {
+                    // Quiet for a second and a half, no finger down, and the tab he's on not just changed.
+                    while !Task.isCancelled && !TouchClock.idle(1.5) { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    if Task.isCancelled { return }
+                    guard !shown.contains(t) else { continue }
+                    TouchClock.note("prewarm tab \(t)")
+                    shown.insert(t)
+                    // The build itself runs in the next pass; then a rest before the next, so they never run back to back.
+                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                }
+                return
+            }
             try? await Task.sleep(nanoseconds: 800_000_000)
             for t in prewarm where !shown.contains(t) {
                 await Task.yield()
@@ -810,7 +832,9 @@ enum TabTour {
     @MainActor static func run(_ tabs: [Int], set: @escaping (Int) -> Void) {
         guard UserDefaults.standard.string(forKey: "pose") == "tour" else { return }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            // "-tourDelay 9": after the app has had its quiet moment to build the other tabs ahead.
+            let wait = UserDefaults.standard.double(forKey: "tourDelay")
+            try? await Task.sleep(nanoseconds: UInt64((wait > 0 ? wait : 2.5) * 1_000_000_000))
             for t in tabs + tabs { set(t); try? await Task.sleep(nanoseconds: 1_600_000_000) }
         }
     }
@@ -912,3 +936,51 @@ enum ShotWindow {
         #endif
     }
 }
+
+// When the phone was last touched, for work that should wait for a quiet moment (SideRailTabs' idle prewarm). A passive
+// recogniser on the window: it never recognises, never delays or cancels a touch, and runs beside every other gesture; it
+// only notes when fingers come down, move and lift.
+@MainActor enum TouchClock {
+    static var last = Date()
+    static var down = 0
+    static func touched() { last = Date() }
+    static func idle(_ seconds: TimeInterval) -> Bool { down == 0 && Date().timeIntervalSince(last) > seconds }
+    // A line for the app's own log, where it keeps one (Mint Remote's HitchLog), so a build's stalls can be told apart.
+    static var log: ((String) -> Void)?
+    static func note(_ s: String) { log?(s) }
+    #if canImport(UIKit)
+    private static var windows: [ObjectIdentifier] = []
+    static func install() {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows where !windows.contains(ObjectIdentifier(w)) {
+                windows.append(ObjectIdentifier(w))
+                w.addGestureRecognizer(TouchStamp())
+            }
+        }
+    }
+    #endif
+}
+#if canImport(UIKit)
+private final class TouchStamp: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private var mine = 0
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false; delaysTouchesBegan = false; delaysTouchesEnded = false
+        delegate = self
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        mine += touches.count; TouchClock.down += touches.count; TouchClock.touched()
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) { TouchClock.touched() }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches.count) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches.count) }
+    private func lift(_ n: Int) {
+        let k = min(n, mine); mine -= k; TouchClock.down = max(0, TouchClock.down - k); TouchClock.touched()
+        if mine == 0 { state = .failed }
+    }
+    override func reset() { super.reset(); TouchClock.down = max(0, TouchClock.down - mine); mine = 0 }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { false }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool { false }
+}
+#endif
