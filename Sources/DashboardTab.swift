@@ -264,17 +264,17 @@ struct DashboardTab: View {
                 guard remote.busy == nil else { return }
                 asked["show"] = want
                 remote.send(model, "show", want ? "show" : "hide")
-            })) { row("Dashboard on screen", "Full screen, in front of other apps", "rectangle.inset.filled") }
+            })) { row("On screen", "Full screen, over other apps", "rectangle.inset.filled") }
                 .accessibilityIdentifier("switch.show")
-            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Keep the display on", "It won’t sleep until you turn this off", "sun.max") }
+            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Won’t sleep until you turn it off", "sun.max") }
                 .accessibilityIdentifier("switch.display")
             Group {
-                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "The next board every \(secs) s", "arrow.triangle.2.circlepath") }
+                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "Next board every \(secs) s", "arrow.triangle.2.circlepath") }
                     .accessibilityIdentifier("switch.rotate")
-                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "Boards in bigger type, to read across the room", "textformat.size") }
+                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "To read across the room", "textformat.size") }
                     .accessibilityIdentifier("switch.text")
                 // Glance in plain words, one switch (Richard, 2026-11-21: "glance is so confusing"): its one line says what it does; the name stays the Mac's own ("Glance from Bed" in its menu).
-                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "The time, next alarm and TV in big, dim figures, to read from bed", "eye") }
+                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "Time, alarm and TV, big and dim, for bed", "eye") }
                     .accessibilityIdentifier("switch.glance")
             }
             .disabled(!running)
