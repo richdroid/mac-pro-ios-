@@ -383,11 +383,19 @@ struct Page<C: View>: View {
     @ViewBuilder let content: () -> C
     var body: some View {
         GeometryReader { g in
+            // As a pivot's page does: the scroll runs on under the side bars (the rail open flat, the side tabs folded),
+            // the content padded clear of them, and the bleed said, so a strip reaches the screen's edge. Inside the safe
+            // area the scroll clipped it at an invisible line short of the rail (run 49 gate: comebacks on Discover).
+            let side = (leading: g.safeAreaInsets.leading, trailing: g.safeAreaInsets.trailing)
             ScrollViewReader { proxy in
                 ScrollView {
                     Color.clear.frame(height: 0).id("top")
                     content().padding(.bottom, S.section)
+                        .frame(width: g.size.width)
+                        .padding(.leading, side.leading)
+                        .padding(.trailing, side.trailing)
                 }
+                .ignoresSafeArea(.container, edges: .horizontal)
                 .scrollIndicators(.hidden)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
                 .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
@@ -398,6 +406,7 @@ struct Page<C: View>: View {
                 }
             }
             .environment(\.pageWidth, g.size.width)
+            .environment(\.pageBleed, EdgeInsets(top: 0, leading: side.leading, bottom: 0, trailing: side.trailing))
         }
     }
 }
