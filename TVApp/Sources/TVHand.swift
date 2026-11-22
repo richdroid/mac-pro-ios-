@@ -408,7 +408,7 @@ struct Liftable: ViewModifier {
         content
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             .modifier(HiddenWhileLifted(id: hides ? liftID : ""))
-            .gesture(LiftRecognizer(quickUp: quickUp, began: { began() }, moved: { moved($0, $1) }, ended: { ended($0) }))
+            .gesture(LiftRecognizer(quickUp: quickUp, began: { began($0) }, moved: { moved($0, $1) }, ended: { ended($0) }))
             .accessibilityAction(named: "Play on the TV") { send(CGSize(width: 0, height: -2000)) }
             // Gone while in the hand: the scrolls it held still move again, and nothing is left floating at the finger.
             .onDisappear {
@@ -423,7 +423,7 @@ struct Liftable: ViewModifier {
         #endif
     }
     var liftID: String { item.id + (wide ? "#w" : "") }
-    func began() {
+    func began(_ finger: CGPoint) {
         var r = rect?() ?? .zero
         if r.width < 4 { r = place.rect ?? .zero }
         guard r.width > 4, Hand.shared.lifted == nil else {
@@ -438,6 +438,9 @@ struct Liftable: ViewModifier {
         withTransaction(t) { Hand.shared.lifted = .init(id: liftID, art: art ?? item.art, wide: wide || item.isYouTube, rect: r) }
         c.down()
         HandLog.note("touch owner=lift \(item.title)")
+        // The proof the card starts under the finger: both in the window's space, the overlay's (HandOverlay ignores the
+        // safe area and draws in the window's frame).
+        HandLog.note(String(format: "pickup finger=%.1f,%.1f card=%.1f,%.1f", finger.x, finger.y, r.midX, r.midY))
     }
     func send(_ v: CGSize) {
         if let onThrow { onThrow(v) }
@@ -510,18 +513,27 @@ extension View {
 // straight up, begins it at once. Any other first 10 pt fails it as before, and the scroll has the touch.
 final class LiftPress: UILongPressGestureRecognizer {
     var quickUp = false
+    // Where the finger came down and where it is, each read off the touch itself in its window's space. The recognizer's
+    // own location(in: nil) came back turned half round on the open Duo (CI 7347f14: touch 82,783 read 586,168 on a
+    // 669 x 951 window, and a finger going up carried the card down), so it isn't used.
     private(set) var from: CGPoint?
+    private(set) var now: CGPoint?
+    // The view the touch landed on. The recognizer's own view isn't inside the page's scroll views (SwiftUI puts it
+    // elsewhere), so the shelf and the scrolls to hold are found from here.
+    private(set) weak var touched: UIView?
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
-        if from == nil, let p = touches.first?.location(in: nil) {
-            from = p
-            HandLog.note(String(format: "lift touch %.0f,%.0f quickUp=%@ shelf=%@", p.x, p.y, quickUp ? "yes" : "no", Self.onShelf(view) ? "yes" : "no"))
+        if from == nil, let t = touches.first {
+            let p = t.location(in: t.window)
+            from = p; now = p; touched = t.view
+            HandLog.note(String(format: "lift touch %.0f,%.0f quickUp=%@ shelf=%@", p.x, p.y, quickUp ? "yes" : "no", Self.onShelf(t.view) ? "yes" : "no"))
         }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        if state == .possible, quickUp, let f = from, let p = touches.first?.location(in: nil) {
+        if let t = touches.first { now = t.location(in: t.window) }
+        if state == .possible, quickUp, let f = from, let p = now {
             let dx = p.x - f.x, dy = p.y - f.y
-            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, Self.onShelf(view) {
+            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, Self.onShelf(touched) {
                 HandLog.note("lift quick-up")
                 state = .began
                 return
@@ -542,12 +554,16 @@ final class LiftPress: UILongPressGestureRecognizer {
     // and not the page's. The recognizer's own answer, not a delegate's: SwiftUI's gesture bridge owns the delegate.
     override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
         guard quickUp, other is UIPanGestureRecognizer, other.view is UIScrollView else { return false }
-        return Self.onShelf(view)
+        return Self.onShelf(touched)
     }
-    override func reset() { super.reset(); from = nil }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let t = touches.first { now = t.location(in: t.window) }
+        super.touchesEnded(touches, with: event)
+    }
+    override func reset() { super.reset(); from = nil; now = nil; touched = nil }
     // The nearest scroll view around it scrolls sideways and not up and down.
     static func onShelf(_ view: UIView?) -> Bool {
-        var v = view?.superview
+        var v = view
         while let s = v {
             if let sv = s as? UIScrollView { return sv.contentSize.width > sv.bounds.width + 1 && sv.contentSize.height <= sv.bounds.height + 1 }
             v = s.superview
@@ -561,7 +577,7 @@ final class LiftPress: UILongPressGestureRecognizer {
 // without moving is a tap). Once it begins it holds every scroll view above it still (LiftHold).
 struct LiftRecognizer: UIGestureRecognizerRepresentable {
     var quickUp = false
-    let began: () -> Void
+    let began: (CGPoint) -> Void
     let moved: (CGSize, CGSize) -> Void
     let ended: (CGSize) -> Void
     final class Coordinator {
@@ -583,7 +599,7 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
     func updateUIGestureRecognizer(_ g: LiftPress, context: Context) { g.quickUp = quickUp }
     func handleUIGestureRecognizerAction(_ g: LiftPress, context: Context) {
         let c = context.coordinator
-        let p = g.location(in: nil)
+        let p = g.now ?? g.location(in: nil)
         let t = CACurrentMediaTime()
         switch g.state {
         case .began:
@@ -591,8 +607,8 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
             // From where the finger came down, so a quick lift's first 10 pt are the card's too, point for point.
             c.start = g.from ?? p; c.track.reset(); c.track.add(p, at: t)
             c.lifting = true
-            LiftHold.hold(from: g.view)
-            began()
+            LiftHold.hold(from: g.touched ?? g.view)
+            began(c.start)
             if p != c.start { moved(CGSize(width: p.x - c.start.x, height: p.y - c.start.y), c.track.velocity) }
         case .changed:
             c.track.add(p, at: t)
