@@ -264,17 +264,17 @@ struct DashboardTab: View {
                 guard remote.busy == nil else { return }
                 asked["show"] = want
                 remote.send(model, "show", want ? "show" : "hide")
-            })) { row("On screen", "Full screen, over other apps", "rectangle.inset.filled") }
+            })) { row("On screen", "Over other apps", "rectangle.inset.filled") }
                 .accessibilityIdentifier("switch.show")
-            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Won’t sleep until you turn it off", "sun.max") }
+            Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Until you turn it off", "sun.max") }
                 .accessibilityIdentifier("switch.display")
             Group {
-                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "Next board every \(secs) s", "arrow.triangle.2.circlepath") }
+                Toggle(isOn: flag("rotate", st?.rotate == true, "rotate")) { row("Take turns", "Every \(secs) s", "arrow.triangle.2.circlepath") }
                     .accessibilityIdentifier("switch.rotate")
-                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "To read across the room", "textformat.size") }
+                Toggle(isOn: flag("text", st?.text == "room", "text", on: "room", off: "desk")) { row("Large text", "Across the room", "textformat.size") }
                     .accessibilityIdentifier("switch.text")
                 // Glance in plain words, one switch (Richard, 2026-11-21: "glance is so confusing"): its one line says what it does; the name stays the Mac's own ("Glance from Bed" in its menu).
-                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "Time, alarm and TV, big and dim, for bed", "eye") }
+                Toggle(isOn: flag("glance", st?.glance == true, "glance")) { row("Glance", "Time, alarm and TV in big, dim figures", "eye") }
                     .accessibilityIdentifier("switch.glance")
             }
             .disabled(!running)

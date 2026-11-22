@@ -221,10 +221,10 @@ final class ConsoleRemote: ObservableObject {
         switch pose {
         case "console", "glancefilm": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
         case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "desk", rotateSecs: 45, mode: "desk", rotating: ["machine", "media", "home", "work", "tonight"])
-        // From bed: Tonight up, large text, the display held on.
-        case "consolebed": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "tonight", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "room", rotateSecs: 45, mode: "bed", rotating: ["media", "home", "tonight"])
+        // From bed: Tonight up, the display held on, desk text (as the live Mac was on 2026-11-22: bed mode is not large text).
+        case "consolebed": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "tonight", rotate: true, animations: "gentle", display: "awake", glance: false, keepOn: true, text: "desk", rotateSecs: 45, mode: "bed", rotating: ["media", "home", "tonight"])
         // Glance on the Mac's screen, the display awake.
-        case "consoleglance": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: true)
+        case "consoleglance": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: true, mode: "bed")
         case "consoleoff", "consolestarting": return ConsoleState(running: false)
         case "consolefail": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: false)
         // Open but not in front (another app is), and the display asleep under Glance, as the Mac was on 2026-11-16.
