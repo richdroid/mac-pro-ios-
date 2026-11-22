@@ -239,35 +239,52 @@ struct RootView: View {
         }
     }
     @State private var resets: [Int: Int] = [:]
+    // Four tabs, and never a fifth (Richard, 2026-11-20: "never a more thing ever"). Watch leads. Apps is a row on the
+    // Remote; the box's figures and Settings are behind the lip's gear. The values are the old ones, so links, widgets and
+    // intents land where they did.
+    static let railItems = [
+        RailItem(value: 3, title: "Watch", symbol: "film"),
+        RailItem(value: 0, title: "Remote", symbol: "av.remote"),
+        RailItem(value: 2, title: "Music", symbol: "music.note"),
+        RailItem(value: 6, title: "Search", symbol: "magnifyingglass"),
+    ]
+    private var tabBinding: Binding<Int> {
+        TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
+            // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
+            // rebuilt, so what was loaded, and the choices made on it, stay.
+            if t == 1 { model.browsing = nil }
+            // The search tab tapped again: the field takes the keyboard, as Apple's own apps do.
+            if t == 6 { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
+            resets[t, default: 0] += 1
+        }
+    }
+    @ViewBuilder private func tabPage(_ t: Int) -> some View {
+        switch t {
+        case 3: Page(title: "Watch", tab: 3, accessory: AnyView(WatchFilterKey()), retaps: resets[3, default: 0]) { FilmsTab() }
+        case 0: Page(title: "Remote", tab: 0, retaps: resets[0, default: 0]) { RemoteTab() }
+        case 2: Page(title: "Music", tab: 2, retaps: resets[2, default: 0]) { PlayingTab() }
+        default: Page(title: "Search", tab: 6, retaps: resets[6, default: 0]) { SearchPage() }
+        }
+    }
     // The Playing tab's glyph, kept here only when it changes (PlayingGlyph below works it out), so a status reading
     // never redraws the whole tab view.
     @State private var playingSymbol = "play.circle"
     var body: some View {
         let _ = SwipeLog.mark("body root")
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
-                // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
-                // rebuilt, so what was loaded, and the choices made on it, stay.
-                if t == 1 { model.browsing = nil }
-                // The search tab tapped again: the field takes the keyboard, as Apple's own apps do.
-                if t == 6 { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
-                resets[t, default: 0] += 1
-            }) {
-                // Four tabs, and never a fifth (Richard, 2026-11-20: "never a more thing ever"): the Duo's side rail holds
-                // four before it makes a More. Watch leads. Apps is a row on the Remote; the box's figures and Settings are
-                // behind the lip's gear. The values are the old ones, so links, widgets and intents land where they did.
-                Tab(value: 3) { Page(title: "Watch", tab: 3, accessory: AnyView(WatchFilterKey()), retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
-                Tab(value: 0) { Page(title: "Remote", tab: 0, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
-                Tab(value: 2) { Page(title: "Music", tab: 2, retaps: resets[2, default: 0]) { PlayingTab() } } label: { tabLabel("Music", "music.note") }
-                // A plain tab, not the system's search role: open upright the search-role tab took the keyboard from the
-                // page's own field the moment it had it.
-                Tab(value: 6) { Page(title: "Search", tab: 6, retaps: resets[6, default: 0]) { SearchPage() } } label: { tabLabel("Search", "magnifyingglass") }
+            // Content full width on the left, the tabs a glass pill at the foot of one rail on the right, in every posture,
+            // as in Mac Pro: never a bar along the foot (Richard's reference of 2026-11-21, "this is what iphone duo apps
+            // look like"). The system's TabView drew one open upright.
+            SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, hidden: model.typingIn != nil) { t in
+                tabPage(t).environment(\.tabInFront, model.tab == t)
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
                 HitchLog.shared.note("tab \(was)→\(t)")
                 #endif
                 UserDefaults.standard.set(t, forKey: "tab")
+                // The tab left is kept under the rail, not taken down, so a field on it would keep the keyboard.
+                Keyboard.dismiss()
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
             }
@@ -290,6 +307,25 @@ struct RootView: View {
         if FlickRequest.wantsAirPlay { model.tab = 2 }
     }
 }
+
+// Whether the tab a view is on is the one in front. The rail keeps each tab once shown, under the one in front
+// (SideRailTabs), where the system's TabView took it off screen: leaving a tab no longer ends its views' appearance, so
+// what must stop when he leaves one (the TV's live picture, the AirPlay search, polling) follows this as well.
+private struct TabInFrontKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues { var tabInFront: Bool { get { self[TabInFrontKey.self] } set { self[TabInFrontKey.self] = newValue } } }
+// On screen: appeared, on the tab in front. Each on is matched by one off, as onAppear by onDisappear.
+private struct OnScreen: ViewModifier {
+    @Environment(\.tabInFront) private var front
+    @State private var here = false
+    let change: (Bool) -> Void
+    func body(content: Content) -> some View {
+        content
+            .onAppear { here = true; if front { change(true) } }
+            .onDisappear { here = false; if front { change(false) } }
+            .onChange(of: front) { _, f in if here { change(f) } }
+    }
+}
+extension View { func onScreen(_ change: @escaping (Bool) -> Void) -> some View { modifier(OnScreen(change: change)) } }
 
 // Works out what the whole app follows from the status (the Playing tab's glyph, the picture behind every page) without
 // RootView itself reading the status.
@@ -415,6 +451,8 @@ struct Page<C: View>: View {
         // moves under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
         VStack(spacing: 0) {
         Lip(tab: tab).environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
+            // Its right end in line with the page's under it, the rail's column clear from top to foot.
+            .railRoom()
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
@@ -433,6 +471,9 @@ struct Page<C: View>: View {
                         MovingTitle(title: title, scrolled: scrolled, accessory: accessory)
                     }
                 }
+                // Clear of the rail, keys, last rows and all: nothing of the page sits under the pill. Inside the stack, on
+                // each page pushed too, so a pushed page's own Back strip is counted once, not added to it.
+                .railRoom()
                 // Status' page, heading and all, moved up by the bar's room as one: a move, not a new layout, so nothing
                 // under it measures itself again; its foot reaches down as far.
                 .padding(.bottom, -barRoom)
@@ -440,11 +481,11 @@ struct Page<C: View>: View {
                 .toolbar(showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
-                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).modifier(TypingHidesTabBar(enabled: !alwaysInline)) }
+                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).modifier(TypingHidesTabBar(enabled: !alwaysInline)).railRoom() }
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
                 .navigationDestination(for: TitleRoute.self) { r in
-                    if let t = TitleRoutes.target(r) { TitlePage(target: t) }
+                    if let t = TitleRoutes.target(r) { TitlePage(target: t).railRoom() }
                 }
                 .modifier(SettingsPages(tab: tab))
                 .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
@@ -980,8 +1021,7 @@ struct MirrorView: View {
         }
         // Where it is, for a flick's screen to move onto it. Nothing moves this view, so the measure moves nothing.
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.mirrorSlot = $0 }
-        .onAppear { model.mirrorShown(true) }
-        .onDisappear { model.mirrorShown(false) }
+        .onScreen { model.mirrorShown($0) }
     }
 }
 #if os(iOS)
@@ -1848,9 +1888,17 @@ struct RemoteTab: View {
         #endif
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
-        .onAppear { model.remoteBuilt = true; model.warmMirror() }
-        // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
-        .onDisappear { typing = false; epPanel.open = false }
+        .onAppear { model.remoteBuilt = true }
+        .onScreen { on in
+            if on { model.warmMirror() }
+            // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
+            else { typing = false; epPanel.open = false }
+        }
+        // The rail steps aside while typing on the TV, as for any other field (HidesTabBarWhileTyping).
+        .onChange(of: lay, initial: true) { _, on in
+            if on { if model.typingIn != "remote" { model.typingIn = "remote" } }
+            else if model.typingIn == "remote" { model.typingIn = nil }
+        }
         // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
         .task(id: model.status?.apps?.map(\.pkg) ?? []) {
             for a in AppsTab.watching(model.status?.apps ?? []).prefix(8) where a.hasIcon {
@@ -2687,7 +2735,7 @@ struct AppsTab: View {
     }
     var body: some View {
         let _ = SwipeLog.mark("body apps")
-        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).modifier(TypingHidesTabBar()) }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).modifier(TypingHidesTabBar()).railRoom() }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
             #endif
@@ -2921,13 +2969,12 @@ struct FlickCard: View {
         }
         .onAppear {
             refresh()
-            reach.begin()
             #if os(iOS)
             MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
             openAirPlayIfAsked()
             #endif
         }
-        .onDisappear { reach.end() }
+        .onScreen { $0 ? reach.begin() : reach.end() }
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in openAirPlayIfAsked() }
         .onChange(of: model.tab) { _, _ in openAirPlayIfAsked() }

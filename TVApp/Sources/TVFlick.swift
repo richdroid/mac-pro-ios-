@@ -429,10 +429,11 @@ struct AppBrowse: View {
         }
         .topShade().topFade()
         .environment(\.openRow, { row = $0 })
-        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true) }
+        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true).railRoom() }
         .background { Ambience() }
-        .onAppear { model.mood = source.mood }
-        .onDisappear { if model.mood == source.mood { model.mood = nil } }
+        .onScreen { on in
+            if on { model.mood = source.mood } else if model.mood == source.mood { model.mood = nil }
+        }
         // The build's shots: Stremio's first row opened from its heading ("-pose stremiorow"), its own list, not Stremio
         // again; and a title's details page ("-pose details"), pushed with the system's Back, edge to edge.
         .task {
