@@ -596,7 +596,9 @@ extension View {
     }
     // A tab's own page: its title is the first row, so no empty bar sits above it and every tab starts at the same height.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
-        self.railRoom().modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)").toolbar(.hidden, for: .navigationBar)
+        // Clear of the rail outermost, as a pushed page takes it: put on the list itself, the room was added to the list's own
+        // 20 pt margin open upright, and a tab's cards ended 20 pt short of its pushed page's (gate, 11-22).
+        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)").toolbar(.hidden, for: .navigationBar).railRoom()
             .background { TabTop.Marker(tab: tab) }
     }
     // For the build's films of Back (-swipeLog YES, never on the phone): where this view is, its size and its safe area,

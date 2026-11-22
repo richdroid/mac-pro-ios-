@@ -986,8 +986,6 @@ struct Screen<Content: View>: View {
                     else { page(.all) }
                 }
             }
-            // Clear of the rail drawn on its side (SideRailTabs); nothing with the system's bar.
-            .railRoom()
             .modifier(TabBarFade())
             .modifier(StatusBarFade())
             .background(groupedBackground.ignoresSafeArea())
@@ -1003,6 +1001,9 @@ struct Screen<Content: View>: View {
             .toolbar(removing: .title)
             .toolbarVisibility(.visible, for: .navigationBar)
             .settingsItem { model.nav.settingsTab = tab; model.nav.settingsOpen = true }
+            // Clear of the rail drawn on its side (SideRailTabs), outermost as a pushed page takes it: on the list itself
+            // the room was added to the list's own margin open upright, 20 pt more than a pushed page's (gate, 11-22).
+            .railRoom()
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
         .onReceive(model.statusStore.$status) { take($0) }

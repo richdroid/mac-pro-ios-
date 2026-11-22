@@ -112,14 +112,25 @@ jobs:
           [ -z "$PUSH_ONLY" ] && set_ 3 "-open"
           $D "$DEVICE" rotate 1; sleep 5
           [ -z "$PUSH_ONLY" ] && set_ 3 "-portrait"
-          # Open upright: Calendar settings pushed by a real tap on its row, and by the pose with time to settle.
+          # Open upright: a tab and its pushed page by real taps, filmed (the Calendar row, then Back), and the Mac Pro
+          # app's tab and pushed page, for one right edge on a tab and its pages.
           xcrun simctl ui "$DEVICE" appearance light
           xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 2 -pose calendar
           sleep 10; xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-tap-before-portrait.png
+          xcrun simctl io "$DEVICE" recordVideo --display=3 --codec=h264 --force dist/logo-tappush-portrait.mp4 > /dev/null 2>&1 & REC=$!
+          sleep 2
           $D "$DEVICE" touch 0.4 0.796 0.1; sleep 3
           xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-tap-after-portrait.png
+          $D "$DEVICE" touch 0.065 0.05 0.1; sleep 3
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-tap-back-portrait.png
+          kill -INT $REC; wait $REC
           xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
-          shot settings2-portrait 3 16 $M -tab 2 -pose calsettings
+          xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0; sleep 10
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-mac-tab0-portrait.png
+          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -openHistory cpu; sleep 10
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/logo-mac-history-portrait.png
+          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           ls dist
       - name: Publish
         if: always()
