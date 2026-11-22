@@ -29,8 +29,10 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p dist
-          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
-            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | grep -E "error:|warning: unre|BUILD" | tail -40
+          for APP in Chumby MacPro TV; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | grep -E "error:|warning: unre|BUILD" | tail -40
+          done
       - name: Shots
         continue-on-error: true
         timeout-minutes: 40
@@ -41,7 +43,7 @@ jobs:
           xcrun simctl list devices available | grep -m1 "$DEVICE"
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
-          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          for APP in Chumby MacPro TV; do xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/$APP.app; done
           node ci/mock-chumby.js & MOCK=$!
           sleep 2
           M=http://127.0.0.1:9000
@@ -78,6 +80,15 @@ jobs:
             film tabhop$2 $1 10 $M -tab 0 -pose tabhop
             film push$2 $1 6 $M -tab 2 -pose calsettings
             film retapfilm$2 $1 10 $M -tab 2 -pose retap
+            # The other apps' rails, for one tab design across them: the Mac Pro app (the shared rail) and Mint Remote.
+            for T in 0 2; do
+              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $T; sleep 10
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/logo-mac-tab$T$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            done
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0; sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/logo-tv-tab0$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             xcrun simctl ui "$DEVICE" appearance dark
             shot home-dark$2 $1 9 $M -tab 0
           }

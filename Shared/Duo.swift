@@ -572,7 +572,12 @@ struct SideRailTabs<Content: View>: View {
     static var margin: CGFloat { 10 }
     static var foot: CGFloat { 26 }
     static var width: CGFloat { cell + inset * 2 }
-    private var column: CGFloat { max(edge, Self.margin * 2 + Self.width) }
+    // The pill's centre line, from the display's trailing edge: the status column's (the clock and Wi-Fi stand 48 pt in,
+    // folded, open flat and open upright alike, and the system's own rail on that line). Centred in the page's clear
+    // column instead, it stood 42 pt in folded and 33 open upright, off the status above it (gate, 11-22).
+    static var centre: CGFloat { 48 }
+    // The page keeps clear of the pill and a margin past it, or of the system's strip where that is wider.
+    private var column: CGFloat { max(edge, Self.centre + Self.width / 2 + Self.margin) }
     var body: some View {
         ZStack {
             ForEach(items) { it in
@@ -592,9 +597,9 @@ struct SideRailTabs<Content: View>: View {
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
         .overlay(alignment: .bottomTrailing) {
-            // Centred in the strip, measured from the display's edge; its foot 26 pt from the display's bottom edge, as
+            // On the status column's centre line, measured from the display's edge; its foot 26 pt from the display's bottom edge, as
             // the system's rail stands (measured from the bottom safe area it stood about 62 pt up: Chumby gate, 11-22).
-            rail.padding(.trailing, (column - Self.width) / 2).padding(.bottom, Self.foot)
+            rail.padding(.trailing, Self.centre - Self.width / 2).padding(.bottom, Self.foot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .ignoresSafeArea(.container, edges: [.trailing, .bottom])
         }
