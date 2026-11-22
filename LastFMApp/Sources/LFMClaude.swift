@@ -197,21 +197,22 @@ struct TasteKept: Codable {
 
     // MARK: Ask
 
-    func ask(_ question: String) async {
+    // True when there's an answer to show: the field keeps his words otherwise, so a failed question isn't typed again.
+    @discardableResult func ask(_ question: String) async -> Bool {
         let q = Self.line(question).prefix(Self.askMax).description
-        guard q.count >= 3, !asking else { return }
+        guard q.count >= 3, !asking else { return false }
         askError = nil
         if let same = store.asked.first(where: { $0.day == LocalDay.today && $0.q.lowercased() == q.lowercased() }) {
             store.asked.removeAll { $0 == same }; store.asked.insert(same, at: 0)
-            withAnimation(.smooth) { kept.asked = store.asked }; return
+            withAnimation(.smooth) { kept.asked = store.asked }; return true
         }
         if mock {
             store.asked.insert(TasteAsked(q: q, answer: "You have played Nadia Sorel 2,790 times, most of it this year, and first played them in February 2019.", day: LocalDay.today), at: 0)
             withAnimation(.smooth) { kept.asked = store.asked }
-            return
+            return true
         }
-        guard key != nil else { return }
-        guard asksLeft > 0 else { askError = "That's the \(Self.asksADay) questions for today."; return }
+        guard key != nil else { return false }
+        guard asksLeft > 0 else { askError = "That's the \(Self.asksADay) questions for today."; return false }
         asking = true; defer { asking = false }
         // Counted before the call: a question that fails still used one of the day's.
         store.asks = (LocalDay.today, Self.asksADay - asksLeft + 1); save()
@@ -219,13 +220,15 @@ struct TasteKept: Codable {
             let data = await HistoryDB.reader.askFacts(q)
             let text = try await call(Self.haiku, Prompts.ask, "QUESTION: \(q)\n\nDATA\n" + data, maxTokens: 400, thinkingOff: true)
             let answer = Self.line(Self.json(text)?["answer"] as? String ?? "")
-            guard !answer.isEmpty else { askError = "No answer came back. Try asking another way."; return }
+            guard !answer.isEmpty else { askError = "No answer came back. Try asking another way."; return false }
             store.asked.insert(TasteAsked(q: q, answer: answer, day: LocalDay.today), at: 0)
             store.asked = Array(store.asked.prefix(3)); save()
             withAnimation(.smooth) { kept.asked = store.asked }
+            return true
         } catch let e as TasteError {
             askError = e.say
         } catch { askError = "Couldn't answer just now. Try again in a while." }
+        return false
     }
 
     // MARK: One call
@@ -554,10 +557,24 @@ struct TasteWeekNote: View {
 }
 
 // A question about his own listening, at the foot of his page: one field, what's left today, the answers inline.
+// The keyboard ask raised: up or not, and where the field is, so a tap anywhere else on his page puts it away (it left
+// only by Send; run 49 gate). Read by StartTab, which holds the tap.
+@MainActor @Observable final class AskKeyboard {
+    static let shared = AskKeyboard()
+    var up = false
+    @ObservationIgnored var field: CGRect = .null
+    func dismiss() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+    }
+}
+
 struct TasteAsk: View {
     private var t: Taste { Taste.shared }
     @State private var q = ""
     @FocusState private var focused: Bool
+    private var ready: Bool { q.trimmingCharacters(in: .whitespaces).count >= 3 }
     var body: some View {
         if t.on {
             VStack(alignment: .leading, spacing: S.head) {
@@ -574,11 +591,14 @@ struct TasteAsk: View {
                         }
                         .padding(.vertical, 12).padding(.horizontal, 14)
                         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.08)))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { AskKeyboard.shared.field = $0 }
+                        .onChange(of: focused) { _, f in AskKeyboard.shared.up = f }
                     if t.asking { ProgressView().tint(.white).frame(width: 44, height: 44) }
                     else {
-                        Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)).foregroundStyle(.white) }
+                        // Dimmed until there's a question to send.
+                        Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)).foregroundStyle(.white.opacity(ready ? 1 : 0.3)) }
                             .frame(width: 44, height: 44)
-                            .disabled(q.trimmingCharacters(in: .whitespaces).count < 3)
+                            .disabled(!ready)
                             .accessibilityLabel("Ask")
                     }
                 }
@@ -595,10 +615,11 @@ struct TasteAsk: View {
             .id("ask")
         }
     }
+    // The words stay in the field until an answer comes; a question that failed is still there to send again.
     private func send() {
         let text = q
-        guard text.trimmingCharacters(in: .whitespaces).count >= 3 else { return }
-        focused = false; q = ""
-        Task { await Taste.shared.ask(text) }
+        guard ready else { return }
+        focused = false
+        Task { if await Taste.shared.ask(text), q == text { q = "" } }
     }
 }

@@ -36,6 +36,12 @@ struct StartTab: View {
                       panels: [Panel(0, ProfileHead.name.lowercased()) { stats(wide: size == .regular && !sideways, strip: true) }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
             }
         }
+        // The ask's keyboard goes as his page scrolls, or with a tap anywhere but the field (the tap only listens while
+        // the keyboard is up).
+        .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .global).onEnded { v in
+            if !AskKeyboard.shared.field.contains(v.location) { AskKeyboard.shared.dismiss() }
+        }, including: AskKeyboard.shared.up ? .all : .subviews)
         .onChange(of: links.panel) { _, p in if let p { page = p; links.panel = nil } }
         // Claude's pieces that are due, once his whole history is in (each at most daily, only when it has moved).
         .task(id: sync.complete) { await Taste.shared.refresh() }
