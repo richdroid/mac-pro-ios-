@@ -179,6 +179,25 @@ jobs:
             # Mint playing a song: the Music player itself, not its idle page.
             shot tab2-mint-portrait 3 8 $M/rmint -tab 2
           fi
+          if has rail; then
+            # The tabs' rail in the postures the other modes miss: folded (the cover display, upright and on its side)
+            # and open on its side, with the tab tour filmed folded and open on its side, Music playing a song, and Search
+            # with the keyboard up where the rail must step aside. Folded again first, if a mode before opened it.
+            [ -n "$OPENED" ] && { $D "$DEVICE" pose closed || true; sleep 4; }
+            tourfilm tour 1
+            shot music-mint 1 8 $M/rmint -tab 2
+            $D "$DEVICE" rotate 3 || true; sleep 4
+            shot music-mint-fland 1 8 $M/rmint -tab 2
+            shot search-fland 1 12 $M -tab 6 -pose search
+            $D "$DEVICE" rotate 1 || true; sleep 4
+            $D "$DEVICE" pose open; sleep 5
+            $D "$DEVICE" rotate 3; sleep 5
+            shot music-mint-open 3 8 $M/rmint -tab 2
+            shot search-open 3 12 $M -tab 6 -pose search
+            tourfilm tour-open 3
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            OPENED=1
+          fi
           if has tour; then
             [ -z "$OPENED" ] && tourfilm tour 1
             [ -z "$OPENED" ] && { $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5; }
