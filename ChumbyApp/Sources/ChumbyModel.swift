@@ -105,8 +105,10 @@ final class ChumbyModel: ObservableObject {
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
     // controls out in another place of the tree when the phone opens flat, and a sheet held by the view went with it.
     @Published var justOnceSheetOpen = false
-    // An alarm's editor is open in Alarms' right pane (open flat): its ✕ and ✓ take the side column (tabPage).
-    @Published var paneEditor = false
+    // An alarm's editor open in Alarms' right pane (open flat): its Cancel and Save, drawn as ✕ and ✓ discs in the side
+    // column by the app's root (PaneActionDiscs), where the folded editor's system items stand.
+    struct PaneActions { var cancel: () -> Void; var save: () -> Void; var saving: Bool; var canSave: Bool; var busy: Bool }
+    @Published var paneActions: PaneActions?
     @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() }; if alarmsPage != oldValue { SwipeLog.note("alarmsPage \(alarmsPage)") } } }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?
@@ -157,7 +159,8 @@ final class ChumbyModel: ObservableObject {
             async let cap: Void? = try? await Task.sleep(nanoseconds: 3_000_000_000)
             if let r = await read, r.age <= 10, let line = try? JSONDecoder().decode(RingDesk.RingLine.self, from: r.data), let self, self.ringSettling {
                 let ring = RingReading.believed(line.ring, shown: self.sys.ring, takenAt: Date().addingTimeInterval(-r.age), stoppedAt: self.ringStoppedAt, snoozedAt: self.ringSnoozedAt)
-                if ring != self.sys.ring { self.sys.ring = ring }
+                // In the ring change's own spring, as applySys moves it: set bare, the device narrowed in one step.
+                if ring != self.sys.ring { var s = self.sys; s.ring = ring; withAnimation(Self.ringChange(to: s.ringing)) { self.sys = s } }
                 SwipeLog.note("ring settled by a=ring")
                 self.ringSettling = false
                 return

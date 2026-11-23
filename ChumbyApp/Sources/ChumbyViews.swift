@@ -602,9 +602,7 @@ extension View {
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
         // Clear of the rail, less the list's own 20 pt margin, which a tab's list sets beside the room open upright (RailRoom).
         self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)")
-            // The bar stays hidden but for an editor open in Alarms' right pane, whose Cancel and Save are the system's
-            // ✕ and ✓ in the side column, as the folded editor's are (gate, 11-22: words in a row across the top open flat).
-            .toolbar(tab == 2 && model.paneEditor ? .visible : .hidden, for: .navigationBar).railRoom(listMargin: 20)
+.toolbar(.hidden, for: .navigationBar).railRoom(listMargin: 20)
             .background { TabTop.Marker(tab: tab) }
     }
     // For the build's films of Back (-swipeLog YES, never on the phone): where this view is, its size and its safe area,
@@ -666,7 +664,10 @@ struct RootView: View {
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
+        // An editor in Alarms' right pane: its ✕ and ✓ in the side column.
+        .overlay(alignment: .topTrailing) { PaneActionDiscs() }
         .onAppear {
+            SwipeLog.frames()
             // For the build: the ringing page opened as the app opens it by itself, on its first reading of the ring (on the
             // phone it otherwise opens from a tap on the ring's notification or card, which brings the alarm's details).
             if ["ringscreen", "ringfail", "ringpagedemo"].contains(ChumbyModel.pose) {
@@ -1452,9 +1453,11 @@ struct HomeTab: View {
             // (film, 11-20: Home with no next alarm after a slide to stop).
             // Opening on a kept ring, the slot waits (unseen, its room kept) for the first fresh word (ChumbyModel.ringSettling).
             let nextShown = model.sys.ringing == nil && !model.ringSettling
+            // Gone at once when a ring arrives (fading, it showed through the ringing card for four frames: gate, 11-22);
+            // back by a fade once the ring is over.
             SkipCard().padding(.top, Self.sectionGap)
                 .opacity(nextShown ? 1 : 0)
-                .animation(.easeOut(duration: ChumbyModel.slotFade), value: nextShown)
+                .animation(nextShown ? .easeOut(duration: ChumbyModel.slotFade) : nil, value: nextShown)
                 .allowsHitTesting(nextShown).accessibilityHidden(!nextShown)
         }
         // room for the cards' shadows inside the clip
@@ -2223,7 +2226,8 @@ struct ChannelsTab: View {
                 }
             }
                 .onMove { from, to in
-                    SwipeLog.note("chmove \(Array(from)) -> \(to)")
+                    // Logged as widget places (the heading is list item 0): a drop at the top reads "-> 0".
+                    SwipeLog.note("chmove \(from.compactMap { $0 > 0 ? $0 - 1 : nil }) -> \(max(to - 1, 0)) (list \(Array(from)) -> \(to))")
                     // Offsets in the widgets alone: the heading is item 0, never moved, and a drop at or just after it
                     // is the top.
                     var on = shown
@@ -3785,5 +3789,37 @@ struct SleepyOctopus: View {
         }
         .frame(width: 60, height: 52)
         .accessibilityHidden(true)
+    }
+}
+
+// An editor's Cancel and Save open flat, where the folded editor's system items stand: ✕ then ✓ at the top of the side
+// column, under the status, on its centre line (SideRailTabs.centre). Drawn here, over everything, because showing the
+// tab's own bar for them moved the whole left pane down 24 pt as the editor opened (gate, 11-22). The system's look: a
+// clear glass disc for ✕, the accent's for ✓.
+struct PaneActionDiscs: View {
+    @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
+    static let size: CGFloat = 48, top: CGFloat = 132, gap: CGFloat = 10
+    var body: some View {
+        if let a = model.paneActions {
+            VStack(spacing: Self.gap) {
+                Button { Haptic.fire(.tick); a.cancel() } label: {
+                    Image(systemName: "xmark").font(.system(size: 19, weight: .semibold)).foregroundStyle(.tint)
+                        .frame(width: Self.size, height: Self.size).contentShape(Circle())
+                        .glassEffect(.regular.interactive(), in: Circle())
+                }
+                .buttonStyle(.plain).disabled(a.saving).accessibilityLabel("Cancel")
+                Button { a.save() } label: {
+                    Group { if a.busy { ProgressView().tint(.white) } else { Image(systemName: "checkmark").font(.system(size: 19, weight: .bold)) } }
+                        .foregroundStyle(.white)
+                        .frame(width: Self.size, height: Self.size).contentShape(Circle())
+                        .glassEffect(.regular.tint(ChumbyPalette.acc(scheme == .dark)).interactive(), in: Circle())
+                }
+                .buttonStyle(.plain).disabled(!a.canSave || a.busy).opacity(a.canSave ? 1 : 0.45).accessibilityLabel("Save")
+            }
+            .padding(.trailing, SideRailTabs<EmptyView>.centre - Self.size / 2).padding(.top, Self.top)
+            .ignoresSafeArea()
+            .transition(.opacity)
+        }
     }
 }

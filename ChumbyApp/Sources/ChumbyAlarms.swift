@@ -992,7 +992,7 @@ struct AlarmsTab: View {
             paneSwap = nil
         }
     }
-    func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
+    func edit(_ a: Alarm?) { SwipeLog.note("edit wide \(wide)"); if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
     // The nap's editor: the nap set, or a new one.
     func editNap(_ a: Alarm?) { if wide { show(.napEditor(a)) } else { editing = EditTarget(alarm: a, nap: true) } }
     // Folded, and open in portrait, a day is a page pushed over Alarms like Calendar settings; open in landscape it fills
@@ -1833,18 +1833,12 @@ struct AlarmEditor: View {
                 sections.listRowBackground(GlassRow())
             }
             .pinsTitle { PageTitle(title) }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { stopTest(); close() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold).disabled(ringingNow) }
-                }
-            }
             // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
             // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
-            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; model.paneEditor = true; posedJustOnce() }
-            .onDisappear { model.editingAlarm = false; model.paneEditor = false }
+            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; paneActions(close); posedJustOnce() }
+            .onDisappear { model.editingAlarm = false; model.paneActions = nil }
+            .onChange(of: saving) { _, _ in paneActions(close) }
+            .onChange(of: ringingNow) { _, _ in paneActions(close) }
             .fillCover(isPresented: $justOnce) { justOnceSheet }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
@@ -1870,6 +1864,10 @@ struct AlarmEditor: View {
                 .fillCover(isPresented: $justOnce) { justOnceSheet }
             }
         }
+    }
+    // Cancel and Save for the side column's discs (PaneActionDiscs), as they stand now.
+    func paneActions(_ close: @escaping () -> Void) {
+        model.paneActions = .init(cancel: { stopTest(); close() }, save: { save() }, saving: saving, canSave: !ringingNow, busy: saving)
     }
     // "Just this once" for this alarm's next ring, presented by the editor itself (the row that opens it sits far down a
     // lazy form, so a sheet of the row's own isn't there until it's been scrolled to).

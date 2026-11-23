@@ -59,6 +59,7 @@ jobs:
             sleep $wait
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/p-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/p-$name-swipe.log || true
           }
           film() { # name, display, seconds, address, args
             local name=$1 display=$2 secs=$3 address=$4; shift 4
@@ -118,7 +119,7 @@ jobs:
             shot channels-edit$2 $1 10 $M -tab 1 -pose chedit
             shot channels-empty$2 $1 10 $M/chempty -tab 1
             shot alarms-nap$2 $1 11 $M/nap -tab 2 -pose napset
-            shot alarms-editor$2 $1 15 $M -tab 2 -pose editor
+            shot alarms-editor$2 $1 20 $M -tab 2 -pose editor -swipeLog YES
             # Ring, Snooze (3.5 s in), Stop (4 s later) on Home's card: the leaving card says "Stopping…" alone.
             remock; warm $M/liveringing; film ringdemo$2 $1 16 $M/liveringing -tab 0 -pose ringdemo -swipeLog YES
             # The ringing page: Snooze at 5 s, slid to Stop at 10 s.
@@ -136,7 +137,9 @@ jobs:
           # where it is); then pushed again and swiped away from the display's leading edge.
           remock; rec backtap 1 $M/live -tab 2 -pose calsettings
           sleep 20; xcrun simctl io "$DEVICE" screenshot --display=1 dist/p-backtap-pushed.png
-          $D "$DEVICE" tap 0.898 0.29 || echo "tap failed"; sleep 4
+          # The system's Back, by its label (tap takes a label; touch takes a place), its place in the rail's column if not.
+          $D "$DEVICE" tree > dist/p-backtap-tree.log 2>&1 || true
+          $D "$DEVICE" tap "Back" || $D "$DEVICE" tap "Alarms" || $D "$DEVICE" touch 0.893 0.29 || echo "back failed"; sleep 4
           cut backtap 1
           remock; rec swipeback 1 $M/live -tab 2 -pose calsettings
           sleep 20
@@ -145,9 +148,9 @@ jobs:
           # Channels: a channel of six in Edit, the last widget dragged to the top by its grip, then the second down two.
           remock; rec chdrag 1 $M/livemany -tab 1 -pose chedit -swipeLog YES
           sleep 18
-          $D "$DEVICE" drag 0.75 0.728 0.75 0.20 2.5 || echo "drag failed"; sleep 2
-          $D "$DEVICE" drag 0.75 0.324 0.75 0.55 1.5 || echo "drag failed"; sleep 2
-          $D "$DEVICE" drag 0.75 0.55 0.75 0.40 1.0 || echo "drag failed"; sleep 3
+          # As a person does it: let go over the top half of the first row (chmove … -> 0), then the second down two.
+          $D "$DEVICE" drag 0.75 0.775 0.75 0.255 2.5 || echo "drag failed"; sleep 2
+          $D "$DEVICE" drag 0.75 0.375 0.75 0.575 1.5 || echo "drag failed"; sleep 3
           cut chdrag 1
           slide ringslide 1 0.12 0.80 0.864
           gallery 4 1 card
@@ -162,12 +165,12 @@ jobs:
           $D "$DEVICE" rotate 1; sleep 5
           tabs 3 "-portrait"
           slide ringslide-portrait 3 0.17 0.80 0.65
-          # A channel of six in Edit, open upright: the last widget dragged up past the first and let go over the
-          # channel's heading (it must land at the top), then the second down two.
+          # A channel of six in Edit, open upright: the last widget dragged up and let go over the top half of the first
+          # row (chmove … -> 0), then the second down two.
           remock; rec chdrag-portrait 3 $M/livemany -tab 1 -pose chedit -swipeLog YES
           sleep 16
-          $D "$DEVICE" drag 0.827 0.603 0.827 0.19 2.5 || echo "drag failed"; sleep 2
-          $D "$DEVICE" drag 0.827 0.317 0.827 0.46 1.5 || echo "drag failed"; sleep 3
+          $D "$DEVICE" drag 0.826 0.601 0.826 0.235 2.5 || echo "drag failed"; sleep 2
+          $D "$DEVICE" drag 0.826 0.316 0.826 0.459 1.5 || echo "drag failed"; sleep 3
           cut chdrag-portrait 3
           # A posture change with the app up: open upright to open flat and back (filmed as the display is mounted).
           now() { python3 -c 'import time; print(time.time())'; }

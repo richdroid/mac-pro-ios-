@@ -112,6 +112,39 @@ struct RingFold: Equatable {
     #endif
 }
 
+// Where the ringing page's three pieces go in each posture (RingScreen's one layout).
+struct RingPlan {
+    var vertical = true, big: CGFloat = 100
+    var faceWidth: CGFloat?, faceAlign: Alignment = .center, faceBoxWidth: CGFloat?, faceBoxHeight: CGFloat?
+    var gap: CGFloat = 16
+    var keysWidth: CGFloat?, keysMax: CGFloat?, keysAlign: Alignment = .center, keysFill = true
+    var layout: AnyLayout { vertical ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0)) }
+    init(size: CGSize, fold: CGRect?, air: CGFloat) {
+        if let c = fold, c.width >= c.height {
+            // Open upright: the fold across.
+            let top = max(c.midY - air, 0), column = min(size.width - 40, 500)
+            big = min(column * 0.24, top * 0.3, 128)
+            faceWidth = column; faceAlign = .bottom; faceBoxHeight = top
+            gap = air * 2; keysWidth = column; keysAlign = .top
+        } else if let c = fold {
+            // Open flat: the fold down. The columns start inside the page's 20 pt side padding, so that is taken off the
+            // left one (measured from the reader's edge it ran 20 pt into the hinge's band: gate, 11-22).
+            let left = max(c.midX - air - 20, 0)
+            vertical = false
+            big = min(size.height * 0.26, left * 0.24, 104)
+            faceBoxWidth = left; gap = air * 2; keysMax = 420
+        } else if size.width > size.height {
+            // Folded, on its side.
+            vertical = false
+            big = min(size.height * 0.24, 88); gap = 24; keysMax = 400
+        } else {
+            // Folded and upright: the clock in the room over the keys, the keys at the foot in the thumb's reach.
+            big = min(size.width * 0.24, size.height * 0.15, 104)
+            gap = 16; keysMax = 460; keysFill = false
+        }
+    }
+}
+
 struct RingScreen: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
@@ -176,43 +209,21 @@ struct RingScreen: View {
                 let fold = RingFold.read(g).crease
                 // Half the crease and a little air on each side of it, as the app's two panes keep (never less than 24).
                 let air: CGFloat = fold.map { min(max(24, min($0.width, $0.height) / 2 + 4), 40) } ?? 0
-                Group {
-                    if let c = fold, c.width >= c.height {
-                        // Open and upright (how he holds it): the fold runs across. The clock has the upper half and the
-                        // keys the lower, one column of one width, gathered at the fold from either side (centred in their
-                        // halves, the two floated apart over a band of bare sea), nothing on the crease.
-                        let top = max(c.midY - air, 0), column = min(g.size.width - 40, 500)
-                        VStack(spacing: 0) {
-                            face(big: min(column * 0.24, top * 0.3, 128)).frame(width: column)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).frame(height: top)
-                            Color.clear.frame(height: air * 2)
-                            keys.frame(width: column).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        }
-                    } else if let c = fold {
-                        // Open flat: the fold runs down. The clock left of it, the keys right of it. The columns start
-                        // inside the page's 20 pt side padding, so that is taken off the left one: measured from the
-                        // reader's edge it ran 20 pt into the hinge's band (gate, 11-22: right edge 472, fold 455–495).
-                        let left = max(c.midX - air - 20, 0)
-                        HStack(spacing: 0) {
-                            face(big: min(g.size.height * 0.26, left * 0.24, 104)).frame(maxWidth: .infinity, maxHeight: .infinity).frame(width: left)
-                            Color.clear.frame(width: air * 2)
-                            keys.frame(maxWidth: 420).frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    } else if g.size.width > g.size.height {
-                        // Folded and on its side.
-                        HStack(spacing: 24) {
-                            face(big: min(g.size.height * 0.24, 88)).frame(maxWidth: .infinity)
-                            keys.frame(maxWidth: 400).frame(maxWidth: .infinity)
-                        }
-                    } else {
-                        // Folded and upright: the clock over the keys, the keys in the thumb's reach.
-                        VStack(spacing: 0) {
-                            Spacer(minLength: 8)
-                            face(big: min(g.size.width * 0.24, g.size.height * 0.15, 104))
-                            Spacer(minLength: 16)
-                            keys.frame(maxWidth: 460)
-                        }
-                    }
+                let p = RingPlan(size: g.size, fold: fold, air: air)
+                // One layout for every posture, its three children the same views in each (the clock card, the gap, the
+                // keys), so reading the fold as the page opens, or a turn, moves them rather than building them again:
+                // as four separate branches the slider was made, thrown away and made again on opening, and the page's
+                // rise stalled 0.6–0.7 s (gate, 11-22). Open upright (how he holds it) the fold runs across: the clock in
+                // the upper half, the keys in the lower, one column of one width gathered at the fold, nothing on the
+                // crease. Open flat the fold runs down: the clock left of it, the keys right of it. Folded and upright the
+                // clock over the keys, the keys in the thumb's reach; on its side, the two side by side.
+                p.layout {
+                    face(big: p.big).frame(width: p.faceWidth)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: p.faceAlign)
+                        .frame(width: p.faceBoxWidth, height: p.faceBoxHeight)
+                    Color.clear.frame(width: p.vertical ? nil : p.gap, height: p.vertical ? p.gap : nil)
+                    keys.frame(width: p.keysWidth).frame(maxWidth: p.keysMax)
+                        .frame(maxWidth: .infinity, maxHeight: p.keysFill ? .infinity : nil, alignment: p.keysAlign)
                 }
                 .padding(.horizontal, 20).padding(.bottom, 20)
                 .frame(width: g.size.width, height: g.size.height)
@@ -385,7 +396,10 @@ struct RingScreen: View {
             _ = await held
             // Taken: the page goes with the key still at the far end (springing it back as the page leaves read as a
             // Stop undone). Not taken: the key returns, ready to slide again, and the status line says why.
-            if ok { close() } else { withAnimation(.easeOut(duration: 0.2)) { stopping = false } }
+            // Home under the page settles first (its ringing card gone, the next alarm back, the device at its width at
+            // rest: ChumbyModel.stopSpring's 0.12 s plus 0.35 s), all while the page still says "Stopping…", so nothing
+            // under it moves as it goes (gate, 11-22: Home jumped and drifted as the page left, in every posture).
+            if ok { try? await Task.sleep(nanoseconds: 550_000_000); close() } else { withAnimation(.easeOut(duration: 0.2)) { stopping = false } }
         }
     }
     func snooze() {
