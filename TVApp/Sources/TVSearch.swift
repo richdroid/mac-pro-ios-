@@ -540,6 +540,7 @@ struct SearchPage: View {
     @FocusState private var focused: Bool
     @State private var barAway = false
     var body: some View {
+        let _ = Timing.body("search")
         // The field stays put above what scrolls, as the system's own search does. Inside the scroll view, open upright
         // the keyboard's own lift scrolled the page, and a scroll that puts the keyboard away put it away at once
         // (tv-search-ci 829e7c4 and e40ae26: focus on, then off, in every open-upright pose; the probe's field above the
@@ -588,7 +589,7 @@ struct SearchPage: View {
                 }
             }
         }
-        .onChange(of: draft.text, initial: true) { _, t in store.typed(t, model: model) }
+        .onChange(of: draft.text, initial: true) { _, t in Timing.measure("search typed") { store.typed(t, model: model) } }
         .onScrollPhaseChange { _, p in if p == .interacting { store.touched = true } }
         // Another tab: the field lets the keyboard go, so it never rises over the page he went to.
         .onChange(of: model.tab) { _, t in if t != 6, focused { focused = false } }
@@ -702,6 +703,7 @@ private struct ResultList: View {
     // Open flat: the top result under the field on the left, every group on the right, so neither side sits empty.
     var showsGroups: Bool { part != .left }
     var body: some View {
+        let _ = Timing.body("results")
         VStack(alignment: .leading, spacing: 22) {
             if SendBar.isLink(results.text) {
                 if part != .right { LinkRow(text: results.text) }
@@ -806,6 +808,7 @@ private struct HitRow: View {
     let hit: SearchHit
     @State private var place = FrameBox()
     var body: some View {
+        let _ = Timing.body("hit")
         Button { SearchStore.shared.open(hit, model: model, origin: place.rect) } label: {
             HStack(spacing: 12) {
                 HitArt(hit: hit, height: 60)

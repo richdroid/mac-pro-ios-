@@ -275,6 +275,7 @@ struct MediaCard: View {
     // A cover seen before has its colour ready, so the card arrives already tinted rather than fading in.
     var shownBand: Color { band ?? ImageStore.shared.cachedBand(URL(string: item.art)) ?? CoverWait.band }
     var body: some View {
+        let _ = Timing.body("card")
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let image { image.resizable().scaledToFill() }
@@ -500,7 +501,7 @@ struct FlickCardButton: View {
             // Held, it lifts off the shelf; thrown up, it goes to the TV (ShelfFlick, the streams page's own hand).
             .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in var r = place.rect ?? .zero; r.size.height = max(0, r.height - MediaCard.band(width)); return r }))
             // For the build's shelf films: the first card drawn says where it is, so a real finger lands on it.
-            .shotSpot(ShelfSpot.claim(item.id) ? "card" : "", pose: "shelf")
+            .shotSpot(source == .stremio && !item.isYouTube && ShelfSpot.claim(item.id) ? "card" : "", pose: "shelf")  // a film, in every posture
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             // The details are a pushed page with the system's Back, never a sheet (2026-11-08: the sheet sat inset with a
             // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that

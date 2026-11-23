@@ -58,6 +58,12 @@ struct TitleRoute: Hashable { let id: UUID }
         if let v = ref.video, let e = m.episodes.first(where: { $0.id == v }) { return e }
         let row = BrowseStore.shared(.stremio).rows.first { $0.title == "Continue watching" }?.items.first { $0.stremioRef?.imdb == ref.imdb }
         if let v = row?.stremioRef?.video, let e = m.episodes.first(where: { $0.id == v }) { return e }
+        // A Continue watching card that names its episode only in words ("S2 E3"): that episode, never S1 E1 under a lip
+        // and a card that both say S2 E3 (gate on b9269a7).
+        for sub in [row?.subtitle, item.subtitle].compactMap({ $0 }) {
+            let n = sub.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            if sub.hasPrefix("S"), n.count >= 2, let e = m.episodes.first(where: { $0.season == n[0] && $0.episode == n[1] }) { return e }
+        }
         if let s = NextUp.shared.series, s.imdb == ref.imdb, let cur = m.episodes.first(where: { $0.id == s.current }) { return NextUp.after(cur, in: m.episodes) ?? cur }
         if let r = RecentFlicks.shared.list.first(where: { $0.imdb == ref.imdb }), let v = r.video, let e = m.episodes.first(where: { $0.id == v }) { return e }
         return m.episodes.filter { $0.season > 0 }.min { ($0.season, $0.episode) < ($1.season, $1.episode) } ?? m.episodes.first
@@ -135,6 +141,7 @@ struct TitlePage: View {
     @State private var listUnder = false
     init(target: FlickTarget) { _st = State(initialValue: TitleState(target)) }
     var body: some View {
+        let _ = Timing.body("title")
         GeometryReader { g in
             // Folded on its side too (about 590 x 400 pt beside the rail): stacked there, the card was 95 pt wide.
             let wide = g.size.width > g.size.height * 1.15 && (g.size.width > 600 || g.size.height < 480)
@@ -221,6 +228,10 @@ struct TitlePage: View {
                 }
             }
         }
+        // With the system's bar hidden, UIKit turns the edge swipe off: kept on here (gate on b9269a7: no pop upright).
+        #if canImport(UIKit)
+        .background { if railBack { EdgeSwipeBack().frame(width: 0, height: 0) } }
+        #endif
         .overlay(alignment: .topTrailing) {
             if railBack {
                 VStack(spacing: 12) {
@@ -405,6 +416,26 @@ struct TitlePage: View {
         // nothing the send does can hold the card where he let go (gate on cbfc0b5: up to a second between the two).
         // Sent as it lands, not in the turn after the release: the send's start redrew the app mid-flight, 159-250 ms
         // stalls in the flight's second (gate on eb040c7).
+        // The flight is drawn by the window's own layer (HandOverlay), not inside the page: inside the navigation stack the
+        // card was cut off at the page's top edge, about 100 pt under the lip, and looked frozen there (gate on b9269a7).
+        // The window's carry takes over exactly where his finger left it; the page's card steps out unseen.
+        let art = st.item.art
+        if !art.isEmpty, Hand.shared.lifted == nil, carry.rest.width > 4 {
+            let hand = Hand.shared.liftCarry
+            hand.adopt(carry)
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) {
+                Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest)
+                carry.hideForFlight()
+            }
+            hand.fly(v) {
+                Hand.shared.land(title: title, art: art, tint: tint)
+                withAnimation(.easeOut(duration: 0.3)) { Hand.shared.lifted = nil }
+                carry.reappear()
+                send?()
+            }
+            return
+        }
         carry.fly(v) {
             Hand.shared.land(title: title, art: st.item.art, tint: tint)
             carry.reappear()
@@ -461,12 +492,22 @@ struct TitlePage: View {
     // MARK: streams
     @ViewBuilder var streamList: some View {
         if st.streams.isEmpty {
-            HStack(spacing: 10) {
-                if st.finding || (!st.noStreams && st.video != nil) { ProgressView().controlSize(.small) }
-                Text(st.noStreams ? "No streams found" : st.video == nil ? "Choose an episode" : "Finding streams…")
-                    .font(.system(size: 17)).foregroundStyle(.secondary)
+            // While they're being found, the room of the five rows they usually fill is kept (quiet shapes under the line), so
+            // "About" doesn't drop 50 pt as they come (gate on b9269a7).
+            let finding = st.finding || (!st.noStreams && st.video != nil)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    if finding { ProgressView().controlSize(.small) }
+                    Text(st.noStreams ? "No streams found" : st.video == nil ? "Choose an episode" : "Finding streams…")
+                        .font(.system(size: 17)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, minHeight: StreamRow.height, alignment: .leading)
+                .background(.white.opacity(finding ? 0.05 : 0), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                if finding {
+                    ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(0.05)).frame(height: StreamRow.height) }
+                }
             }
-            .frame(height: StreamRow.height, alignment: .leading)
         } else {
             let all = st.streams
             let shown = st.showsAllStreams ? all : Array(all.prefix(5))
@@ -641,8 +682,9 @@ struct SectionTitle: View {
 struct TitleGround: View {
     let art: String
     var body: some View {
+        // No near-black base of its own: until the poster's colour is in, the tab's ground shows through, so the page never
+        // cuts purple to near-black and sits dark for a second (gate on b9269a7). The poster fades in over it.
         ZStack {
-            Color(hex: 0x0E0B16)
             Art(url: URL(string: art)) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
                 .blur(radius: 60).opacity(0.45).clipped()
             LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
@@ -690,3 +732,34 @@ private struct RailKey: View {
         .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
     }
 }
+
+#if canImport(UIKit)
+// Keeps the navigation stack's edge-swipe Back working on a page that hides the system's bar: UIKit's own gesture is
+// given a delegate that lets it begin whenever there is a page to go back to.
+private struct EdgeSwipeBack: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Probe { Probe() }
+    func updateUIViewController(_ c: Probe, context: Context) { c.hook() }
+    final class Probe: UIViewController {
+        // One for the app's life: a delegate that went with the page left the gesture with none, which can hang a swipe
+        // on the root page.
+        private var keeper: Keeper { Keeper.shared }
+        override func didMove(toParent parent: UIViewController?) { super.didMove(toParent: parent); hook() }
+        override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); hook() }
+        func hook() {
+            guard let nav = navigationController ?? parent?.navigationController, let g = nav.interactivePopGestureRecognizer else { return }
+            keeper.nav = nav
+            g.delegate = keeper
+            g.isEnabled = true
+        }
+    }
+    final class Keeper: NSObject, UIGestureRecognizerDelegate {
+        static let shared = Keeper()
+        weak var nav: UINavigationController?
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            let nav = (g.view?.next as? UINavigationController) ?? self.nav
+            return (nav?.viewControllers.count ?? 0) > 1
+        }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+#endif

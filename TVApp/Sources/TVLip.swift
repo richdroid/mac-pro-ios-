@@ -67,6 +67,7 @@ struct Lip: View {
     @State private var pull: CGFloat = 0
     @State private var place = FrameBox()
     var body: some View {
+        let _ = Timing.body("lip")
         let now = TVNow.read(model)
         let landed = Hand.shared.landed
         HStack(spacing: 12) {
@@ -86,6 +87,8 @@ struct Lip: View {
                             Text("Reconnecting…").font(.system(size: 14, weight: .medium)).foregroundStyle(TVLook.away).lineLimit(1)
                                 .transition(.opacity)
                         }
+                        // On the Remote the episode and the time are under its picture: the lip says only what's on, not twice.
+                        else if now.kind == .video, tab == 0, landed == nil { EmptyView() }
                         else if now.kind == .video, landed == nil, let s = model.status?.session { LipClock(session: s, line: now.line) }
                         else if let l = (landed != nil && !starting ? "Starting…" : now.line) {
                             Text(l).font(.system(size: 14, weight: .medium)).foregroundStyle(starting || landed != nil ? TVLook.accent : .white.opacity(0.7)).lineLimit(1)

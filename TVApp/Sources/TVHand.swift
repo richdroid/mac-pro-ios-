@@ -19,7 +19,9 @@ enum ThrowRules {
     static let downCancel: CGFloat = 200
     // The commit line: this share of the screen's height above the card's rest, but never more than this share of the
     // way to the lip, so a card resting low on the page can still reach it (the line sat at or above the lip for them).
-    static let commitShare: CGFloat = 0.3
+    // 0.24: at 0.3 the line sat 250 pt over a card resting low open upright, and a carry 13 pt short was put back (gate on
+    // b9269a7).
+    static let commitShare: CGFloat = 0.24
     static let commitReach: CGFloat = 0.55
     // The flight never dawdles, and is gone within this long.
     static let floorSpeed: CGFloat = 1600
@@ -236,8 +238,11 @@ enum ThrowRules {
         var dx = v.width, dy = v.height
         if sp < 120 || dy > -60 { dx = 0; dy = -1 }
         let rise = max(0, center.y - lipY)
+        _ = rise
+        // Into the lip's own picture slot (8 pt in, 64 x 40), whichever way it was thrown: landing at the finger's x put it
+        // over the lip's title (gate on b9269a7). It shrinks into the slot and dissolves into the lip's picture there.
         var x = center.x + (dy < 0 ? dx / -dy * rise : 0)
-        if lip.width > 0 { x = min(max(x, lip.minX + ThrowRules.lipPicture.width / 2 + 8), lip.maxX - ThrowRules.lipPicture.width / 2 - 8) }
+        if lip.width > 0 { x = lip.minX + 8 + ThrowRules.lipPicture.width / 2 }
         let to = CGSize(width: offset.width + x - center.x, height: offset.height + lipY - center.y)
         let ddx = to.width - offset.width, ddy = to.height - offset.height
         let dist = max(1, sqrt(ddx * ddx + ddy * ddy))
@@ -260,6 +265,19 @@ enum ThrowRules {
             // The poll may land again once the send's own redraw is past.
             Task { @MainActor in try? await Task.sleep(nanoseconds: 300_000_000); self.releaseHold() }
         }
+    }
+    // Takes over another carry exactly as it is (where it is, its size and tilt), to fly it from the window's layer.
+    func adopt(_ o: Carry) {
+        rest = o.rest
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { offset = o.offset; scale = o.scale; tilt = o.tilt; opacity = 1; phase = .held }
+    }
+    // Out of sight where it is, its flight drawn by another carry; back with reappear().
+    func hideForFlight() {
+        phase = .gone; opacity = 0
+        Hand.shared.carrying = false
+        if over { over = false; Hand.shared.committed = false }
+        releaseHold()
     }
     // Back at its place, unseen, then faded in: the page's card is still the page's after a throw.
     func reappear(after s: Double = 1.2) {  // after the send's redraw, so its fade is seen (gate on 339958b)
@@ -368,7 +386,8 @@ struct VelocityTrack {
     static func sendBest(_ model: TVModel, item: MediaItem, velocity: CGSize) {
         guard let ref = item.stremioRef else { sendPlain(model, target: FlickTarget(item: item, source: .stremio)); return }
         // The lip has the title from the release on, while the stream is looked for: never the TV's old state first.
-        model.beginStart(.init(title: item.title, art: item.art, line: nil, note: "Finding the stream…"), target: FlickTarget(item: item, source: .stremio))
+        // Straight to "Starting…": "Finding the stream…" showed for a frame (gate on b9269a7).
+        model.beginStart(.init(title: item.title, art: item.art, line: nil), target: FlickTarget(item: item, source: .stremio))
         let lineage = model.startingTarget?.lineage
         // A newer start (or one called off) owns the lip by the time an answer comes: this one says nothing over it.
         let ours = { model.startingTarget?.lineage == lineage && model.starting != nil }
@@ -553,19 +572,8 @@ final class LiftPress: UILongPressGestureRecognizer {
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         if let t = touches.first { now = t.location(in: t.window); sample(t, event) }
-        if state == .possible, quickUp, let f = from, let p = now {
-            let dx = p.x - f.x, dy = p.y - f.y
-            // Only a clearly upward flick: its first 8 pt at 600 pt/s or more. A slower drag up is the page scrolling
-            // (gate on eb040c7: a slow drag on Watch lifted a card and sent it).
-            let dt = (samples.last?.t ?? 0) - (samples.first?.t ?? 0)
-            let fast = dt > 0 && sqrt(dx * dx + dy * dy) / CGFloat(dt) >= 600
-            // Nearly vertical: within 20° of straight up.
-            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.364, fast, Self.onShelf(touched) {
-                HandLog.note("lift quick-up")
-                state = .began
-                return
-            }
-        }
+        // Ruling R4 (gate on b9269a7): no quick-up lift at all. A thumb's fling starts the same way, and a scroll that sends a
+        // film is the worst failure. Only the still hold lifts.
         let was = state
         super.touchesMoved(touches, with: event)
         if was == .possible, state == .failed { HandLog.note("lift failed: moved before the hold") }
@@ -579,10 +587,8 @@ final class LiftPress: UILongPressGestureRecognizer {
     }
     // The scrolls wait for the quick lift to be ruled out (10 pt, or the hold), so an upward drag on a shelf is the hand's
     // and not the page's. The recognizer's own answer, not a delegate's: SwiftUI's gesture bridge owns the delegate.
-    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
-        guard quickUp, other is UIPanGestureRecognizer, other.view is UIScrollView else { return false }
-        return Self.onShelf(touched)
-    }
+    // No quick-up (R4): the scrolls never wait on this one.
+    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool { false }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         if let t = touches.first { now = t.location(in: t.window); sample(t, event) }
         super.touchesEnded(touches, with: event)

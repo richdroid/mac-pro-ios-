@@ -274,7 +274,7 @@ struct RootView: View {
     // keyboard still to come): Search open upright then showed no tabs at all (gate of f9ca25f).
     @State private var keyboardUp = false
     var body: some View {
-        let _ = SwipeLog.mark("body root")
+        let _ = SwipeLog.mark("body root"); let _ = Timing.body("root")
         PaneReader {
             // Content full width on the left, the tabs a glass pill at the foot of one rail on the right, in every posture,
             // as in Mac Pro: never a bar along the foot (Richard's reference of 2026-11-21, "this is what iphone duo apps
@@ -318,7 +318,12 @@ struct RootView: View {
             #endif
             followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 2, 6]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
-        .task { await BrowseStore.shared(.stremio).loadHome() }
+        .task {
+            await BrowseStore.shared(.stremio).loadHome()
+            // Watch's films asked for at launch too (the data only, no views), so its first visit is filled, not skeleton
+            // cards three seconds in (gate on b9269a7).
+            await BrowseStore.discover(UserDefaults.standard.string(forKey: "watchKind") ?? "movie").load()
+        }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
     }
     // Control Center and Siri can ask before this view exists, so the request waits in a flag.
@@ -546,7 +551,7 @@ struct Page<C: View>: View {
         .onChange(of: model.titleAsks) { _, _ in
             guard model.tab == tab, let t = model.titleAsk else { return }
             model.titleAsk = nil
-            path.append(TitleRoutes.add(t))
+            Timing.measure("title push") { path.append(TitleRoutes.add(t)) }
         }
         .topShade()
         .background {
@@ -1938,7 +1943,7 @@ struct RemoteTab: View {
     // The build's check of a narrower open phone ("-narrow 375"): the upright page laid out at that width.
     static let narrow: CGFloat? = { let v = UserDefaults.standard.double(forKey: "narrow"); return v > 0 ? CGFloat(v) : nil }()
     var body: some View {
-        let _ = SwipeLog.mark("body remote")
+        let _ = SwipeLog.mark("body remote"); let _ = Timing.body("remote")
         Group {
             if stackedUpright {
                 // Open upright: the picture's pane above the fold and the keys' pane under it, laid out here rather than by
@@ -2006,7 +2011,8 @@ struct RemoteTab: View {
                 // Folded and not typing: the open phone's column at this width (2026-11-20). The old folded column put the
                 // transport under the apps row and its keys at 42 pt (gate on cbfc0b5).
                 if !lay {
-                    GeometryReader { g in uprightColumn(width: g.size.width, height: g.size.height, margin: 14) }
+                    // 20 pt, the lip's and the title's edge: at 14 the picture and keys stood 6 pt left of them (gate on b9269a7).
+                    GeometryReader { g in uprightColumn(width: g.size.width, height: g.size.height, margin: 20) }
                         .overlay { episodesPanel() }
                 } else {
                 GeometryReader { geo in
@@ -3012,7 +3018,7 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
-        let _ = SwipeLog.mark("body apps")
+        let _ = SwipeLog.mark("body apps"); let _ = Timing.body("apps")
         content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).railRoom() }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
@@ -3724,7 +3730,7 @@ struct PlayingTab: View {
         .settledAnimation(.easeOut(duration: 0.3), value: watching)
     }
     var body: some View {
-        let _ = SwipeLog.mark("body playing")
+        let _ = SwipeLog.mark("body playing"); let _ = Timing.body("playing")
         Group {
             if panes {
                 FoldSplit { ScrollView { nowPane }.modifier(SeenHeight(seen: $seen)).backToTop() } right: {
@@ -3837,7 +3843,7 @@ struct FilmsTab: View {
     static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
     @Environment(\.paneLayout) private var panes
     var body: some View {
-        let _ = SwipeLog.mark("body films")
+        let _ = SwipeLog.mark("body films"); let _ = Timing.body("films")
         // Films or shows only swaps the rows: the switch itself, the search and the place on the page stay put.
         Group {
             // Unfolded, the rows take turns on each side of the fold, as on an app's own page, rather than running across it.
