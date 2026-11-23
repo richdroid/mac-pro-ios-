@@ -387,7 +387,7 @@ struct ConsolePage<Left: View, Right: View>: View {
         .modifier(TabBarFade())
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
-        .pushedTitle()
+        .pushedTitle(title)
         .animation(Motion.quick, value: away)
     }
 }

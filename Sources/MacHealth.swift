@@ -709,7 +709,7 @@ struct MacHealthView: View {
         .modifier(TabBarFade())
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
-        .pushedTitle()
+        .pushedTitle(title)
         .animation(Motion.quick, value: report)
         .animation(Motion.quick, value: down)
         .task { await poll() }
@@ -891,7 +891,7 @@ struct MacRestartView: View {
         .modifier(TabBarFade())
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
-        .pushedTitle()
+        .pushedTitle("Restart the Mac")
         .animation(Motion.quick, value: checks)
         .task { if !watch.active { await check() } }
     }

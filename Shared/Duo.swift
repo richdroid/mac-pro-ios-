@@ -504,7 +504,7 @@ func tabLabel(_ title: String, asset: String, fit: CGFloat = 25) -> some View {
     }
 }
 
-// A tab, for the system's bar and for the rail an app draws itself where the system's would overflow into "More".
+// A tab: its value, name and icon, for the system's TabView.
 struct RailItem: Identifiable {
     let value: Int
     let title: String
@@ -516,7 +516,7 @@ struct RailItem: Identifiable {
     @ViewBuilder var label: some View {
         if let asset { tabLabel(title, asset: asset, fit: fit) } else { tabLabel(title, symbol ?? "circle") }
     }
-    // The icon alone, fitted the same as in the system's bar.
+    // The icon alone, fitted the same as in the tab's label.
     var icon: Image {
         #if canImport(UIKit)
         if let asset { return Image(uiImage: cachedIcon(asset, fit: fit) { UIImage(named: asset) }) }
@@ -525,237 +525,6 @@ struct RailItem: Identifiable {
         #else
         return asset.map { Image($0) } ?? Image(systemName: symbol ?? "circle")
         #endif
-    }
-}
-
-// How far in from the trailing edge a page keeps clear for the rail SideRailTabs draws (0 with the system's bar).
-private struct SideRailKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
-extension EnvironmentValues { var sideRail: CGFloat { get { self[SideRailKey.self] } set { self[SideRailKey.self] = newValue } } }
-// A page clear of the drawn rail: its trailing safe area made up to the rail's column, on top of whatever the system
-// already keeps there (a pushed page's Back strip), never twice.
-// Likewise clear of the bar BottomBarTabs draws along the foot: room given from outside the navigation stack never
-// reached its pages (a list's last row and the session's keys lay under the bar, designer gate 1, 2026-11-20), so each
-// page takes it here, as it does the rail's.
-private struct BottomBarKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
-extension EnvironmentValues { var bottomBar: CGFloat { get { self[BottomBarKey.self] } set { self[BottomBarKey.self] = newValue } } }
-// `listMargin`: what the page adds of its own on top of the room the app gives it. Open upright (no system strip, so the
-// room is the app's) a tab's list and the Mac Pro app's pages set their 20 pt margin beside the room rather than within
-// it, and ended 20 pt short of a pushed Chumby page, which sets it within (gate, 11-22). Taken off here, every page ends
-// 10 pt short of the pill, as it does where the system's strip gives the room.
-struct RailRoom: ViewModifier {
-    var listMargin: CGFloat = 0
-    @Environment(\.sideRail) private var rail
-    @Environment(\.bottomBar) private var bar
-    @State private var has: CGFloat = 0
-    func body(content: Content) -> some View {
-        content
-            .safeAreaPadding(.trailing, rail > has ? max(0, rail - has - listMargin) : 0)
-            .safeAreaPadding(.bottom, bar)
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
-    }
-}
-extension View { func railRoom(listMargin: CGFloat = 0) -> some View { modifier(RailRoom(listMargin: listMargin)) } }
-
-// Tabs with the rail drawn along the trailing edge, for where the system's own would hold too few and put the rest
-// under "More" (the Duo folded on its side holds four). Never a More list: every tab is in the rail, one tap away.
-// The system's look: a glass capsule of icons at the foot of the side column (the top kept for a pushed page's Back),
-// the tab in front in the accent colour on a soft disc. Tapping the tab in front hands its value back, as TabView does,
-// so TabReset takes it to its start. Each tab once shown is kept, as TabView keeps them, so coming back finds it as left.
-struct SideRailTabs<Content: View>: View {
-    @Binding var selection: Int
-    let items: [RailItem]
-    let badge: (Int) -> Int
-    // Stepped aside while the keyboard is up, as the system's rail does: above the keyboard it ran into the status at the
-    // top folded on its side. The page keeps the room, so nothing on it moves as the rail goes and comes back.
-    var hidden = false
-    // The tabs to build ahead, after the first frame, one per idle turn, so a tab's first open isn't its first build (a
-    // 250-1300 ms freeze, Mint Remote audit 11-22). Opt-in: only tabs whose pages do nothing on appearing but load.
-    var prewarm: [Int] = []
-    @ViewBuilder let content: (Int) -> Content
-    @State private var shown: Set<Int> = []
-    @State private var edge: CGFloat = 0
-    @Environment(\.colorScheme) private var scheme
-    // The system's own rail, measured on the build's "before" shot at 859 x 604 pt (CI d8bbee4): an icon every 49 pt,
-    // 26 pt clear of the foot, the tab in front on a dark inset capsule (designer gate 1, 2026-11-20). Each cell 44 pt
-    // wide, the HIG's least tap target (it was 39, the system's look; HIG gate 11-22).
-    static var cell: CGFloat { 44 }
-    static var cellHeight: CGFloat { 49 }
-    static var inset: CGFloat { 3 }
-    static var margin: CGFloat { 10 }
-    static var foot: CGFloat { 26 }
-    static var width: CGFloat { cell + inset * 2 }
-    // The pill's centre line, from the display's trailing edge: the status column's (the clock and Wi-Fi stand 48 pt in,
-    // folded, open flat and open upright alike, and the system's own rail on that line). Centred in the page's clear
-    // column instead, it stood 42 pt in folded and 33 open upright, off the status above it (gate, 11-22).
-    static var centre: CGFloat { 48 }
-    // The page keeps clear of the pill and a margin past it, or of the system's strip where that is wider.
-    private var column: CGFloat { max(edge, Self.centre + Self.width / 2 + Self.margin) }
-    var body: some View {
-        ZStack {
-            ForEach(items) { it in
-                let front = it.value == selection
-                if front || shown.contains(it.value) {
-                    content(it.value)
-                        .opacity(front ? 1 : 0)
-                        .allowsHitTesting(front)
-                        .accessibilityHidden(!front)
-                        .zIndex(front ? 1 : 0)
-                }
-            }
-        }
-        // The rail stands in the system's own side strip, under its gear or Back, so the page keeps clear of that strip
-        // only (or of the rail, were it the wider): one column of chrome, not two (gate on e6af881).
-        .environment(\.sideRail, column)
-        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
-        .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
-        .task {
-            guard !prewarm.isEmpty else { return }
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            for t in prewarm where !shown.contains(t) {
-                await Task.yield()
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                shown.insert(t)
-            }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            // On the status column's centre line, measured from the display's edge; its foot 26 pt from the display's bottom edge, as
-            // the system's rail stands (measured from the bottom safe area it stood about 62 pt up: Chumby gate, 11-22).
-            rail.padding(.trailing, Self.centre - Self.width / 2).padding(.bottom, Self.foot)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .ignoresSafeArea(.container, edges: [.trailing, .bottom])
-                .opacity(hidden ? 0 : 1).allowsHitTesting(!hidden).accessibilityHidden(hidden)
-                .animation(.easeOut(duration: 0.25), value: hidden)
-        }
-    }
-    private var rail: some View {
-        VStack(spacing: 0) {
-            ForEach(items) { it in
-                let front = it.value == selection
-                Button { selection = it.value } label: {
-                    it.icon
-                        .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                        .frame(width: Self.cell, height: Self.cellHeight)
-                        // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
-                        .background { Capsule().fill(scheme == .dark ? Color.black.opacity(0.38) : Color.primary.opacity(0.08)).opacity(front ? 1 : 0) }
-                        .overlay(alignment: .topTrailing) {
-                            let n = badge(it.value)
-                            if n > 0 {
-                                Text("\(n)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
-                                    .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
-                                    .background(Color.red, in: Capsule())
-                                    .offset(x: 2, y: 1)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(it.title)
-                .accessibilityIdentifier("tab." + it.title)
-                .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
-                .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
-            }
-        }
-        .padding(Self.inset)
-        .glassEffect(.regular.interactive(), in: Capsule())
-    }
-}
-
-// Tabs with the bar drawn along the foot, for an upright phone too narrow for the system's: iOS's own bar there holds
-// five and puts the sixth and the rest under "More" (Richard, 2026-11-20: "i said more never"). All six, one tap away:
-// the system's look, a floating glass capsule of icons over their names, the tab in front in the accent colour on a
-// soft capsule. Pages keep clear of it as they do of the system's bar. Tabs once shown are kept, as TabView keeps them.
-struct BottomBarTabs<Content: View>: View {
-    @Binding var selection: Int
-    let items: [RailItem]
-    let badge: (Int) -> Int
-    @ViewBuilder let content: (Int) -> Content
-    @State private var shown: Set<Int> = []
-    @State private var keyboardUp = false
-    @Environment(\.colorScheme) private var scheme
-    static var height: CGFloat { 54 }
-    static var inset: CGFloat { 4 }
-    var body: some View {
-        ZStack {
-            ForEach(items) { it in
-                let front = it.value == selection
-                if front || shown.contains(it.value) {
-                    content(it.value)
-                        .opacity(front ? 1 : 0)
-                        .allowsHitTesting(front)
-                        .accessibilityHidden(!front)
-                        .zIndex(front ? 1 : 0)
-                }
-            }
-        }
-        // Room for the bar, taken by each page (railRoom). None with the keyboard up: the bar is behind the keyboard
-        // then, and its room would be a band over the keys.
-        .environment(\.bottomBar, keyboardUp ? 0 : Self.height + Self.inset * 2 + 6)
-        #if canImport(UIKit)
-        // Up only when the keyboard really covers the foot: with a hardware keyboard "will show" comes for a bar of a
-        // few points, and the page then lost the bar's room with nothing over the bar (CI 9f706bc, bar-keyboard).
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
-            guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-            let screen = UIScreen.main.bounds.height
-            keyboardUp = f.height > 120 && f.minY < screen - 120
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
-        #endif
-        .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
-        // Under the bar the page fades into the ground, the system's soft edge: a card's words read through the glass,
-        // doubled and cut off, where the page ran on beneath it (Richard, 2026-11-21, Status).
-        .overlay(alignment: .bottom) {
-            if !keyboardUp {
-                let ground = scheme == .dark ? Color.black : Color.white
-                LinearGradient(stops: [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: 0.4), .init(color: ground, location: 1)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: Self.height + Self.inset * 2 + 52)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .ignoresSafeArea(.container, edges: .bottom)
-                    .allowsHitTesting(false)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            // No wider than the system's own bar is where there's room (open upright): centred, not stretched.
-            bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .ignoresSafeArea(.keyboard)
-        }
-    }
-    private var bar: some View {
-        HStack(spacing: 0) {
-            ForEach(items) { it in
-                let front = it.value == selection
-                Button { selection = it.value } label: {
-                    VStack(spacing: 2) {
-                        it.icon.resizable().scaledToFit().frame(width: 24, height: 22)
-                        Text(it.title).font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
-                    }
-                    .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                    // Each cell at least its name and 8 pt of air either side, the rest shared: equal cells left
-                    // "Dashboard" touching its capsule's ends (designer gate 1, 2026-11-20).
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, minHeight: Self.height)
-                    // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
-                    .background { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)).opacity(front ? 1 : 0) }
-                    .overlay(alignment: .top) {
-                        let n = badge(it.value)
-                        if n > 0 {
-                            Text("\(n)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
-                                .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
-                                .background(Color.red, in: Capsule())
-                                .offset(x: 14, y: 3)
-                        }
-                    }
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(it.title)
-                .accessibilityIdentifier("tab." + it.title)
-                .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
-                .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
-            }
-        }
-        .padding(Self.inset)
-        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 
@@ -816,85 +585,6 @@ enum TabTour {
     }
 }
 
-// Whether the system's own tab bar or rail is showing "More" (the "•••" item) right now, read from UIKit itself, never
-// guessed from a size (Richard, 2026-11-20: "never a more thing ever"). His phone open flat showed the system rail with
-// four tabs and "•••" where the build's shots showed six: the rail had kept the split it made at a narrower width (the
-// app opened folded, then unfolded). So the app asks the tab bar what it shows, and wherever it would overflow it draws
-// the rail or bar itself (SideRailTabs, BottomBarTabs) with every tab. Put in the background of a tab's page.
-#if canImport(UIKit)
-struct TabOverflowProbe: UIViewRepresentable {
-    let tabs: Int
-    let report: (Bool) -> Void
-    func makeUIView(context: Context) -> Probe { let v = Probe(); v.isUserInteractionEnabled = false; v.tabs = tabs; v.report = report; return v }
-    func updateUIView(_ v: Probe, context: Context) { v.tabs = tabs; v.report = report }
-    final class Probe: UIView {
-        var tabs = 0
-        var report: (Bool) -> Void = { _ in }
-        private var last: Bool?
-        override func didMoveToWindow() { super.didMoveToWindow(); look() }
-        override func layoutSubviews() { super.layoutSubviews(); look() }
-        private func look() {
-            // After this pass: the bar lays its items out in the same pass as the page.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.window != nil, let tbc = self.tabController() else { return }
-                let over = Self.overflows(tbc, tabs: self.tabs)
-                guard over != self.last else { return }
-                self.last = over
-                TabsLog.note("system tabs \(Int(self.window?.bounds.width ?? 0))x\(Int(self.window?.bounds.height ?? 0)): \(over ? "MORE" : "all \(self.tabs)") (items \(tbc.tabBar.items?.count ?? -1), hidden \(tbc.tabBar.isHidden))")
-                self.report(over)
-            }
-        }
-        private func tabController() -> UITabBarController? {
-            var r: UIResponder? = self
-            while let x = r { if let t = x as? UITabBarController { return t }; r = x.next }
-            func find(_ c: UIViewController?) -> UITabBarController? {
-                guard let c else { return nil }
-                if let t = c as? UITabBarController { return t }
-                for k in c.children { if let t = find(k) { return t } }
-                return find(c.presentedViewController)
-            }
-            return find(window?.rootViewController)
-        }
-        // Three ways UIKit can say it: the More item among the bar's items, fewer items than tabs, or a "More" button
-        // anywhere in the tab bar controller's own views (the rail draws it as "•••").
-        static func overflows(_ tbc: UITabBarController, tabs: Int) -> Bool {
-            let items = tbc.tabBar.items ?? []
-            let more = tbc.moreNavigationController.tabBarItem
-            if items.contains(where: { $0 === more }) { return true }
-            if !items.isEmpty, items.count < tabs { return true }
-            func hasMore(_ v: UIView, depth: Int) -> Bool {
-                if depth > 14 { return false }
-                if v.isHidden || v.alpha < 0.01 { return false }
-                if let l = v.accessibilityLabel, l == "More" || l == "•••", v.window != nil { return true }
-                return v.subviews.contains { hasMore($0, depth: depth + 1) }
-            }
-            return hasMore(tbc.tabBar, depth: 0) || tbc.view.subviews.filter { $0 !== tbc.tabBar && !(tbc.selectedViewController?.view.isDescendant(of: $0) ?? false) }.contains { hasMore($0, depth: 0) }
-        }
-    }
-}
-#endif
-// What the tab probe saw, to Caches/tabs-log.txt (rare lines: one per change), for the build's logs.
-enum TabsLog {
-    static func note(_ s: String) {
-        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
-        let url = dir.appendingPathComponent("tabs-log.txt")
-        let line = ISO8601DateFormatter().string(from: Date()) + " " + s + "\n"
-        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
-        else { try? Data(line.utf8).write(to: url) }
-        SwipeLog.note(s)
-    }
-}
-extension View {
-    // TabOverflowProbe behind a tab's page, where UIKit exists.
-    @ViewBuilder func probesTabOverflow(_ on: Bool, tabs: Int, _ report: @escaping (Bool) -> Void) -> some View {
-        #if canImport(UIKit)
-        self.background { if on { TabOverflowProbe(tabs: tabs, report: report).frame(width: 1, height: 1).allowsHitTesting(false).accessibilityHidden(true) } }
-        #else
-        self
-        #endif
-    }
-}
-
 // The build's shots at a size the simulator hasn't: -windowSize 859x604 makes the app's window that many points, at the
 // display's top left (his phone open flat is 859 x 604 pt, the simulator's 951 x 669; the system's rail holds fewer tabs
 // in the shorter one). Only with the launch argument; never on the phone.
@@ -911,4 +601,46 @@ enum ShotWindow {
         }
         #endif
     }
+}
+
+// For the build's films of Back (-findBack YES, never on the phone): where the system put the Back button, as fractions
+// of the window, to Caches/back-at.txt every half second, so a real tap or long press lands on it in every posture
+// (iOS places it: the top of the side strip folded and open in landscape, the top bar open upright). The lines after
+// the first list every bar button seen, for the log.
+enum BackFinder {
+    @MainActor static func start() {
+        #if canImport(UIKit)
+        guard UserDefaults.standard.bool(forKey: "findBack") else { return }
+        Task { @MainActor in
+            for _ in 0..<240 { try? await Task.sleep(nanoseconds: 500_000_000); write() }
+        }
+        #endif
+    }
+    #if canImport(UIKit)
+    @MainActor private static func write() {
+        guard let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first,
+              let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first, w.bounds.width > 0 else { return }
+        var back: CGRect?, close: CGRect?
+        var seen: [String] = []
+        func look(_ v: UIView, _ depth: Int) {
+            guard depth < 60, !v.isHidden, v.alpha > 0.01 else { return }
+            let name = NSStringFromClass(type(of: v))
+            let r = v.convert(v.bounds, to: w)
+            let isBack = v.accessibilityIdentifier == "BackButton" || name.contains("BackButton")
+            let onScreen = r.width > 4 && r.height > 4 && w.bounds.intersects(r)
+            if isBack, onScreen { back = r }
+            // A sheet's own way out, the system's toolbar item (Close, Cancel or Done).
+            if !isBack, onScreen, close == nil, (v is UIControl || name.contains("Button")), ["Close", "Cancel", "Done"].contains(v.accessibilityLabel ?? "") { close = r }
+            if (isBack || name.contains("BarButton")) && seen.count < 40 {
+                seen.append(String(format: "%@ id=%@ label=%@ %.0f,%.0f %.0fx%.0f", name, v.accessibilityIdentifier ?? "-", v.accessibilityLabel ?? "-", r.minX, r.minY, r.width, r.height))
+            }
+            for s in v.subviews { look(s, depth + 1) }
+        }
+        look(w, 0)
+        let first = back.map { String(format: "%.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "none"
+        let shut = close.map { String(format: "close %.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "close none"
+        let text = ([first, shut, String(format: "window %.0fx%.0f", w.bounds.width, w.bounds.height)] + seen).joined(separator: "\n") + "\n"
+        try? text.write(to: dir.appendingPathComponent("back-at.txt"), atomically: true, encoding: .utf8)
+    }
+    #endif
 }

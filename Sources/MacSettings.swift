@@ -187,7 +187,7 @@ struct MacSettings: View {
                 .modifier(TabBarFade())
                 .background(groupedBackground.ignoresSafeArea())
                 .topEdge()
-                .pushedTitle()
+                .pushedTitle("Settings")
         } else {
             NavigationStack {
                 // The same top edge as every other tab, rather than the system's band and hairline.

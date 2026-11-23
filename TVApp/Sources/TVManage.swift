@@ -232,7 +232,7 @@ struct ManageAppsView: View {
         .topShade().topFade()
         // The same wall as the rest of Settings, outside the fade's mask so its top isn't a black band.
         .background { Ambience() }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Apps on the TV").toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         // Edit is the system's own item in the page's bar: on the Duo, in the side bar under Back (folded, and open in
         // landscape), in the top bar open in portrait. It sat in a glass capsule of this page's own at the foot (ruling
         // 2026-11-10: a page's actions go through the system's bar, never a hand-built pill).
@@ -392,7 +392,7 @@ struct ManageSettingsView: View {
         .topShade().topFade()
         // The same wall as Settings and Connection, outside the fade's mask so its top isn't a black band.
         .background { Ambience() }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("TV settings").toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         .barPage()
         .refreshable { await store.load() }
         .task { await store.load() }

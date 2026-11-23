@@ -476,7 +476,7 @@ struct StremioAccountPage: View {
     var body: some View {
         Group { if panes { FoldSplit { page } right: { Color.clear } } else { page } }
             .background { Ambience() }
-            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Stremio").toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
             .barPage()
     }
     var page: some View {

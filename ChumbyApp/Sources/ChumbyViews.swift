@@ -202,33 +202,14 @@ extension View {
     func glass(_ radius: CGFloat = 26) -> some View { self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous)) }
     func glassCircle() -> some View { self.glassEffect(.regular.interactive(), in: Circle()) }
     func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14).roomyIndicators() }
-    // A modal that fills the display up to the Duo's side column, in every posture: a full-screen cover on the phone,
-    // never the system's sheet, which the Duo draws as an inset card with a gap at the left and top (Richard,
-    // 2026-11-10, Add alarm folded: "i dont like thats its not edge to edge"). The zoom from the row that opened it
-    // carries over, and with it the drag back down. The Mac check has no covers, so there it's a sheet.
+    // A modal task (an editor, a picker): the system's own sheet, placed and sized by iOS, with its Cancel, Close or
+    // Done as the sheet's toolbar items (Richard, 2026-11-23: "in line with latest ios documentation on everything").
+    // The zoom from the row that opened it carries over.
     @ViewBuilder func fillCover<Item: Identifiable, C: View>(item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> C) -> some View {
-        #if os(iOS)
-        fullScreenCover(item: item, content: content)
-        #else
         sheet(item: item, content: content)
-        #endif
     }
     @ViewBuilder func fillCover<C: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {
-        #if os(iOS)
-        fullScreenCover(isPresented: isPresented, content: content)
-        #else
         sheet(isPresented: isPresented, content: content)
-        #endif
-    }
-    // A modal with one button (Connect, Done): its bar stays across the top with its title, as Apple's Duo talks have it
-    // for a sheet with a single close button, rather than a side column holding one glyph. On the root of the modal's
-    // stack, where the presentation reads it.
-    @ViewBuilder func horizontalBars() -> some View {
-        #if os(iOS)
-        if #available(iOS 27.1, *) { toolbarVerticalBehavior(.disabled) } else { self }
-        #else
-        self
-        #endif
     }
     // No scroll bars in any Chumby list or scroll. Inset 7 pt they only hung as a grey line against the cards, by the rail
     // (Richard, 2026-11-05: "the scroll bar is too close to the screen for my eyes", then "the scroll bar dude"); the pages
@@ -401,40 +382,16 @@ struct TwoPane<L: View, R: View>: View {
     @Environment(\.horizontalSizeClass) private var size
     @EnvironmentObject private var model: ChumbyModel
     let left: L, right: R
-    // The right pane's own title, when it shows a page of its own (Calendar settings), with its way back. Nil when the
-    // page brings its own title row (the alarm editor, a calendar day).
-    var rightTitle: String? = " "
-    var rightTrailing: AnyView?
-    // False for the moment the right pane changes pages (Alarms' show), so one page fades out before the next fades in.
-    var rightShown = true
-    // A page that brings its own list and title (the alarm editor, a calendar day), shown in place of `right`'s list, so
-    // it can pin its own title row with its buttons.
-    var rightPage: AnyView?
-    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, rightShown: Bool = true, rightPage: AnyView? = nil, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
-        self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.rightShown = rightShown; self.rightPage = rightPage; self.left = left(); self.right = right()
-    }
+    init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
     var body: some View {
         if panes {
+            // Content only, side by side: navigation stays outside (HIG, "Arrangement views"). Pages and editors go over
+            // the tab as the system's push or sheet, in every posture.
             FoldSplit {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
-                // The pane's own list stays alive under a page that covers it (a sound list, the song picker, an editor), so
-                // coming back finds it where it was left, never at its top; the pages cross-fade (gate, 11-14: a hard cut).
-                ZStack {
-                    // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
-                    // settings, with Done) stays pinned once the pane is scrolled.
-                    // Under a page the row stays as it was (blank), so the list keeps its place.
-                    let title = rightTitle ?? (rightPage != nil ? " " : nil)
-                    let pinned = title.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
-                    List { if let title { PageTitle(title, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
-                        .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
-                        .opacity(rightPage == nil ? 1 : 0)
-                        .allowsHitTesting(rightPage == nil)
-                        .accessibilityHidden(rightPage != nil)
-                    if let rightPage { rightPage.transition(.opacity) }
-                }
-                .animation(.easeInOut(duration: 0.2), value: rightPage != nil)
-                .opacity(rightShown ? 1 : 0)
+                // A blank title row, so both panes start level.
+                List { PageTitle(" "); Group { right }.listRowBackground(GlassRow()) }
             }
             .seaList()
             .animation(.snappy, value: model.unreachable)
@@ -594,10 +551,13 @@ extension View {
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
         self.background { if shown { ZStack { SeaBackground(active: active); GhostOctopus(active: active) }.ignoresSafeArea() } }
     }
-    // A tab's own page: its title is the first row, so no empty bar sits above it and every tab starts at the same height.
+    // A tab's own root page: its title is the first row, so no empty bar sits above it and every tab starts at the same
+    // height. Pages pushed over it have the system's bar, with its Back.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
-        // Clear of the rail, less the list's own 20 pt margin, which a tab's list sets beside the room open upright (RailRoom).
-        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)").toolbar(.hidden, for: .navigationBar).railRoom(listMargin: 20)
+        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)")
+            // Its name for the system (Back over a page pushed from it, and the long press on Back), its bar hidden.
+            .navigationTitle(RootView.titles[tab] ?? "")
+            .toolbar(.hidden, for: .navigationBar)
             .background { TabTop.Marker(tab: tab) }
     }
     // For the build's films of Back (-swipeLog YES, never on the phone): where this view is, its size and its safe area,
@@ -629,6 +589,8 @@ struct RootView: View {
         RailItem(value: 3, title: "sounds", symbol: "music.note"),
         RailItem(value: 4, title: "tinker", symbol: "wrench.adjustable"),
     ]
+    // Each tab root's name, for the system's Back and its history menu (the pages draw their own headings).
+    static let titles = [0: "My Chumby", 1: "Channels", 2: "Alarms", 3: "Sounds", 4: "Tinker"]
     @ViewBuilder func page(_ t: Int) -> some View {
         switch t {
         case 0: HomeTab()
@@ -643,15 +605,15 @@ struct RootView: View {
             ZStack {
                 // The sea's own base colour under everything, so the first frame matches the launch screen.
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()
-                // The Duo's side column (clock, Wi-Fi and the tabs) is the trailing safe area.
-                Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
-                // The tabs as one vertical glass pill at the foot of the right rail, in every posture: the content full
-                // width on the left, the rail with the status at its top and the tabs at its foot. Never a bar along the
-                // foot (Richard, 2026-11-21: "this is what iphone duo apps look like"). The system's TabView put them
-                // there folded and open flat, but drew a bar across the foot open upright. The same rail as the Mac Pro
-                // app's (SideRailTabs); each tab's pages keep clear of it (railRoom, in tabPage).
-                SideRailTabs(selection: TabReset.binding($model.tab) { retap($0) }, items: Self.tabs, badge: { _ in 0 }, prewarm: UserDefaults.standard.bool(forKey: "noPrewarm") ? [] : [1, 2, 3, 4]) { t in
-                    NavigationStack { page(t).tabPage(t, model) }.id(resets[t, default: 0])
+                // The system's own tabs, placed by iOS: down the side strip folded and open in landscape, a bar along the
+                // foot open upright (HIG, iPhone Duo, "Vertical controls"; Richard, 2026-11-23: "in line with latest ios
+                // documentation on everything"). Tapping the tab in front again takes it back to its start (retap).
+                TabView(selection: TabReset.binding($model.tab) { retap($0) }) {
+                    ForEach(Self.tabs) { it in
+                        Tab(value: it.value) {
+                            NavigationStack { page(it.value).tabPage(it.value, model) }.id(resets[it.value, default: 0])
+                        } label: { it.label }
+                    }
                 }
                 .onChange(of: model.tab) { _, t in Haptic.fire(.tick); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
             }
@@ -659,6 +621,7 @@ struct RootView: View {
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
         .onAppear {
+            BackFinder.start()
             if ["ringscreen", "ringfail", "ringpagedemo"].contains(ChumbyModel.pose) { model.ringScreen = true }
             if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
         }
@@ -805,7 +768,6 @@ struct ConnectionView: View {
             }
             .onAppear { address = model.address }
         }
-        .horizontalBars()
     }
 }
 
@@ -1857,7 +1819,7 @@ struct ChannelsTab: View {
         }
         lastAdded = id
         changed()
-        // Open, the channel's list is beside the picker: the new widget lands there at once, glowing.
+        // Open, the channel's list may show beside the sheet: the new widget lands there at once, glowing.
         if adding && wide {
             withAnimation(.snappy) { justAdded = id }
             Task {
@@ -2266,19 +2228,16 @@ struct ChannelsTab: View {
 
     var body: some View {
         ScrollViewReader { scroll in
-        // The channel and its widgets lead, folded and in the left pane open; the screen's other controls follow, or the
-        // Add widgets picker takes their pane while it's open, with the channel's list live beside it.
-        TwoPane(rightTitle: adding && wide ? "Add to \(pickedTitle)" : " ",
-                rightTrailing: adding && wide ? AnyView(doneButton { closeAdd(scroll) }) : nil) {
+        // The channel and its widgets lead, folded and in the left pane open; the screen's other controls follow.
+        TwoPane {
             PageTitle("Channels")
             ReachRow()
             channelSection
         } right: {
-            if adding && wide { addSections } else { onScreen }
+            onScreen
         }
-        // Edge to edge, like every modal (fillCover). Its one button, Done, stays in a bar across the top with the
-        // channel's name, as a single-button sheet does on the Duo (horizontalBars); the list has the whole width.
-        .fillCover(isPresented: Binding(get: { adding && !wide }, set: { if !$0 { closeAdd(scroll) } })) {
+        // The Add widgets picker is the system's sheet in every posture, its Done the sheet's confirmation item.
+        .fillCover(isPresented: Binding(get: { adding }, set: { if !$0 { closeAdd(scroll) } })) {
             NavigationStack {
                 List { addSections.listRowBackground(GlassRow()) }
                     .seaList().background { SeaBackground().ignoresSafeArea() }
@@ -2287,13 +2246,11 @@ struct ChannelsTab: View {
                         ToolbarItem(placement: .confirmationAction) { doneButton { closeAdd(scroll) } }
                     }
             }
-            .horizontalBars()
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
             .environment(\.colorScheme, scheme)
         }
         .onChange(of: picked) { _, _ in if adding { withAnimation(.snappy) { adding = false } } }
-        .onChange(of: wide) { _, _ in if adding { adding = false; if !reordering { flush() } } }
         // Leaving the app with an edit still waiting (Edit or the picker left open): it goes now, never lost.
         .onChange(of: phase) { _, p in if p == .background { flush() } }
         .onAppear {
@@ -2529,29 +2486,11 @@ struct SoundsTab: View {
     @State private var addStream = false
     @State private var addStation = false
     @State private var pickSong = false
-    // The value whose list page is open (a push folded and upright; the right pane open flat).
+    // The value whose list page is open: a page pushed over Sounds in every posture, with the system's Back.
     @State private var choosing: SoundChooser?
-    @Environment(\.paneLayout) private var wide
-    // Where the song picker opened (the right pane open flat, a cover otherwise), kept while the keyboard is up: open
-    // upright the keyboard shortens the page until it reads as sideways, which closed the cover for a pane and back
-    // (11-12 branch film). A real turn or fold with the keyboard down moves it.
-    @State private var pickPane = false
-    @State private var keyboardUp = false
     @StateObject private var draft = MacSongDraft()
-    // Open flat, the pane's pages change as Alarms' do: out in 0.12 s, swapped unseen, in over 0.2 s (11-12 gate: a
-    // pick closed the picker with its rows drawn through Sounds' own).
-    @State private var paneFaded = false
-    // What he typed is kept while the picker moves by a turn or fold, and starts afresh at each opening (not cleared as
-    // it closes, which would empty the list as it leaves).
-    func openPicker() { draft.clear(); pickPane = wide; pickSong = true }
-    func closePane() {
-        withAnimation(.easeIn(duration: 0.12)) { paneFaded = true }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            pickSong = false
-            withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
-        }
-    }
+    // What he typed starts afresh at each opening of the song picker (the system's sheet, in every posture).
+    func openPicker() { draft.clear(); pickSong = true }
     @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
@@ -2634,11 +2573,11 @@ struct SoundsTab: View {
     // The alarm (his own, or the calendar's) a chooser was opened for.
     func alarm(for id: String) -> Alarm? { mine.first { $0.key == id } ?? calendarSound.flatMap { $0.key == id ? $0 : nil } }
     // The page a value opens: Tones, Radio, Pandora, Silent, a check on the current one.
-    @ViewBuilder func chooserPage(_ c: SoundChooser, pane: Bool) -> some View {
+    @ViewBuilder func chooserPage(_ c: SoundChooser) -> some View {
         let back = { choosing = nil }
         if c.id == "fade" {
             SoundListPage(name: "Fade in", sections: [PickSection(title: nil, options: Self.fades.map { PickOption(tag: "\($0.0)", label: $0.1) })],
-                          current: "\(model.state.fade)", pane: pane, pick: { t in
+                          current: "\(model.state.fade)", pick: { t in
                 guard let v = Int(t), v != model.state.fade else { return }
                 picked["fade"] = Self.fades.first { $0.0 == v }?.1
                 MenuClose.then { model.change(.fade(v)); release("fade") { model.state.fade == v } }
@@ -2646,7 +2585,7 @@ struct SoundsTab: View {
         } else if let a = alarm(for: c.id) {
             let tag = a.soundTag(streams: model.state.streams)
             SoundListPage(name: c.title, sections: soundSections(a, tag: tag),
-                          current: tag, pane: pane, pick: { t in chooseSound(a, t, mark: c.calendar ? nil : a.key) }, done: back)
+                          current: tag, pick: { t in chooseSound(a, t, mark: c.calendar ? nil : a.key) }, done: back)
         } else {
             Color.clear.onAppear { choosing = nil }
         }
@@ -2684,9 +2623,7 @@ struct SoundsTab: View {
 
     var body: some View {
         // Open flat, the song picker takes the right pane (its own title row and list), with the Now card live beside it.
-        TwoPane(rightTitle: (pickSong && pickPane) || (wide && choosing != nil) ? nil : " ", rightShown: !(wide && paneFaded),
-                rightPage: pickSong && pickPane ? AnyView(MacSongPicker(draft: draft, pane: { closePane() }).environmentObject(model))
-                    : wide ? choosing.map { c in AnyView(chooserPage(c, pane: true).environmentObject(model)) } : nil) {
+        TwoPane {
             PageTitle("Sounds")
             ReachRow()
             // AirPlay in the Now card, under the volume: it's how music reaches the Chumby, and alone it was a one-row
@@ -2843,25 +2780,11 @@ struct SoundsTab: View {
         }
         .seaList()
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
-        // Folded and open upright a value's list is pushed (the system's Back); open flat it is the right pane. A turn
-        // keeps it: the binding only lets go when the page itself goes back.
-        .navigationDestination(isPresented: Binding(get: { choosing != nil && !wide }, set: { if !$0 && !wide { choosing = nil } })) {
-            if let c = choosing { chooserPage(c, pane: false).environmentObject(model).railRoom() }
+        // A value's list is pushed (the system's Back and edge swipe) in every posture.
+        .navigationDestination(isPresented: Binding(get: { choosing != nil }, set: { if !$0 { choosing = nil } })) {
+            if let c = choosing { chooserPage(c).environmentObject(model) }
         }
-        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 && !pickPane { pickSong = false } })) { MacSongPicker(draft: draft, toPane: { pickPane = true }).environmentObject(model) }
-        // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held
-        // for a moment with the keyboard down.
-        // Checked again when the keyboard goes down, for a turn made while it was up. (The cover closing for the pane
-        // reports itself closed: that must not close the picker, so the cover's setter ignores it once it's the pane's.)
-        .task(id: "\(wide) \(keyboardUp)") {
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            if !Task.isCancelled, pickSong, !keyboardUp, pickPane != wide { pickPane = wide }
-        }
-
-        #if os(iOS)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }
-        #endif
+        .fillCover(isPresented: $pickSong) { MacSongPicker(draft: draft).environmentObject(model) }
         .alert("Add a Pandora station", isPresented: $addStation) {
             TextField("Pandora link", text: $stationLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             Button("Add") { let l = stationLink; stationLink = ""; Task { await model.addPandora(l) } }

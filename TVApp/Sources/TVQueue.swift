@@ -380,41 +380,16 @@ struct QueueSheet: View {
     }
 }
 
-// Open flat, the full queue takes the right pane itself: no card laid across the hinge.
-struct QueuePane: View {
-    @ObservedObject private var showing = QueueStore.shared.showing
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                RowTitle("Up next")
-                Spacer(minLength: 12)
-                Button { Haptic.fire(.tap); withAnimation(.easeOut(duration: 0.25)) { showing.on = false } } label: {
-                    Text("Done").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent).frame(minHeight: 44).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).padding(.bottom, 8)
-            }
-            .padding(.horizontal, 20)
-            QueueList(dismiss: { withAnimation(.easeOut(duration: 0.25)) { showing.on = false } }).padding(.horizontal, 20)
-        }
-        .padding(.top, 6)
-        .transition(.opacity)
-    }
-}
-
-// Where the queue shows: the right pane, open flat (the page hands this its pane), else a sheet over the page.
+// The full queue is the system's sheet in every posture, with Done as its confirmation item (Richard, 2026-11-23: "in
+// line with latest ios documentation on everything"); it was the right pane open flat, with a Done of its own.
 struct QueueOr<C: View>: View {
-    @ObservedObject private var showing = QueueStore.shared.showing
     let content: C
-    var body: some View {
-        if showing.on { QueuePane() } else { content }
-    }
+    var body: some View { content }
 }
 struct QueueSheetHost: ViewModifier {
     @ObservedObject private var showing = QueueStore.shared.showing
     let panes: Bool
-    func body(content: Content) -> some View {
-        if panes { content } else { content.sheet(isPresented: $showing.on) { QueueSheet() } }
-    }
+    func body(content: Content) -> some View { content.sheet(isPresented: $showing.on) { QueueSheet() } }
 }
 
 // Shuffle, the queue and repeat (off, all, one) under the transport: the first and last show what Mint says and change it with a

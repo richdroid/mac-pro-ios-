@@ -494,57 +494,12 @@ struct RootView: View {
     @ObservedObject private var seeds: SeedStore
     init(seeds: SeedStore) {
         _seeds = ObservedObject(wrappedValue: seeds)
-        // Launched on its side, the rail is there from the first frame, not swapped in for the system's bar after it.
-        #if canImport(UIKit)
-        if let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow ?? ($0 as? UIWindowScene)?.windows.first }).first {
-            _sideways = State(initialValue: Self.isSideways(w.bounds.size))
-            _window = State(initialValue: w.bounds.size)
-            _strip = State(initialValue: w.safeAreaInsets.right)
-        }
-        #endif
     }
     private var updateCount: Int { seeds.seed.map { UpdatesSection.updates($0).count } ?? 0 }
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
-    // Folded on its side: wider than tall and short (466 pt; open flat is 669 pt, whose system rail holds all six).
-    @State private var sideways = false
-    // The strip the system keeps down the trailing edge on the cover display and open flat (the clock, the camera, its
-    // Back and the gear). Wherever it is there, the tabs stand in it, as the Duo's own apps have theirs (HIG, "Vertical
-    // controls": "the system places toolbars and tab bars on the side"), and nothing is drawn along the foot. Folded
-    // upright the app drew a bar along the foot as well as that strip: two places of controls, the bar over the cards
-    // (Richard, 2026-11-21: "this looks fucked up man wtf" / "this isnt how iphone duo apps look").
-    @State private var strip: CGFloat = 0
-    private var railSide: Bool { sideways || wide || strip >= 40 }
-    static func isSideways(_ s: CGSize) -> Bool { s.width > s.height && s.height < 600 }
-    // Where the system's bar holds five tabs and puts the rest under "More": wherever the width is compact (UIKit's own
-    // rule for a tab bar), not by a guessed size.
-    @Environment(\.horizontalSizeClass) private var widthClass
-    private var narrow: Bool { widthClass == .compact && !Self.systemTabs && Self.railItems.count > Self.systemBarHolds }
-    // What the system's own shows on this phone before the rest go under "More", as seen there: the bar along the foot
-    // of a compact width holds five; the rail down the side holds four, folded on its side and open flat alike (his
-    // screenshot of 2026-11-20, Status open flat, 859 x 604 pt: Status, Apps, Claude, macOS, then "•••"). The build's
-    // simulator is 669 pt tall open flat and its rail held six, so the size was never the thing to ask: the count is.
-    static let systemBarHolds = 5, systemRailHolds = 4
-    // Wider than tall (on its side, or open flat) with more tabs than the system's rail shows: the app draws the rail.
-    private var wide: Bool { window.width > window.height && window.height > 0 && !Self.systemTabs && Self.railItems.count > Self.systemRailHolds }
-    // The window's size, and the sizes where the system's own bar or rail was seen to overflow into "More" (TabOverflowProbe):
-    // there the app draws its own from then on, kept across launches so it is there from the first frame next time.
-    @State private var window: CGSize = .zero
-    @State private var overflowed: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "tabsOverflowed") ?? [])
-    private var sizeKey: String { "\(Int(window.width))x\(Int(window.height))" }
-    // The build's "before" (-systemTabs YES): the system's bar and rail wherever main had them, never replaced, so CI can
-    // show the "•••" his phone showed. -probeOnly YES: the system's bar folded upright too, replaced only once it is seen
-    // to overflow, to prove the probe.
-    static let systemTabs = UserDefaults.standard.bool(forKey: "systemTabs") || UserDefaults.standard.bool(forKey: "probeOnly")
-    static let probeOff = UserDefaults.standard.bool(forKey: "systemTabs")
-    private var drawnHere: Bool { !Self.probeOff && overflowed.contains(sizeKey) }
-    private func sawOverflow(_ over: Bool) {
-        guard over, !Self.probeOff, window != .zero, !overflowed.contains(sizeKey) else { return }
-        overflowed.insert(sizeKey)
-        UserDefaults.standard.set(Array(overflowed), forKey: "tabsOverflowed")
-    }
     private var badge: (Int) -> Int { { $0 == 1 ? updateCount : 0 } }
-    // The tabs, in order, for the system's bar and for the rail drawn on its side alike.
+    // The tabs, in order, for the system's TabView.
     // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
     // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went behind the
     // gear on Status to keep the bar at six. Dashboard: the Mac's Console on the phone, its screen's keys folded in
@@ -595,53 +550,20 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("root body")
         PaneReader {
-            Group {
-                // Folded and turned on its side, the system's rail along the edge holds four tabs and puts the rest under
-                // "More" (Dashboard and Control went there). He wants every tab one tap away in every posture (Richard,
-                // 2026-11-19: "never more tabs thing"), so on its side the app draws the rail itself, the system's look
-                // (a glass capsule of icons, the tab in front in the accent colour), all six in it. Every other posture
-                // keeps the system's own bar, which fits all six only where it's wide (open); upright and narrow the app draws a bar too.
-                // Open upright too, where the system keeps no strip: the same pill at the foot of the trailing edge, the
-                // page keeping clear of its column. No bar along the foot in any posture (Richard's reference of
-                // 2026-11-21, "this is what iphone duo apps look like": content on the left, one rail on the right with
-                // the tabs as a vertical pill at its foot).
-                if railSide || !Self.systemTabs {
-                    SideRailTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
-                } else if narrow || !Self.systemTabs {
-                    // Upright and narrow (folded), the system's bar holds five and put Dashboard under "More": the app
-                    // draws the bar itself there too, all six in it (Richard, 2026-11-20: "i said more never").
-                    // Open upright as well: the system's bar held six in the build's simulator at every size tried
-                    // (951 x 669, 859 x 604, 669 x 951) yet showed "•••" on his phone, so what it does there can't be
-                    // seen from here. The app's own bar is the only one that can never fold a tab away, so the system's
-                    // is used nowhere (only the build's "before" shots, -systemTabs YES).
-                    BottomBarTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
-                } else if drawnHere {
-                    // Wherever the system's own was seen to overflow (open flat on his phone: four and "•••"), the app's own,
-                    // in the system's place: the rail down the side when wide, the bar along the foot when tall.
-                    if window.width > window.height {
-                        SideRailTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
-                    } else {
-                        BottomBarTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
-                    }
-                } else {
-                    TabView(selection: tabBinding) {
-                        // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
-                        // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
-                        // elements r squished tg looks ugly").
-                        ForEach(Self.railItems) { it in
-                            Tab(value: it.value) {
-                                screen(it.value)
-                                    // Asks UIKit whether its bar shows "More" here; if so the app's own takes over.
-                                    .probesTabOverflow(it.value == model.tab, tabs: Self.railItems.count) { sawOverflow($0) }
-                            } label: { it.label }
-                                // The updates waiting, as a number on the tab, the App Store's way.
-                                .badge(it.value == 1 ? updateCount : 0)
-                        }
-                    }
+            // The system's own tabs, placed by iOS (Richard, 2026-11-23: "in line with latest ios documentation on
+            // everything"): down the side strip folded and open in landscape, a bar along the foot open upright (HIG,
+            // iPhone Duo, "Vertical controls").
+            // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab (Richard, 2026-11-07).
+            TabView(selection: tabBinding) {
+                ForEach(Self.railItems) { it in
+                    Tab(value: it.value) {
+                        screen(it.value)
+                    } label: { it.label }
+                        // The updates waiting, as a number on the tab, the App Store's way.
+                        .badge(it.value == 1 ? updateCount : 0)
                 }
             }
             .tint(macBlue)
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { strip = $0 }
             .onChange(of: model.tab) { _, t in
                 UserDefaults.standard.set(t, forKey: "tab")
                 // A tab opens on the Mac as it is now, not as it was at the last 10-second reading.
@@ -650,11 +572,8 @@ struct RootView: View {
         }
         // The Mac's Console follows the page he's on (MacFollow).
         .background { MacFollower(nav: model.nav) }
-        // The whole window, keyboard or not, so typing never reads as a turn.
-        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { Self.isSideways($0.size) } action: { sideways = $0 } }
-        // The window's whole size (the keyboard ignored), the key for where the system's tabs overflowed.
-        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGSize.self) { $0.size } action: { window = $0 } }
-        .onAppear { MacPrefs.shareWithWidgets(); AppBadge.set(updateCount); ShotWindow.apply() }
+        // NavTransit watches every push and pop from the first (it holds a page's layout under the edge swipe).
+        .onAppear { _ = NavTransit.shared; BackFinder.start(); MacPrefs.shareWithWidgets(); AppBadge.set(updateCount); ShotWindow.apply() }
         // And on the app's icon on the home screen, like the App Store's.
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
@@ -672,26 +591,6 @@ struct RootView: View {
     }
 }
 
-#if os(iOS)
-// A pushed page hides its Back (Back is the side bar's), and UIKit turns the swipe from the left edge off with it. Back
-// on, for any page with one under it: the swipe is the other way back every iPhone page has (as in the TV app).
-extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
-    override open func viewDidLoad() {
-        super.viewDidLoad()
-        interactivePopGestureRecognizer?.delegate = self
-        // A page swiped off holds its layout from the moment the finger takes it (HoldsWhileMoving, FoldSplit).
-        NavTransit.shared.register(self)
-        interactivePopGestureRecognizer?.addTarget(self, action: #selector(edgeSwipeMoved(_:)))
-    }
-    // Called after the stack's own handler, which has begun the pop by now.
-    @objc func edgeSwipeMoved(_ g: UIGestureRecognizer) {
-        if g.state == .began, let c = transitionCoordinator { NavTransit.shared.begin(c) }
-    }
-    public func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        g === interactivePopGestureRecognizer ? viewControllers.count > 1 : true
-    }
-}
-#endif
 
 // Every pushed page names itself the way every tab does (Richard, 2026-11-09: the Back and titles were "not up to code"
 // for the Duo): its name is its first line (PaneHeading), large, in one pane or two, and the system's bar holds only its
@@ -701,13 +600,15 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
 // "elements compact as u do so" he saw on Version History. A small bar title sat in a different place from the tabs'
 // names and from Version History's. Named in the page, it slides off whole with the page.
 extension View {
-    @ViewBuilder func pushedTitle() -> some View {
+    // The page's real name goes to the system (its Back reads it, and the long press on Back lists it in the history
+    // menu), while the bar itself draws no title: the page's first line is its name.
+    @ViewBuilder func pushedTitle(_ title: String) -> some View {
         #if os(iOS)
-        self.navigationTitle("")
-            .toolbarVisibility(.visible, for: .navigationBar)
+        self.navigationTitle(title)
+            .toolbar(removing: .title)
             .navigationBarTitleDisplayMode(.inline)
         #else
-        self.navigationTitle("")
+        self.navigationTitle(title)
         #endif
     }
 }
@@ -1001,9 +902,6 @@ struct Screen<Content: View>: View {
             .toolbar(removing: .title)
             .toolbarVisibility(.visible, for: .navigationBar)
             .settingsItem { model.nav.settingsTab = tab; model.nav.settingsOpen = true }
-            // Clear of the rail drawn on its side (SideRailTabs), outermost as a pushed page takes it: on the list itself
-            // the room was added to the list's own margin open upright, 20 pt more than a pushed page's (gate, 11-22).
-            .railRoom(listMargin: 20)
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
         .onReceive(model.statusStore.$status) { take($0) }
@@ -1044,13 +942,13 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
-            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6) }
             // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
-            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom(listMargin: 20) }
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true) }
             // All processes, from the tab itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
-            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom(listMargin: 20) }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
             .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 0 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
@@ -1066,7 +964,7 @@ struct StackPages: ViewModifier {
                 case .actions: MacActionsView(model: model)
                 case .upgrade: UpgradeView(model: model)
                 } }
-                .railRoom(listMargin: 20)
+                
             }
     }
 }
@@ -1076,7 +974,7 @@ struct ProcessesOverHistory: ViewModifier {
     @ObservedObject var nav: NavStore
     @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model) }
     }
 }
 // A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.
@@ -1344,9 +1242,8 @@ struct Hero: View {
     @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     let s: Status
-    @Environment(\.sideRail) private var rail
     @Environment(\.paneLayout) private var panes
-    // Folded (one column beside the rail), the Mac's portrait sits beside its name, a third the height, so the figures
+    // In one column, the Mac's portrait sits beside its name, a third the height, so the figures
     // he opens Status for start above the fold (Richard, 2026-11-21: the big picture pushed them below the screen).
     private var chips: some View {
         // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
@@ -1355,7 +1252,7 @@ struct Hero: View {
         }
     }
     @ViewBuilder var body: some View {
-        if rail > 0 && !panes {
+        if !panes {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 14) {
                     Image("MacPro").resizable().scaledToFit().frame(height: 72)

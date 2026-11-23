@@ -211,9 +211,7 @@ extension ChumbyModel {
     func clear() { text = ""; songs = []; searched = "" }
 }
 
-// Choosing the song: a search of the Mac's Music library. Folded and open upright, edge to edge with Close in a bar
-// across the top (a modal with one button, as Add widgets is); open flat, in the right pane beside Sounds, as Add widgets
-// and the editors are, so nothing runs across the fold (11-12 gate). The field is the page's own, under the title, with
+// Choosing the song: a search of the Mac's Music library, in the system's sheet with its Close in every posture. The field is the page's own, under the title, with
 // the keyboard up as the page opens (the system search bar arrived in three beats, hid the title and Close behind a
 // second ✕, and floated over the results). A tap closes the page at once, and Sounds' Now card shows the song starting:
 // the wait for the Mac (about a quarter of a minute) is never spent looking at a spinner in a list. The Mac's own search
@@ -222,15 +220,8 @@ struct MacSongPicker: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
-    // Set when the page is in the right pane open flat: how it closes there.
     @ObservedObject var draft: MacSongDraft
-    var pane: (() -> Void)?
-    // As a cover turned open flat: hands the picker to Sounds' pane. Sounds, under a cover, isn't redrawn and doesn't see
-    // the turn (11-12 films: turned back flat, the cover stayed across the fold), so the cover notices, and once it has
-    // held for 0.8 s with the keyboard down it says so and closes itself; Sounds then shows it in the pane, as it was.
-    var toPane: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var size
-    @State private var coverFlat = false
     @State private var searching = false
     @State private var problem: String?
     // "Still trying" is a live status, not a note to put away: it goes by itself when the Mac answers.
@@ -239,7 +230,7 @@ struct MacSongPicker: View {
     static let title = "Play on the Chumby"
     func length(_ secs: Int) -> String { String(format: "%d:%02d", secs / 60, secs % 60) }
     // The keyboard is let go first, so it goes down with the page rather than lingering over Sounds (11-12 gate).
-    func close() { fieldOn = false; if let pane { pane() } else { dismiss() } }
+    func close() { fieldOn = false; dismiss() }
     func choose(_ s: MacSong) { model.playOnChumby(s); close(); MacMusicPose.afterPick(model) }
     var field: some View {
         HStack(spacing: 8) {
@@ -290,24 +281,13 @@ struct MacSongPicker: View {
     // up (the list ends there) as the tabs do over the bar (11-05).
     var foot: some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: pane == nil ? 10 : 0)
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 10)
             Rectangle()
             LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 18)
         }
     }
     var body: some View {
         Group {
-            if pane != nil {
-                let close = Button("Close") { self.close() }.foregroundStyle(.tint)
-                List {
-                    PageTitle(Self.title, pins: true) { close }
-                    field.listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
-                    sections
-                }
-                .pinsTitle { PageTitle(Self.title) { close } }
-                .scrollDismissesKeyboard(.immediately)
-                .mask(foot)
-            } else {
                 NavigationStack {
                     // The field in the page's own layout, under the bar; the list starts below it, so no row reads
                     // through the field's glass, and its rows fade in under it as they do above the keyboard.
@@ -325,16 +305,7 @@ struct MacSongPicker: View {
                             ToolbarItem(placement: .cancellationAction) { Button { close() } label: { Label("Close", systemImage: "xmark") } }
                         }
                 }
-                .horizontalBars()
                 .tint(ChumbyPalette.acc(scheme == .dark))
-                .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { coverFlat = $0 && size == .regular } }
-                .task(id: "\(coverFlat) \(fieldOn)") {
-                    guard let toPane, coverFlat, !fieldOn else { return }
-                    try? await Task.sleep(nanoseconds: 800_000_000)
-                    if Task.isCancelled { return }
-                    toPane(); dismiss()
-                }
-            }
         }
         .animation(.snappy, value: draft.songs)
         .animation(.snappy, value: stillTrying)

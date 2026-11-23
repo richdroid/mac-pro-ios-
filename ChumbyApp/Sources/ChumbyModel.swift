@@ -65,8 +65,7 @@ final class ChumbyModel: ObservableObject {
     // Every alarm that started ringing, newest first, from the Chumby's own log: what "Woke up to" pairs songs with.
     @Published var rings: [Ring] = [] { didSet { if rings != oldValue { SongArt.shared.prefetch(songs, state.alarms, rings) } } }
     @Published var homePoke: Date?
-    // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
-    @Published var railWidth: CGFloat = 0
+    // A tap on Add alarm from elsewhere.
     @Published var addAlarm: Date?
     // An alarm another page asked Alarms to open (by Alarm.key, or "Nap"): Home's card, tapped on a nap or a skipped ring.
     @Published var openAlarm: String?

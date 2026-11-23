@@ -406,7 +406,7 @@ struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
     var body: some View {
         List { PageTitle("Calendar settings"); CalendarSettingsSections().listRowBackground(GlassRow()) }
-            .pushedPage("settings")
+            .pushedPage("settings", title: "Calendar settings")
     }
 }
 // A calendar day pushed over Alarms (folded, and open in portrait): the day's own settings, with the system's Back.
@@ -414,8 +414,8 @@ struct CalendarDayPage: View {
     @EnvironmentObject var model: ChumbyModel
     let key: String
     var body: some View {
-        CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false)
-            .pushedPage("day")
+        CalendarDaySheet(key: key, pushed: true)
+            .pushedPage("day", title: CalendarWake.shared.plan.first { $0.key == key }.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar")
     }
 }
 extension View {
@@ -425,10 +425,12 @@ extension View {
     // bar went with it, and the title was cut out of the page before the slide began and its band closed up under the
     // rows as they went (CI bx, alarmsdemo 11.80 s and 15.58 s; Richard, 2026-11-10: "weird resizing issues at times
     // when going back on a screen from another"). The Mac Pro app's pushed pages are named the same way (pushedTitle).
-    func pushedPage(_ name: String) -> some View { modifier(PushedPage(name: name)) }
+    // Its name still goes to the system (Back and the long press on Back read it), with no title drawn in the bar.
+    func pushedPage(_ name: String, title: String) -> some View { modifier(PushedPage(name: name, title: title)) }
 }
 private struct PushedPage: ViewModifier {
     let name: String
+    let title: String
     @Environment(\.horizontalSizeClass) private var size
     func body(content: Content) -> some View {
         content
@@ -441,6 +443,8 @@ private struct PushedPage: ViewModifier {
             .modifier(TabBarFade(top: size == .regular))
             .overSea()
             .pageLog(name)
+            .navigationTitle(title)
+            .toolbar(removing: .title)
             .toolbar(.visible, for: .navigationBar)
             .toolbarBackground(.hidden, for: .navigationBar)
             // No title in the bar: a text item there forces a horizontal bar across the top even where the Duo puts
@@ -470,10 +474,8 @@ struct CalendarDaySheet: View {
     @State private var ownAlarm = Alarm()
     @State private var ownBase: SoundChoice?
     let key: String
-    // Set when it fills the open Duo's right pane, or the folded content column, instead of being a sheet.
-    var close: (() -> Void)?
-    // Pushed, the system's Back closes it, so it has no Done of its own.
-    var done = true
+    // Pushed over Alarms (CalendarDayPage): the system's Back closes it, so it has no Done of its own.
+    var pushed = false
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
     var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     var edit: DayEdit { wake.rules.dayEdits[key] ?? DayEdit() }
@@ -643,18 +645,14 @@ struct CalendarDaySheet: View {
         if onFit { Task { @MainActor in detent = .height(h) } }
     }
     var body: some View {
-        if let close {
-            // Its own list in the pane, so the title row with Done stays pinned once scrolled (as the editor's does).
-            let doneButton = Group { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
+        if pushed {
             // Always its own list, pushed too (CalendarDayPage puts nothing around it): a list inside a list's row
             // collapsed to one empty bar, and rows handed up loose took this page's onAppear each, so a section scrolling
             // back reloaded the label and wiped what was typed (designer, 11-11).
             List {
-                PageTitle(title, pins: done) { doneButton }
+                PageTitle(title)
                 sections.listRowBackground(GlassRow())
             }
-            // Pinned only with its Done: a pushed page's way out is the system's Back.
-            .pinsTitle(done) { PageTitle(title) { doneButton } }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {
