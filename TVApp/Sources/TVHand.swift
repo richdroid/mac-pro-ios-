@@ -135,6 +135,8 @@ enum ThrowRules {
     @ObservationIgnored private var downAt = Date()
     @ObservationIgnored private var firstMoveLogged = false
     init(lifted: Bool = false) { self.lifted = lifted }
+    private static let holdID = UUID()
+    func releaseHold() { ScrollHold.set(Self.holdID, moving: false) }
     var liftScale: CGFloat { lifted ? 1.04 : 1.03 }
     private var restCenter: CGPoint { CGPoint(x: rest.midX, y: rest.midY) }
     private var lipY: CGFloat { let l = Hand.shared.lipFrame; return l.height > 0 ? l.midY : 30 }
@@ -152,6 +154,9 @@ enum ThrowRules {
         withAnimation(.spring(response: 0.18, dampingFraction: 0.8)) { scale = liftScale }
         over = false; downAt = Date(); firstMoveLogged = false
         Hand.shared.carrying = true
+        // The TV's polled status waits while a card is in the hand or in the air, as it does under a moving page: a
+        // reading landing mid-flight redrew the app and held the flight 50 ms a frame open flat (gate on 339958b).
+        ScrollHold.set(Self.holdID, moving: true)
         HandFeel.pickUp()
         HandLog.note("down rest=\(Int(rest.midX)),\(Int(rest.midY)) commitY=\(Int(commitY)) lipY=\(Int(lipY))")
     }
@@ -212,6 +217,7 @@ enum ThrowRules {
         } completion: { [weak self] in
             guard let self, self.phase == .returning else { return }
             self.phase = .rest
+            self.releaseHold()
             then?()
         }
     }
@@ -244,16 +250,19 @@ enum ThrowRules {
             offset = to; scale = small; tilt = 0
         } completion: { [weak self] in
             guard let self else { return }
-            var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { self.phase = .gone; self.opacity = 0 }
+            // Into the lip's picture with a short fade, not cut out in one frame (gate on 339958b).
+            self.phase = .gone
+            withAnimation(.easeOut(duration: 0.12)) { self.opacity = 0 }
             HandFeel.thud()
             HandLog.note("gone")
             withAnimation(.easeOut(duration: 0.3)) { Hand.shared.glow = 0 }
             landed()
+            // The poll may land again once the send's own redraw is past.
+            Task { @MainActor in try? await Task.sleep(nanoseconds: 300_000_000); self.releaseHold() }
         }
     }
     // Back at its place, unseen, then faded in: the page's card is still the page's after a throw.
-    func reappear(after s: Double = 0.5) {
+    func reappear(after s: Double = 1.2) {  // after the send's redraw, so its fade is seen (gate on 339958b)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000))
             guard phase == .gone else { return }
@@ -268,6 +277,7 @@ enum ThrowRules {
         guard phase == .held || phase == .returning else { return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { offset = .zero; scale = 1; tilt = 0; opacity = 1; phase = .rest }
+        releaseHold()
         Hand.shared.carrying = false
         Hand.shared.glow = 0
         if over { over = false; Hand.shared.committed = false }
@@ -467,10 +477,8 @@ struct Liftable: ViewModifier {
         guard c.phase == .held, Hand.shared.lifted?.id == liftID else { return }
         // The tap iOS may report with this release is this release, not a second action.
         ShelfHand.shared.handledAt = Date()
-        let down: () -> Void = {
-            var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { Hand.shared.lifted = nil }
-        }
+        // The shelf's own card comes back into its place with a fade, never a cut (gate on 339958b).
+        let down: () -> Void = { withAnimation(.easeOut(duration: 0.3)) { Hand.shared.lifted = nil } }
         if c.judge(v) == .thrown {
             // The card flies first and the send goes as it lands: sent at the release, its start (the lip, the Remote and
             // every tab taking "Starting…") redrew the app in the middle of the flight, which froze for 8 frames open
@@ -551,7 +559,8 @@ final class LiftPress: UILongPressGestureRecognizer {
             // (gate on eb040c7: a slow drag on Watch lifted a card and sent it).
             let dt = (samples.last?.t ?? 0) - (samples.first?.t ?? 0)
             let fast = dt > 0 && sqrt(dx * dx + dy * dy) / CGFloat(dt) >= 600
-            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, fast, Self.onShelf(touched) {
+            // Nearly vertical: within 20° of straight up.
+            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.364, fast, Self.onShelf(touched) {
                 HandLog.note("lift quick-up")
                 state = .began
                 return
@@ -635,8 +644,10 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
     func makeUIGestureRecognizer(context: Context) -> LiftPress {
         let g = LiftPress()
-        g.minimumPressDuration = 0.15
-        g.allowableMovement = 10
+        // A still hold, as iOS's own drag: 0.38 s with under 6 pt of travel. Anything that moves first is the scroll's
+        // (ruling R1, gate on 339958b: a slow drag lifted through the 0.15 s hold after 9 pt and sent).
+        g.minimumPressDuration = 0.38
+        g.allowableMovement = 6
         g.cancelsTouchesInView = true
         g.quickUp = quickUp
         return g
@@ -682,7 +693,7 @@ struct HandOverlay: View {
                 Art(url: URL(string: l.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() }
                     .frame(width: l.rect.width, height: l.rect.height)
                     .clipShape(RoundedRectangle(cornerRadius: l.wide ? 10 : 8, style: .continuous))
-                    .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
+                    .shadow(color: .black.opacity(c.phase == .flying || c.phase == .gone ? 0 : 0.5), radius: 18, y: 10)
                     .scaleEffect(c.scale)
                     .rotationEffect(.degrees(c.tilt))
                     .opacity(c.opacity)

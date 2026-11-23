@@ -309,7 +309,8 @@ struct RootView: View {
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { Hand.shared.screen = $0 } }
         // What follows the status lives in small views of its own, so only they redraw when it changes.
         .background { StatusFollower(playingSymbol: $playingSymbol) }
-        .overlay(alignment: .top) { ProblemBanner() }
+        // The Mac out of reach is the lip's to say (its "Reconnecting…" line); a pill here covered every page's title for as
+        // long as it lasted (gate on 339958b).
         .overlay(alignment: .bottom) { ToastBubble() }
         .onAppear {
             #if os(iOS)
@@ -1498,17 +1499,32 @@ struct RemoteTab: View {
                 HitchLog.shared.note(asleep ? "wake: key wake sent" : "wake: tv-on sent")
                 #endif
             } label: {
-                // One name everywhere, "Wake the TV": set a little smaller where the pad is narrow, never "Wake" alone
-                // (gate on eb040c7: two labels for one key).
+                // The whole ring is the key: the glyph over the words, on two lines where the pad is small, so the words are
+                // always whole ("Wak…" folded, gate on 339958b). One name, "Wake the TV"; "Waking the TV…" with the light
+                // running round it after a press; and if it's still asleep 10 s on, it says so.
                 TimelineView(.periodic(from: .now, by: 1)) { t in
-                    let waking = wakeAskedAt.map { t.date.timeIntervalSince($0) < 10 } ?? false
-                    Label(waking ? "Waking the TV…" : "Wake the TV", systemImage: "power").lineLimit(1).minimumScaleFactor(0.6).padding(.horizontal, 18)
-                        .contentTransition(.opacity)
-                        .overlay { if waking { LoadingRing(radius: 30) } }
+                    let since = wakeAskedAt.map { t.date.timeIntervalSince($0) }
+                    let waking = since.map { $0 < 10 } ?? false
+                    let stuck = since.map { $0 >= 10 && $0 < 40 } ?? false
+                    GeometryReader { g in
+                        let d = min(g.size.width, g.size.height)
+                        VStack(spacing: d * 0.04) {
+                            Image(systemName: "power").font(.system(size: max(16, d * 0.16), weight: .semibold))
+                            Text(waking ? "Waking the TV…" : stuck ? "Still asleep. Try again" : "Wake the TV")
+                                .font(.system(size: max(12, min(20, d * 0.12)), weight: .semibold))
+                                .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
+                                .contentTransition(.opacity)
+                        }
+                        .padding(d * 0.12)
+                        .frame(width: d, height: d)
+                        .overlay { if waking { LoadingRing(radius: d / 2) } }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
-                .font(.title3.weight(.semibold)).frame(height: 60)
+                .contentShape(Circle())
             }
-            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
+            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel("Wake the TV")
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else if let away, !unreachable {
             TelevisionKey(away: away).transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
@@ -1783,12 +1799,14 @@ struct RemoteTab: View {
         let hD = strip + 8
         var g = grid(72), d = dWide
         if let crease {
-            // A above the fold, the rest under it, 12 pt clear of it either side.
+            // The picture's row alone above the fold, as big as the room there; the bar, the transport and the rest under
+            // it, 12 pt clear of it either side. With the bar above too, the pad was 125 pt over 80-100 pt of empty bands
+            // (gate on 339958b): the height goes to the pad and the picture, per ruling (b).
             let upRoom = max(0, crease.minY - 12)
             let lowRoom = max(0, height - crease.maxY - 12)
-            d = max(110, min(dWide, upRoom - gap - Self.barSlot))
+            d = max(110, min(dWide, upRoom))
             var k: CGFloat = 96
-            while k > 52, hB(grid(k)) + gap + hC(grid(k)) + gap + hD > lowRoom { k -= 2 }
+            while k > 52, Self.barSlot + gap + hB(grid(k)) + gap + hC(grid(k)) + gap + hD > lowRoom { k -= 2 }
             g = grid(k)
         } else {
             // One part: the keys from 72 down until the pad has room, the pad up to its best, then the keys grow back
@@ -1802,19 +1820,17 @@ struct RemoteTab: View {
         }
         let pw = min(w - 16 - d, d * 16 / 9)
         let idle = !session && !musicShown
-        let groupA = VStack(spacing: gap) {
-            HStack(spacing: max(16, w - pw - d)) {
-                picture(closable: true).frame(width: pw, height: pw * 9 / 16)
-                pad.frame(width: d, height: d)
-            }
-            .frame(width: w)
-            ZStack {
+        let pictureRow = HStack(spacing: max(16, w - pw - d)) {
+            picture(closable: true).frame(width: pw, height: pw * 9 / 16)
+            pad.frame(width: d, height: d)
+        }
+        .frame(width: w)
+        let barRow = ZStack {
                 if !musicShown && barContent { progress }
                 // Nothing on: the bar's bare track, quiet, so its place reads as the bar it is, never a hole.
                 else { Capsule().fill(.white.opacity(0.1)).frame(height: RemoteGrid.barH).frame(maxHeight: .infinity, alignment: .top).padding(.top, 8) }
             }
-            .frame(width: g.width, height: Self.barSlot)
-        }
+        .frame(width: g.width, height: Self.barSlot)
         let groupB = VStack(spacing: gap) {
             ZStack {
                 // Mint's song: the same five keys, its own ⏯, and no title row: the lip names the song and the picture is its
@@ -1850,12 +1866,12 @@ struct RemoteTab: View {
         return Group {
             if let crease {
                 VStack(spacing: 0) {
-                    groupA.frame(height: max(0, crease.minY - 12), alignment: .top)
+                    pictureRow.frame(height: max(0, crease.minY - 12), alignment: .center)
                     Color.clear.frame(height: crease.height + 24)
-                    VStack(spacing: gap) { groupB; groupC; Spacer(minLength: 0); groupD }
+                    VStack(spacing: gap) { barRow; groupB; groupC; Spacer(minLength: 0); groupD }
                 }
             } else {
-                VStack(spacing: gap) { groupA; groupB; groupC; Spacer(minLength: 0); groupD }
+                VStack(spacing: gap) { pictureRow; barRow; groupB; groupC; Spacer(minLength: 0); groupD }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1871,9 +1887,6 @@ struct RemoteTab: View {
             let w = max(0, g.size.width - 40)
             let ph = w * 9 / 16
             let used = ph + Self.barSlot + 46 + 3 * 14
-            let tw = TileRows<EmptyView>.layout(w, tile: TVLook.bannerSize.width, gap: TVLook.gap, least: 3).width
-            let th = tw * TVLook.bannerSize.height / TVLook.bannerSize.width
-            let rows = max(1, Int((g.size.height - used - 16 + TVLook.gap) / (th + TVLook.gap)))
             VStack(alignment: .leading, spacing: 14) {
                 picture(closable: true).frame(width: w, height: ph)
                 ZStack {
@@ -1883,7 +1896,7 @@ struct RemoteTab: View {
                 .frame(width: w, height: Self.barSlot)
                 ZStack { Color.clear; if seriesOn && (session || musicShown) { episodes } }.frame(width: w, height: 46)
                 if model.status?.apps?.isEmpty == false {
-                    QuickApps(rows: rows).frame(width: w).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                    AppGrid(width: w, height: max(0, g.size.height - used - 16)).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
                 }
                 Spacer(minLength: 0)
             }
@@ -2468,6 +2481,52 @@ struct AppsPage: View {
             .barPage()
     }
 }
+// Open flat, the Remote's left pane under the picture: the same apps as the strip folded and upright, and the key to all of
+// them, as a grid filling the room to the foot (gate on 339958b: one row of three, Netflix, Plex and all-apps missing, and
+// 100 pt empty). As few across as lets them all fit, so the tiles are as big as the room allows.
+struct AppGrid: View {
+    @Environment(TVModel.self) var model
+    @Environment(\.pagePush) private var pagePush
+    let width: CGFloat
+    let height: CGFloat
+    var body: some View {
+        let apps = AppsTab.watching(model.status?.apps ?? [])
+        let list = Array((apps.isEmpty ? (model.status?.apps ?? []) : apps).prefix(11))
+        let count = list.count + 1
+        let gap = TVLook.gap
+        let aspect = TVLook.bannerSize.height / TVLook.bannerSize.width
+        let across: Int = {
+            for a in 3...6 {
+                let tw = (width - CGFloat(a - 1) * gap) / CGFloat(a)
+                let rows = (count + a - 1) / a
+                if CGFloat(rows) * tw * aspect + CGFloat(rows - 1) * gap <= height { return a }
+            }
+            return 6
+        }()
+        let tw = ((width - CGFloat(across - 1) * gap) / CGFloat(across)).rounded(.down)
+        let rows = (count + across - 1) / across
+        let shown = min(count, across * max(1, Int((height + gap) / (tw * aspect + gap))))
+        VStack(alignment: .leading, spacing: gap) {
+            ForEach(0..<rows, id: \.self) { r in
+                HStack(spacing: gap) {
+                    ForEach(r * across..<min(shown, (r + 1) * across), id: \.self) { i in
+                        if i < list.count { Banner(app: list[i], width: tw) }
+                        else {
+                            Button { model.tick(); pagePush.push(AppsRoute.all) } label: {
+                                Image(systemName: "square.grid.2x2").font(.system(size: 20, weight: .semibold))
+                                    .frame(width: tw, height: tw * aspect)
+                                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain).accessibilityLabel("All apps")
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: width, alignment: .leading)
+    }
+}
 struct QuickApps: View {
     @Environment(TVModel.self) var model
     var rows = 2
@@ -2731,7 +2790,9 @@ struct Banner: View {
                         // A wide banner, its logo inset a little from the tile's edge (YouTube's ran flush to it folded):
                         // the banner itself fills behind as the ground, the same banner a little smaller over it, so its
                         // own colour runs to the edge.
-                        else if app.wide == true { ZStack { i.resizable().scaledToFill(); i.resizable().scaledToFit().scaleEffect(0.84) } }
+                        // (Behind: the same banner blurred to its colours alone, so no second logo shows round the first:
+                        // the sharp copy behind read as a ghost logo, gate on 339958b.)
+                        else if app.wide == true { ZStack { i.resizable().scaledToFill().blur(radius: 30).scaleEffect(1.4); i.resizable().scaledToFit().scaleEffect(0.84) }.clipped() }
                         else {
                             VStack(spacing: 4) { i.resizable().scaledToFit().frame(width: 30, height: 30); Text(app.name).font(.caption.weight(.medium)).lineLimit(1).padding(.horizontal, 8) }
                         }
@@ -3305,10 +3366,23 @@ struct PhoneControls: View {
 // Where a song is, drawn as a film's is, so the two read as one thing. Mint can't be moved from here, so it only shows.
 struct MusicProgress: View {
     let music: TVStatus.Music
+    // While a song plays, the time never steps back a few seconds as a fresher reading lands (0:43 then 0:40, 0.15 s after
+    // Music opened: gate on 339958b): it holds until the TV's own count passes it. A real move back (over 5 s) is shown.
+    @State private var held = Held()
+    final class Held { var title = ""; var ms: Double = 0; var at = Date.distantPast }
+    func shown(_ raw: Double, _ date: Date) -> Double {
+        guard music.playing else { held.title = music.title; held.ms = raw; held.at = date; return raw }
+        if held.title == music.title {
+            let projected = held.ms + date.timeIntervalSince(held.at) * 1000
+            if raw < projected, projected - raw < 5000 { return projected }
+        }
+        held.title = music.title; held.ms = raw; held.at = date
+        return raw
+    }
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
-            let now = min(max(raw, 0), max(music.duration, 0))
+            let now = min(max(shown(raw, ctx.date), 0), max(music.duration, 0))
             // The same 28 pt band as a film's bar, and its times tucked 6 pt under the track itself, as a film's are.
             VStack(spacing: 0) {
                 ProgressTrack(fraction: music.duration > 0 ? now / music.duration : 0).frame(height: 28)
@@ -4236,9 +4310,11 @@ struct Ambience: View {
                     .clipped()
                     // A new picture crossfades over the last, in place.
                     .id(store.key)
-                    // The new one fades in over the old, which goes only once it's covered: both fading at once dipped the
-                    // ground to near-black for a few frames (gate on eb040c7, a flick confirmed open flat).
-                    .transition(.asymmetric(insertion: .opacity, removal: .opacity.animation(.linear(duration: 0.15).delay(0.6))))
+                    // The new one fades in ON TOP of the old (zIndex by turn), which goes only once it's covered: both
+                    // fading at once, or the new one under the old, dipped the ground dark when a flick was confirmed
+                    // (gates on eb040c7 and 339958b).
+                    .zIndex(Double(store.turn))
+                    .transition(.asymmetric(insertion: .opacity, removal: .opacity.animation(.linear(duration: 0.05).delay(0.75))))
             }
             // Only the colour eases, and only the colour: an animation on the whole backdrop would grow it from a corner
             // as a page lays out.
@@ -4263,6 +4339,8 @@ final class AmbienceStore: ObservableObject {
     @Published private(set) var image: TVImage?
     @Published private(set) var band: Color?
     @Published private(set) var key: String?
+    // Counts the pictures shown, so each new one is drawn over the one before.
+    @Published private(set) var turn = 0
     // The last few, so going back to something played lately needs no fetching.
     private var recent: [(art: String, image: TVImage, band: Color?)] = []
     private var wanted: String?
@@ -4304,7 +4382,7 @@ final class AmbienceStore: ObservableObject {
         if recent.count > 8 { recent.removeLast() }
         // A newer one asked for meanwhile wins.
         guard wanted == art else { return }
-        withAnimation(.easeInOut(duration: 0.7)) { image = entry.image; band = entry.band; key = art }
+        withAnimation(.easeInOut(duration: 0.7)) { turn += 1; image = entry.image; band = entry.band; key = art }
         keep(art, entry.image, entry.band)
     }
 }

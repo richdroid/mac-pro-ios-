@@ -84,10 +84,12 @@ jobs:
           # The list dragged up slowly beside the poster (x as given), then further: the shrink, the rise, the fade.
           dragList() { sleep 12; $D "$DEVICE" drag $LX 0.88 $LX 0.62 1.6 || echo "drag failed"; sleep 1.5; $D "$DEVICE" drag $LX 0.88 $LX 0.55 1.6 || echo "drag failed"; }
           # A finger on the D-pad's centre every 0.6 s for 6 s right after launch: the prewarm must wait it out.
-          pressKeys() { sleep 4; for i in $(seq 1 10); do $D "$DEVICE" touch $PX $PY 0.08 || echo "touch failed"; sleep 0.6; done; }
+          pressKeys() { sleep 4; for i in $(seq 1 10); do $D "$DEVICE" tap "Home" || echo "Home not found"; sleep 0.4; done; }
           tapWake() { sleep 9; $D "$DEVICE" tap "Wake the TV" || $D "$DEVICE" tap "Wake" || echo "Wake not found"; }
           # The system's Back, by its place under the lip (its name varies by posture), per posture in BX BY.
-          tapBack() { sleep 14; $D "$DEVICE" touch $BX $BY 0.08 || echo "Back touch failed"; }
+          # Upright Back is the app's own key at the top of the rail column, named "Back"; folded and open flat it's the
+          # system's, at the same place in the side column (measured on run 3's shots).
+          tapBack() { sleep 14; if [ "$BX" = name ]; then $D "$DEVICE" tap "Back" || echo "Back not found"; else $D "$DEVICE" touch $BX $BY 0.08 || echo "Back touch failed"; fi; }
           swipeBack() { sleep 14; $D "$DEVICE" drag 0.005 0.5 0.7 0.5 0.35 || echo "edge swipe failed"; }
           # Slow, quick and a fling, up then back: the page scrolls every time (nothing lifted or sent), the top fade comes and goes.
           scrollWatch() { sleep 10; $D "$DEVICE" drag 0.4 0.8 0.4 0.45 1.2 || true; sleep 1.5; $D "$DEVICE" drag 0.4 0.45 0.4 0.85 1.2 || true; sleep 1.5
@@ -100,7 +102,8 @@ jobs:
           throwTitle() {
             sleep 10
             local at x y; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
-            if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; $D "$DEVICE" path $x $y 0.7 $x 0.12 0.5 0 $x 0.12 0.2 0 || echo "path failed"; else echo "no card position"; fi
+            # A real fast throw: a still hold, then up a third of the screen in 0.12 s, let go moving.
+            if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.33" | bc -l) 0.12 0 || echo "path failed"; else echo "no card position"; fi
           }
           set_for() {
             local x=$1 d=$2
@@ -122,7 +125,7 @@ jobs:
             curl -s $M/real/reset > /dev/null; film search-pick$x $d 16 $M/real -tab 6 -pose realsearch
           }
           # The D-pad's centre, roughly, per posture (fractions of the display).
-          PX=0.66; PY=0.27; LX=0.1; BX=0.07; BY=0.135
+          PX=0.66; PY=0.27; LX=0.1; BX=0.894; BY=0.293
           set_for "" 1
           # The fold opened live, then turned, then closed, filmed on the main display while open.
           # (The main display is dark while folded, so the film starts once it's open.)
@@ -133,10 +136,10 @@ jobs:
           sleep 4; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" rotate 1; sleep 6
           kill -INT $REC; wait $REC
           xcrun simctl terminate "$DEVICE" local.macpro.TV || true
-          PX=0.8; PY=0.3; LX=0.1; BX=0.065; BY=0.19
+          PX=0.8; PY=0.3; LX=0.1; BX=name; BY=0
           set_for "-portrait" 3
           $D "$DEVICE" rotate 3 || true; sleep 5
-          PX=0.72; PY=0.45; LX=0.8; BX=0.04; BY=0.13
+          PX=0.72; PY=0.45; LX=0.8; BX=0.947; BY=0.217
           set_for "-flat" 3
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist

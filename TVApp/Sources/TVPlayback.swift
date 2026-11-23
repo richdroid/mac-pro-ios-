@@ -241,7 +241,9 @@ struct RecentFlick: Codable, Identifiable, Hashable {
     var id: String { imdb }
     var item: MediaItem {
         let link = video.map { NextUp.link(imdb, $0) } ?? imdb
-        return MediaItem(title: title, subtitle: episode ?? when, art: art, id: link, kind: type)
+        // No day ("Today") as the item's subtitle: it travelled with the item into search results and onto the title's own
+        // page, where it read as something about the film (gate on 339958b).
+        return MediaItem(title: title, subtitle: episode ?? "", art: art, id: link, kind: type)
     }
     // A day rather than a count of minutes, which would go stale while the page is open.
     var when: String {

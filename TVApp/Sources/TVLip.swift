@@ -73,14 +73,26 @@ struct Lip: View {
             Button { if model.tab != 0 { model.tick(); model.tab = 0 } } label: {
                 HStack(spacing: 12) {
                     picture(landed?.art ?? now.art, kind: now.kind)
+                    // One set of words at a time, changed in place: crossfaded, "Heat" was drawn over "Home" and
+                    // "Starting…" over "…the stream" for 0.2 s (gate on 339958b). While a start is under way its own title
+                    // and line (the model's) are the words; the landing only gives the picture.
+                    let starting = now.kind == .starting
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(landed?.title ?? now.title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                        Text(starting ? now.title : landed?.title ?? now.title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
                             .foregroundStyle(now.kind == .asleep ? .white.opacity(0.6) : .white)
-                        if now.kind == .video, landed == nil, let s = model.status?.session { LipClock(session: s, line: now.line) }
-                        else if let l = (landed != nil && now.kind != .starting ? "Starting…" : now.line) {
-                            Text(l).font(.system(size: 14, weight: .medium)).foregroundStyle(now.kind == .starting ? TVLook.accent : .white.opacity(0.7)).lineLimit(1)
+                        // The Mac out of reach (after its 25 s grace) is said here, in the lip's own line, calmly: never a pill
+                        // over the page's title, never cut in (gate on 339958b).
+                        if !model.reachable, landed == nil, !starting {
+                            Text("Reconnecting…").font(.system(size: 14, weight: .medium)).foregroundStyle(TVLook.away).lineLimit(1)
+                                .transition(.opacity)
+                        }
+                        else if now.kind == .video, landed == nil, let s = model.status?.session { LipClock(session: s, line: now.line) }
+                        else if let l = (landed != nil && !starting ? "Starting…" : now.line) {
+                            Text(l).font(.system(size: 14, weight: .medium)).foregroundStyle(starting || landed != nil ? TVLook.accent : .white.opacity(0.7)).lineLimit(1)
                         }
                     }
+                    .transaction { if starting || landed != nil { $0.animation = nil } }
+                    .animation(.easeOut(duration: 0.3), value: model.reachable)
                     Spacer(minLength: 0)
                 }
                 .frame(maxHeight: .infinity).contentShape(Rectangle())
@@ -209,6 +221,11 @@ private struct LipGlass: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(tint.opacity(0.15 + 0.85 * Double(glow)), lineWidth: 1 + 1.5 * glow)
                 .opacity(lit ? 1 : 0)
         }
-        .shadow(color: tint.opacity(0.55 * Double(glow)), radius: 6 + 18 * glow, y: 2 + 6 * glow)
+        // The glow is a soft layer behind the glass whose opacity follows the card, never a shadow whose radius changes
+        // every frame (a re-drawn shadow the width of the lip held the flight open flat, gate on 339958b).
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(tint).blur(radius: 16).padding(4).offset(y: 6)
+                .opacity(0.55 * Double(glow))
+        }
     }
 }

@@ -251,17 +251,22 @@ final class SearchStore: ObservableObject {
         if let at = asked[q], Date().timeIntervalSince(at) < 20 { return }
         asked[q] = Date()
         let enc = q.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-        func items(_ d: Data?) -> [MediaItem]? {
-            guard let d, let a = try? JSONDecoder().decode(BrowseAnswerRows.self, from: d) else { return nil }
-            return a.rows.flatMap(\.items)
+        // Decoded off the main thread: three answers decoded on it as they came were part of the 0.9-2.2 s of stalls while
+        // results arrived (gate on 339958b).
+        func items(_ d: Data?) async -> [MediaItem]? {
+            guard let d else { return nil }
+            return await Task.detached(priority: .userInitiated) { () -> [MediaItem]? in
+                guard let a = try? JSONDecoder().decode(BrowseAnswerRows.self, from: d) else { return nil }
+                return a.rows.flatMap(\.items)
+            }.value
         }
         // Films and shows come from the same catalogue and are shown together, so one never pushes the other down.
         Task {
             async let f = TVBridge.data(TVBridge.url("/api/tv/discover?type=movie&q=\(enc)"), timeout: 12)
             async let s = TVBridge.data(TVBridge.url("/api/tv/discover?type=series&q=\(enc)"), timeout: 12)
             let (fd, sd) = await (f, s)
+            let films = await items(fd), shows = await items(sd)
             var a = answers[q] ?? Answer()
-            let films = items(fd), shows = items(sd)
             a.films = films ?? a.films ?? []; a.shows = shows ?? a.shows ?? []; a.at = Date()
             a.offline = films == nil && shows == nil ? true : nil
             if a.offline == true { asked[q] = nil }
@@ -271,7 +276,9 @@ final class SearchStore: ObservableObject {
         Task {
             let d = await TVBridge.data(TVBridge.url("/api/tv/mint?q=\(enc)"), timeout: 12)
             var a = answers[q] ?? Answer()
-            a.music = items(d) ?? a.music ?? []
+            let m = await items(d)
+            a = answers[q] ?? a
+            a.music = m ?? a.music ?? []
             answers[q] = a
             arrived(q)
         }
@@ -279,7 +286,9 @@ final class SearchStore: ObservableObject {
             // YouTube's own results, from a Mac that has them; one that doesn't simply has none to give.
             let d = await TVBridge.data(TVBridge.url("/api/tv/youtube-search?q=\(enc)"), timeout: 8)
             var a = answers[q] ?? Answer()
-            a.youtube = items(d) ?? a.youtube ?? []
+            let y = await items(d)
+            a = answers[q] ?? a
+            a.youtube = y ?? a.youtube ?? []
             answers[q] = a
             arrived(q)
         }
@@ -289,8 +298,21 @@ final class SearchStore: ObservableObject {
         if answers[q]?.complete == true, answers[q]?.offline != true { saveSoon() }
         // Only redrawn if it's an answer to what's typed, or to words this one grew out of.
         let now = SearchQuery.key(text)
-        if now == q || now.hasPrefix(q) || q.hasPrefix(now) { rebuild() }
+        guard now == q || now.hasPrefix(q) || q.hasPrefix(now) else { return }
+        // The three answers come close together: one rebuild for all that land within 80 ms, not one each.
+        guard rebuildSoon == nil else { return }
+        rebuildSoon = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard let self else { return }
+            self.rebuildSoon = nil
+            let t0 = Date()
+            self.rebuild()
+            #if os(iOS)
+            HitchLog.shared.note("search rebuilt in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            #endif
+        }
     }
+    private var rebuildSoon: Task<Void, Never>?
 
     // MARK: building what's shown
     private func rebuild() {

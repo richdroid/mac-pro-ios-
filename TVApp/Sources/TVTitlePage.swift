@@ -114,6 +114,9 @@ struct TitlePage: View {
     @State private var carry = Carry()
     @State private var groundID = UUID()
     @Environment(\.paneLayout) private var panes
+    @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(\.dismiss) private var dismiss
+    var railBack: Bool { hSize == .regular && !panes }
     // The hinge's band across this view, in its own x: the system's reported region where there is one, else the display's
     // middle, 40 pt wide.
     static func foldBand(_ g: GeometryProxy) -> ClosedRange<CGFloat> {
@@ -206,13 +209,27 @@ struct TitlePage: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        // Open upright the system's bar is a third band across the top (status, lip, Back: ~250 pt before the title). There
+        // Back and the one action stand where the system puts them folded and open flat: at the top of the rail's column,
+        // on its centre line (ruling R2, gate on 339958b). The edge swipe still goes back.
+        .toolbar(railBack ? .hidden : .visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
-            if st.ref != nil {
+            if st.ref != nil, !railBack {
                 ToolbarItem(placement: .primaryAction) {
                     Button { model.tick(); PhoneOpen.open(st.cardItem, model: model) } label: { Label("Play on iPhone", systemImage: "iphone") }
                 }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if railBack {
+                VStack(spacing: 12) {
+                    RailKey(icon: "chevron.left", label: "Back") { dismiss() }
+                    if st.ref != nil { RailKey(icon: "iphone", label: "Play on iPhone", tint: true) { model.tick(); PhoneOpen.open(st.cardItem, model: model) } }
+                }
+                .padding(.trailing, SideRailTabs<EmptyView>.centre - 22)
+                .padding(.top, 4)
+                .ignoresSafeArea(.container, edges: .trailing)
             }
         }
         .task { await st.load(model) }
@@ -295,9 +312,11 @@ struct TitlePage: View {
         let starting = st.sentToken != nil && (model.starting.map { !$0.failed && $0.token == st.sentToken } ?? (Date().timeIntervalSince(st.sentAt) < 20))
         // Side by side where the card is wide enough for both in full; otherwise one over the other. Never cut short
         // ("1080p ·…" and "Resu…" on a 224 pt card, CI 53b4243).
+        // And on a card too narrow for either, none: never cut ("080p · 3.2 G" on the shrunken poster, gate on 339958b).
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) { chips(onTV: onTV, starting: starting) }
             VStack(spacing: 6) { chips(onTV: onTV, starting: starting) }
+            Color.clear.frame(width: 1, height: 1)
         }
         .lineLimit(1)
     }
@@ -408,7 +427,7 @@ struct TitlePage: View {
             Text(st.item.title).font(.system(size: 28, weight: .bold)).lineLimit(2).minimumScaleFactor(0.8)
             if let e = st.episode, st.isSeries {
                 Text("S\(e.season) E\(e.episode)" + (Wording.episodeName(e.name, number: e.episode).map { " · " + $0 } ?? ""))
-                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.white.opacity(0.75)).fixedSize(horizontal: false, vertical: true)
             } else if !facts.isEmpty {
                 Text(facts).font(.system(size: 17, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
             }
@@ -429,7 +448,9 @@ struct TitlePage: View {
             if st.isSeries, st.meta != nil {
                 SectionTitle("Episodes").padding(.top, 24)
                 seasonStrip.padding(.bottom, 8)
-                ForEach(st.seasonEpisodes) { e in episodeRow(e) }
+                // Lazily: every episode row (its still, its lift) built with the page made each push of a show 390-650 ms
+                // (gate on 339958b); only those on screen are built now.
+                LazyVStack(alignment: .leading, spacing: 0) { ForEach(st.seasonEpisodes) { e in episodeRow(e) } }
             }
             if let a = st.about ?? st.item.about, !a.isEmpty {
                 SectionTitle("About").padding(.top, 24)
@@ -502,7 +523,7 @@ struct TitlePage: View {
                     .liftable(item, .stremio, wide: true, quickUp: false) { v in Thrower.sendBest(model, item: item, velocity: v) }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(e.title).font(.system(size: 17, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        Text(e.title).font(.system(size: 17, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                         if playing { Image(systemName: "play.tv.fill").font(.system(size: 13)).foregroundStyle(TVLook.accent) }
                     }
                     // Whole, never cut ("visi…", gate on 4f36e1e): the row grows with it.
@@ -651,5 +672,21 @@ private struct ShrinkingCard<C: View>: View {
             .opacity(fade)
             .allowsHitTesting(fade > 0.5)
             .accessibilityHidden(fade < 0.5)
+    }
+}
+
+// A key at the top of the rail's column, in the system's own look for its Back there: a 44 pt glass circle.
+private struct RailKey: View {
+    let icon: String
+    let label: String
+    var tint = false
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(tint ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.white))
+                .frame(width: 44, height: 44).contentShape(Circle())
+        }
+        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
     }
 }
