@@ -277,8 +277,12 @@ enum ScrollHold {
 struct GlassRow: View {
     @Environment(\.colorScheme) private var scheme
     static func fill(_ dark: Bool) -> Color { dark ? Color(red: 0.09, green: 0.19, blue: 0.38).opacity(0.62) : Color.white.opacity(0.46) }
+    // The first glass row of a section whose first row is a clear heading (Channels): it draws the card's top corners
+    // itself, as the list rounds only the section's first row.
+    var top = false
     var body: some View {
-        Rectangle().fill(Self.fill(scheme == .dark))
+        if top { UnevenRoundedRectangle(topLeadingRadius: SoloCard.radius, topTrailingRadius: SoloCard.radius, style: .continuous).fill(Self.fill(scheme == .dark)) }
+        else { Rectangle().fill(Self.fill(scheme == .dark)) }
     }
 }
 // A section's only row, drawn as a card like the sections around it (designer, 11-11). The list rounds every section by
@@ -653,7 +657,8 @@ struct RootView: View {
                 // foot (Richard, 2026-11-21: "this is what iphone duo apps look like"). The system's TabView put them
                 // there folded and open flat, but drew a bar across the foot open upright. The same rail as the Mac Pro
                 // app's (SideRailTabs); each tab's pages keep clear of it (railRoom, in tabPage).
-                SideRailTabs(selection: TabReset.binding($model.tab) { retap($0) }, items: Self.tabs, badge: { _ in 0 }, prewarm: UserDefaults.standard.bool(forKey: "noPrewarm") ? [] : [1, 2, 3, 4]) { t in
+                SideRailTabs(selection: TabReset.binding($model.tab) { retap($0) }, items: Self.tabs, badge: { _ in 0 }, prewarm: UserDefaults.standard.bool(forKey: "noPrewarm") ? [] : [1, 2, 3, 4],
+                             prewarmAfter: 8, prewarmPaused: model.sys.ringing != nil || model.ringSettling || model.ringScreen) { t in
                     NavigationStack { page(t).tabPage(t, model) }.id(resets[t, default: 0])
                 }
                 .onChange(of: model.tab) { _, t in Haptic.fire(.tick); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
@@ -662,7 +667,14 @@ struct RootView: View {
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
         .onAppear {
-            if ["ringscreen", "ringfail", "ringpagedemo"].contains(ChumbyModel.pose) { model.ringScreen = true }
+            // For the build: the ringing page opened as the app opens it by itself, on its first reading of the ring (on the
+            // phone it otherwise opens from a tap on the ring's notification or card, which brings the alarm's details).
+            if ["ringscreen", "ringfail", "ringpagedemo"].contains(ChumbyModel.pose) {
+                Task {
+                    for _ in 0..<50 where model.sys.ringing == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+                    model.ringScreen = true
+                }
+            }
             if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
         }
         .onReceive(NotificationCenter.default.publisher(for: RingDesk.confirmedNote).receive(on: DispatchQueue.main)) { n in
@@ -1013,7 +1025,7 @@ struct HomeTab: View {
     @State private var captionWidth: CGFloat = 0
     @State private var room: CGFloat = 0
     @State private var under: CGFloat = 0
-    static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340
+    static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340, ringMinStage: CGFloat = 170
     // Allowance for the tallest everyday state over the one measured.
     static let tallestExtra: CGFloat = 40
     // At the narrowest the caption may still not fit: then it is pushed wholly below the room (never half in it).
@@ -1031,7 +1043,9 @@ struct HomeTab: View {
         // other state (before the page is laid out again) is passed over.
         if !wide, slotRing != ringHolds { return }
         if !wide, ringHolds {
-            let t = min(maxWidth, max(Self.minStage, slotWidth - (slotFoot + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
+            // A ring may take the device narrower than Home at rest ever goes: Stop whole on screen comes first (gate,
+            // 11-22: folded, the snoozed card ran off the foot through its Stop with the device held at 250 pt).
+            let t = min(maxWidth, max(Self.ringMinStage, slotWidth - (slotFoot + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
             if t < w - 0.6 { withAnimation(ChumbyModel.ringChange(to: model.sys.ringing)) { ringFit = t } }
             return
         }
@@ -1431,7 +1445,7 @@ struct HomeTab: View {
         // lies over them. Before (gate, 11-20) the ringing card came in above the remote while the gel left below it:
         // the remote slid down across the card's keys, and the rows under the gel jumped up over it and back.
         ZStack(alignment: .top) {
-            if model.sys.ringing != nil { RingingCard().card().padding(.top, Self.sectionGap).transition(.ringCard) }
+            if model.sys.ringing != nil { RingingCard(carded: true).padding(.top, Self.sectionGap).transition(.ringCard) }
             // The gel stays in the page through a ring, unseen, and only its opacity moves, over the same fifth of a
             // second as the ringing card's: the two fades overlap, so the slot is never bare (gate, 11-20). Put back by
             // a transition instead, it could come back while the ringing page covered Home and stay unseen for good
@@ -2099,7 +2113,10 @@ struct ChannelsTab: View {
         .padding(.horizontal, 10).padding(.vertical, 5)
         .background(.white.opacity(0.12), in: Capsule())
     }
-    func widgetRow(_ w: EditorRow) -> some View {
+    // The reordered list: the channel's heading (held first, never moved), then the widgets that play.
+    struct Listed: Identifiable { let id: String; let row: EditorRow? }
+    var listed: [Listed] { [Listed(id: "#head", row: nil)] + shown.map { Listed(id: $0.id, row: $0) } }
+    func widgetRow(_ w: EditorRow, first: Bool = false) -> some View {
         SwipeLog.mark("chrow \(w.name)")
         return HStack(alignment: .center, spacing: 16) {
             // The app's one remove control while editing (LeadingRemove), sliding in with the name in the same spring.
@@ -2135,7 +2152,7 @@ struct ChannelsTab: View {
         // One height in and out of Edit: the time capsule's (gate, 11-18: rows grew 11 pt on Edit).
         .frame(minHeight: 30)
         .padding(.vertical, 4)
-        .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
+        .listRowBackground(GlassRow(top: first).overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
     }
     // The end of the list: one row, tapped anywhere, that opens the picker.
     var addRow: some View {
@@ -2157,60 +2174,60 @@ struct ChannelsTab: View {
     // was being edited (Richard, 2026-11-03: "be logical", when the two didn't move together; 2026-11-09: "the logic of all
     // the layouts … some of it is confusing"). Editing follows what plays (followPlaying), so there is nothing left for a
     // second chooser to choose.
-    // The channel's heading is a row of its own, not the section's header: a widget dragged up past the first row and let
-    // go over a header has nowhere to land, and flew back to where it started (gate, 11-22: p-chdrag 36–55 s). Over a
-    // row it lands at the top. Drawn as the header was, on no glass.
+    // The channel's heading (its name and Edit) leads the section, drawn as a header was, on no glass.
     var channelSection: some View {
         Group {
-            // The channel is the heading itself: its name, with the others in its menu (the tick on the one showing).
-            HStack(alignment: .firstTextBaseline) {
-                Menu {
-                    Section("Channel") {
-                        ForEach(channels, id: \.id) { c in
-                            let name = title(c)
-                            // The tick at once; the switch (and the list following it, below) once the menu has closed.
-                            Button { model.tick(); MenuClose.then { model.playChannel(name, id: "nowPlaying") } } label: {
-                                if name.trimmingCharacters(in: .whitespacesAndNewlines) == showing.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
+            Section {
+            // The channel's heading is the first item of the list being reordered, held in place: a widget dragged past
+            // the first row and let go over the heading lands first. Let go over a section header, or over a row outside
+            // the reordered list, the drop had nowhere to go and the row flew back (gate, 11-22: twice, no move at all).
+            // By id, never by index: following the playing channel swaps `rows` under the list.
+            ForEach(listed) { it in
+                if let w = it.row { widgetRow(w, first: it.id == shown.first?.id) }
+                else {
+                // The channel is the heading itself: its name, with the others in its menu (the tick on the one showing).
+                HStack(alignment: .firstTextBaseline) {
+                    Menu {
+                        Section("Channel") {
+                            ForEach(channels, id: \.id) { c in
+                                let name = title(c)
+                                // The tick at once; the switch (and the list following it, below) once the menu has closed.
+                                Button { model.tick(); MenuClose.then { model.playChannel(name, id: "nowPlaying") } } label: {
+                                    if name.trimmingCharacters(in: .whitespacesAndNewlines) == showing.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
+                                }
                             }
                         }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(channels.first { $0.id == picked }.map(title) ?? (showing.isEmpty ? "Choose a channel" : showing)).font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
+                            Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold))
+                        }
+                        .foregroundStyle(.primary)
                     }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(channels.first { $0.id == picked }.map(title) ?? (showing.isEmpty ? "Choose a channel" : showing)).font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold))
+                    .accessibilityLabel("Channel, \(pickedTitle)")
+                    .accessibilityHint("Choose the channel the Chumby shows")
+                    Spacer()
+                    if !shown.isEmpty || reordering {
+                        // The system's words for it: Edit, and Done in bold.
+                        Button(reordering ? "Done" : "Edit") {
+                            withAnimation(.snappy) { reordering.toggle() }
+                            // Done sends what was changed at once, rather than 5 s on.
+                            if !reordering { flush() }
+                        }
+                        .font(.body.weight(reordering ? .semibold : .regular)).foregroundStyle(.tint)
                     }
-                    .foregroundStyle(.primary)
                 }
-                .accessibilityLabel("Channel, \(pickedTitle)")
-                .accessibilityHint("Choose the channel the Chumby shows")
-                Spacer()
-                if !shown.isEmpty || reordering {
-                    // The system's words for it: Edit, and Done in bold.
-                    Button(reordering ? "Done" : "Edit") {
-                        withAnimation(.snappy) { reordering.toggle() }
-                        // Done sends what was changed at once, rather than 5 s on.
-                        if !reordering { flush() }
-                    }
-                    .font(.body.weight(reordering ? .semibold : .regular)).foregroundStyle(.tint)
-                }
-            }
-            .textCase(nil)
-            .frame(minHeight: 32, alignment: .bottom)
-            .headRow(top: 14)
-            Section {
-            // Said as Alarms says it has nothing set: the octopus, quiet, beside the line.
-            if shown.isEmpty && !picked.isEmpty {
-                HStack(spacing: 10) {
-                    OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34).accessibilityHidden(true)
-                    Text("Nothing in this channel yet.").foregroundStyle(.secondary)
+                .textCase(nil)
+                .frame(minHeight: 32, alignment: .bottom)
+                    .headRow(top: 0, bottom: 14)
                 }
             }
-            // By id, never by index: following the playing channel swaps `rows` under the list.
-            ForEach(shown, id: \.id) { widgetRow($0) }
                 .onMove { from, to in
                     SwipeLog.note("chmove \(Array(from)) -> \(to)")
+                    // Offsets in the widgets alone: the heading is item 0, never moved, and a drop at or just after it
+                    // is the top.
                     var on = shown
-                    on.move(fromOffsets: from, toOffset: to)
+                    on.move(fromOffsets: IndexSet(from.compactMap { $0 > 0 ? $0 - 1 : nil }), toOffset: max(to - 1, 0))
                     // The list has already carried the row to its place under the finger: the new order is taken with
                     // no animation of its own, which redrew the dropped row (blank for a few frames, then back; film, 11-20).
                     var plain = Transaction(); plain.disablesAnimations = true
@@ -2218,6 +2235,14 @@ struct ChannelsTab: View {
                     model.tick()
                 }
                 .deleteDisabled(true)
+            // Said as Alarms says it has nothing set: the octopus, quiet, beside the line.
+            if shown.isEmpty && !picked.isEmpty {
+                HStack(spacing: 10) {
+                    OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34).accessibilityHidden(true)
+                    Text("Nothing in this channel yet.").foregroundStyle(.secondary)
+                }
+                .listRowBackground(GlassRow(top: true))
+            }
             if !picked.isEmpty { addRow }
             // A save held under an alarm is said calmly, in the secondary ink, and stays until it has gone; a real failure
             // is the warning note.
@@ -3407,9 +3432,9 @@ struct NightStyleTile: View {
 
 extension View {
     // A section's heading drawn as a plain row on no glass, where the section's header would sit (ChannelsTab).
-    func headRow(top: CGFloat) -> some View {
+    func headRow(top: CGFloat, bottom: CGFloat = 0) -> some View {
         self.listRowBackground(Color.clear).listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: 0, trailing: 20)).moveDisabled(true).deleteDisabled(true)
+            .listRowInsets(EdgeInsets(top: top, leading: 20, bottom: bottom, trailing: 20)).moveDisabled(true).deleteDisabled(true)
     }
     @ViewBuilder func dragToReorder(_ on: Bool) -> some View {
         #if os(iOS)

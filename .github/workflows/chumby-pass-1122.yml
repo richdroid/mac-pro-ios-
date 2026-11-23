@@ -118,13 +118,13 @@ jobs:
             shot channels-edit$2 $1 10 $M -tab 1 -pose chedit
             shot channels-empty$2 $1 10 $M/chempty -tab 1
             shot alarms-nap$2 $1 11 $M/nap -tab 2 -pose napset
-            shot alarms-editor$2 $1 10 $M -tab 2 -pose editor
+            shot alarms-editor$2 $1 15 $M -tab 2 -pose editor
             # Ring, Snooze (3.5 s in), Stop (4 s later) on Home's card: the leaving card says "Stopping…" alone.
             remock; warm $M/liveringing; film ringdemo$2 $1 16 $M/liveringing -tab 0 -pose ringdemo -swipeLog YES
             # The ringing page: Snooze at 5 s, slid to Stop at 10 s.
             remock; warm $M/liveringing; film ringpage$2 $1 18 $M/liveringing -tab 0 -pose ringpagedemo -swipeLog YES
             # A nap set from its chip, counting down, and called off (the row keeps its own words as it fades).
-            remock; film napdemo$2 $1 18 $M/live -tab 2 -pose napdemo
+            remock; film napdemo$2 $1 26 $M/live -tab 2 -pose napdemo
           }
           xcrun simctl ui "$DEVICE" appearance light
           # Folded.
@@ -135,11 +135,11 @@ jobs:
           # Calendar settings pushed over Alarms, then Back tapped at the top of the side column (a still first, to show
           # where it is); then pushed again and swiped away from the display's leading edge.
           remock; rec backtap 1 $M/live -tab 2 -pose calsettings
-          sleep 12; xcrun simctl io "$DEVICE" screenshot --display=1 dist/p-backtap-pushed.png
+          sleep 20; xcrun simctl io "$DEVICE" screenshot --display=1 dist/p-backtap-pushed.png
           $D "$DEVICE" tap 0.898 0.29 || echo "tap failed"; sleep 4
           cut backtap 1
           remock; rec swipeback 1 $M/live -tab 2 -pose calsettings
-          sleep 12
+          sleep 20
           $D "$DEVICE" drag 0.01 0.5 0.75 0.5 0.45 || echo "swipe failed"; sleep 4
           cut swipeback 1
           # Channels: a channel of six in Edit, the last widget dragged to the top by its grip, then the second down two.
@@ -170,9 +170,13 @@ jobs:
           $D "$DEVICE" drag 0.827 0.317 0.827 0.46 1.5 || echo "drag failed"; sleep 3
           cut chdrag-portrait 3
           # A posture change with the app up: open upright to open flat and back (filmed as the display is mounted).
-          remock; rec posture-native 3 $M -tab 2
-          sleep 10; $D "$DEVICE" rotate 0 || true; sleep 6; $D "$DEVICE" rotate 1 || true; sleep 6
-          cut posture-native 3
+          now() { python3 -c 'import time; print(time.time())'; }
+          remock; T0=$(now); rec posture 3 $M -tab 2
+          sleep 12; T1=$(now); $D "$DEVICE" rotate 3; echo "rotate 3 -> $?"; sleep 8; T2=$(now); $D "$DEVICE" rotate 1; echo "rotate 1 -> $?"; sleep 8
+          cut posture 3
+          # Upright, then flat, then upright again, each part turned the right way up (the recorder starts at T0).
+          TURNS=$(python3 -c "t0=$T0+0.2; print(f'180@0,90@{$T1-t0:.2f},180@{$T2-t0:.2f}')"); echo "posture turns $TURNS"
+          swift ci/film-turn.swift dist/p-posture.mp4 dist/p-posture.t.mp4 "$TURNS" && mv dist/p-posture.t.mp4 dist/p-posture.mp4
           # Films the right way up: open flat a quarter turn, open upright a half (simctl records the display as mounted).
           for f in dist/p-*-open*.mp4; do [ -f "$f" ] && swift ci/film-turn.swift "$f" "$f.t.mp4" 90 && mv "$f.t.mp4" "$f"; done
           for f in dist/p-*-portrait.mp4; do [ -f "$f" ] && swift ci/film-turn.swift "$f" "$f.t.mp4" 180 && mv "$f.t.mp4" "$f"; done

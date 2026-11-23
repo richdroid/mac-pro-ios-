@@ -571,6 +571,11 @@ struct SideRailTabs<Content: View>: View {
     // The tabs to build ahead, after the first frame, one per idle turn, so a tab's first open isn't its first build (a
     // 250-1300 ms freeze, Mint Remote audit 11-22). Opt-in: only tabs whose pages do nothing on appearing but load.
     var prewarm: [Int] = []
+    // How long after the first frame the building starts, and whether it waits for now (a Chumby alarm ringing as the app
+    // opens: its readings and its card come first; building ahead from 0.8 s kept the main thread busy 2-3 s and the
+    // ringing card came late, Chumby gate 11-22). Paused, it carries on from where it was once let go.
+    var prewarmAfter: Double = 0.8
+    var prewarmPaused = false
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
     @State private var edge: CGFloat = 0
@@ -608,12 +613,13 @@ struct SideRailTabs<Content: View>: View {
         .environment(\.sideRail, column)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { edge = $0 }
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
-        .task {
-            guard !prewarm.isEmpty else { return }
-            try? await Task.sleep(nanoseconds: 800_000_000)
+        .task(id: prewarmPaused) {
+            guard !prewarm.isEmpty, !prewarmPaused else { return }
+            try? await Task.sleep(nanoseconds: UInt64(prewarmAfter * 1e9))
             for t in prewarm where !shown.contains(t) {
                 await Task.yield()
                 try? await Task.sleep(nanoseconds: 250_000_000)
+                if Task.isCancelled { return }
                 shown.insert(t)
             }
         }

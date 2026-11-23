@@ -319,13 +319,19 @@ struct RingingCard: View {
     // until …" it said before the press (gate 4, 11-21).
     struct Shown: Equatable { var ring: Sys.Ringing; var until: Date?; var away: Bool; var seen: Date?; var working: String? }
     @State private var frozen: Shown?
+    // Its own fade in, set as it appears: as an insertion transition it was left part-drawn open flat (a ghost "Ringing"
+    // with no keys for seconds, and a still with the card's room and nothing in it; gate, 11-22).
+    @State private var arrived = false
+    // On Home it is a card of its own (fading with its glass); in Alarms' list, a row.
+    var carded = false
     // Room for the wave and "Snooze" in the card's type, with the capsule's ends.
     @ScaledMetric(relativeTo: .title3) private var snoozeMin: CGFloat = 136
     var live: Shown? { model.sys.ringing.map { Shown(ring: $0, until: model.snoozeEnds, away: model.unreachable, seen: model.seenAt, working: model.ringWorking) } }
     var shown: Shown? { live ?? frozen }
     var body: some View {
-        content
-            .onAppear { frozen = live }
+        Group { if carded { content.card() } else { content } }
+            .opacity(arrived ? 1 : 0)
+            .onAppear { frozen = live; withAnimation(.easeOut(duration: ChumbyModel.slotFade)) { arrived = true } }
             .onChange(of: live) { _, s in if let s { frozen = s } }
     }
     func name(_ r: Sys.Ringing) -> String {
@@ -403,7 +409,7 @@ struct RingingCard: View {
 extension AnyTransition {
     // Stopped: the card is gone by opacity alone within 0.12 s, before the controls under it start up (ChumbyModel.stopSpring).
     static var ringCard: AnyTransition {
-        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .opacity.animation(.easeOut(duration: 0.2)))
+        .asymmetric(insertion: .identity, removal: .opacity.animation(.easeOut(duration: 0.2)))
     }
 }
 

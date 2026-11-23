@@ -84,7 +84,10 @@ enum RingLink {
         while let next = top.presentedViewController, !next.isBeingDismissed, !(next is UIAlertController) { top = next }
         guard top.presentedViewController == nil else { return }
         let host = UIHostingController(rootView: RingScreen().environmentObject(model))
-        host.modalPresentationStyle = .fullScreen
+        // Over the page under it, which stays in the window as it was: presented .fullScreen, iOS took Home out while
+        // the page was up and laid it out afresh as it left (no rail at first, then the next alarm squashed over the
+        // device, then a jump: gate, 11-22). The page's own sea is opaque, so nothing shows through.
+        host.modalPresentationStyle = .overFullScreen
         shown = host
         top.present(host, animated: true)
     }
@@ -223,6 +226,9 @@ struct RingScreen: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button { close() } label: { Label("Close", systemImage: "xmark") } }
             }
+            // The sea under the side column too: the bar's own background rose with the page as an opaque white column
+            // under ✕ for its first frames (gate, 11-22).
+            .toolbarBackground(.hidden, for: .navigationBar)
         }
         .tint(ChumbyPalette.acc(dark))
         .task { try? await Task.sleep(nanoseconds: 1_500_000_000); reachSaid = true }
@@ -403,15 +409,22 @@ struct SlideToStop: View {
     @GestureState private var touching = false
     @State private var landed = false
     static let back = Animation.spring(response: 0.32, dampingFraction: 0.78)
-    // Home from wherever the finger left it, on the next turn of the run loop: a slow slide let go short reaches here
-    // through the gesture's own ending or its cancel, and inside that transaction the spring was dropped and the key
-    // was home in one frame (gate, 11-22: p-ringslide 45.07 → 45.08). Out of it, the spring always runs.
+    // The way home is drawn by the key itself, frame by frame from the moment it was let go (a critically damped
+    // spring of a third of a second), never left to a transaction: twice a spring handed to SwiftUI was dropped on
+    // release and the key was home in one frame (gate, 11-22: p-ringslide 45.07, then 48.19 after a deferred spring).
+    @State private var homeFrom: CGFloat = 0
+    @State private var homeAt: Date?
+    static let homeTime = 0.42
+    static func homeLeft(_ t: Double) -> CGFloat {
+        let w = 2 * Double.pi / 0.32 * t
+        return t >= homeTime ? 0 : CGFloat((1 + w) * exp(-w))
+    }
     func goHome() {
-        DispatchQueue.main.async {
-            guard !landed, !busy, pull != 0 else { return }
-            var t = Transaction(animation: Self.back); t.disablesAnimations = false
-            withTransaction(t) { pull = 0 }
-        }
+        guard !landed, !busy, pull != 0 else { return }
+        SwipeLog.note("slide home from \(Int(pull))")
+        homeFrom = pull; homeAt = Date()
+        var plain = Transaction(); plain.disablesAnimations = true
+        withTransaction(plain) { pull = 0 }
     }
     static let height: CGFloat = 76, key: CGFloat = 60, inset: CGFloat = 8
     var body: some View {
@@ -419,7 +432,9 @@ struct SlideToStop: View {
             let run = max(g.size.width - Self.key - Self.inset * 2, 1)
             // A Stop on its way that wasn't slid here (pressed on the Lock Screen or Home's card, with this page up) takes
             // the key across all the same: the bar never says "Slide to stop" under a card that says "Stopping…".
-            let k = landed || busy ? 1 : min(max(pull / run, 0), 1)
+            TimelineView(.animation(paused: homeAt == nil)) { ctx in
+            let back = homeAt.map { homeFrom * Self.homeLeft(ctx.date.timeIntervalSince($0)) } ?? 0
+            let k = landed || busy ? 1 : min(max((pull + back) / run, 0), 1)
             ZStack(alignment: .leading) {
                 ChumbyGel(colors: [0xff8f5e, 0xfc5825, 0xdc4410], rim: 0x9c2c08)
                 Text("Slide to stop").font(.custom("Trebuchet MS", size: 20).weight(.bold)).foregroundStyle(.white)
@@ -440,17 +455,20 @@ struct SlideToStop: View {
                     .offset(x: k * run)
             }
             .animation(.spring(response: 0.22, dampingFraction: 0.8), value: busy)
+            }
             .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .gesture(
                 DragGesture(minimumDistance: 4)
                     .updating($touching) { _, t, _ in t = true }
                     .onChanged { v in
                         guard !landed, !busy else { return }
+                        if homeAt != nil { homeAt = nil }
                         // 1:1 under the finger, never animated.
                         var plain = Transaction(); plain.disablesAnimations = true
                         withTransaction(plain) { pull = v.translation.width }
                     }
                     .onEnded { v in
+                        SwipeLog.note("slide ended at \(Int(v.translation.width))")
                         guard !landed, !busy else { return }
                         // The whole run, or a flick already past halfway that would carry it there.
                         let far = v.translation.width / run, carried = v.predictedEndTranslation.width / run
@@ -468,6 +486,10 @@ struct SlideToStop: View {
         .frame(height: Self.height)
         // Back from a Stop the Chumby didn't take: the key returns to its start, ready to be slid again.
         .onChange(of: busy) { _, b in if !b { withAnimation(Self.back) { landed = false; pull = 0 } } }
+        // The way home ends by itself (the timeline pauses once nothing is left to draw).
+        .task(id: homeAt) { guard let at = homeAt else { return }; try? await Task.sleep(nanoseconds: UInt64(Self.homeTime * 1e9)); if homeAt == at { homeAt = nil } }
+        .onAppear { SwipeLog.note("slide appeared") }
+        .onDisappear { SwipeLog.note("slide gone") }
         // A touch the system took away: the key goes home as it does when let go short.
         .onChange(of: touching) { _, t in if !t, !landed, !busy, pull != 0 { goHome() } }
         .accessibilityElement()
