@@ -1018,8 +1018,10 @@ struct Screen<Content: View>: View {
             .settingsItem { model.nav.settingsTab = tab; model.nav.settingsOpen = true }
             // Clear of the rail drawn on its side (SideRailTabs), outermost as a pushed page takes it: on the list itself
             // the room was added to the list's own margin open upright, 20 pt more than a pushed page's (gate, 11-22).
-            // The whole room, no list margin taken off: this app's lists set no margin beyond a safe area that wide, so
+            // The whole room, no list margin taken off: a tab's lists here set no margin beyond a safe area that wide, so
             // with 20 pt off every card ran 10 pt under the pill open upright (Fable gate on 9c093cb: 606 against 596).
+            // A pushed page's list does set its 20 pt beside the room, so the pages below keep listMargin 20: with the
+            // whole room they ended 20 pt short of the tabs (gate 2 on 2a2d036: 566 against 586).
             .railRoom()
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
@@ -1069,13 +1071,13 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
-            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom() }
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom(listMargin: 20) }
             // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
-            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom() }
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom(listMargin: 20) }
             // All processes, from the tab itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom() }
-            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom() }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom() }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom(listMargin: 20) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
             .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 0 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
@@ -1091,7 +1093,7 @@ struct StackPages: ViewModifier {
                 case .actions: MacActionsView(model: model)
                 case .upgrade: UpgradeView(model: model)
                 } }
-                .railRoom()
+                .railRoom(listMargin: 20)
             }
     }
 }
@@ -1101,7 +1103,7 @@ struct ProcessesOverHistory: ViewModifier {
     @ObservedObject var nav: NavStore
     @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom() }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
     }
 }
 // A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.
@@ -1241,6 +1243,9 @@ struct LiveFigure: View {
     // The number last settled: its place is held from the very frame a new one comes until the roll is over.
     @State private var settled: String?
     @State private var rolls = 0
+    // The unit glides only as the held place is let go (a narrower number closing up); everywhere else it is put where
+    // it goes at once, so it never travels over a digit coming in (gate 2 on 2a2d036: it cut left in one frame).
+    @State private var closing = false
     static let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
     static let small = Font.system(size: 17, weight: .semibold)
     // "48.4 MB/s" → ("48.4", " MB/s"), "97%" → ("97", "%"); words stay whole.
@@ -1258,16 +1263,21 @@ struct LiveFigure: View {
                 Text(number).font(Self.big).lineLimit(1)
                     .contentTransition(.numericText(value: WebTile.number(value)))
             }
-            if !unit.isEmpty { Text(unit).font(Self.small).lineLimit(1).transaction { $0.animation = nil } }
+            if !unit.isEmpty { Text(unit).font(Self.small).lineLimit(1).transaction { if !closing { $0.animation = nil } } }
         }
         .onAppear { settled = number }
         .onChange(of: number) { _, now in
             rolls += 1; let mine = rolls
+            closing = false
             Task {
-                try? await Task.sleep(nanoseconds: UInt64(LiveMotion.seconds * 1e9))
+                // Once the old digits have mostly rolled out, the number's place closes up to the new width, the unit
+                // gliding with it.
+                try? await Task.sleep(nanoseconds: UInt64(LiveMotion.seconds * 0.6 * 1e9))
                 guard rolls == mine else { return }
-                var still = Transaction(); still.disablesAnimations = true
-                withTransaction(still) { settled = now }
+                closing = true
+                withAnimation(.smooth(duration: 0.3)) { settled = now }
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if rolls == mine { closing = false }
             }
         }
     }

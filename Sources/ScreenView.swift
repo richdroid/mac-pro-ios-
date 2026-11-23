@@ -1212,7 +1212,9 @@ struct RemoteScreenView: View {
                 MacKeyCap(label: "", icon: "arrow.up", sym: MacKey.up, keys: keys, a11y: "Up arrow").frame(width: unit)
                 MacKeyCap(label: "", icon: "arrow.down", sym: MacKey.down, keys: keys, a11y: "Down arrow").frame(width: unit)
                 MacKeyCap(label: "", icon: "arrow.right", sym: MacKey.right, keys: keys, a11y: "Right arrow").frame(width: unit)
-                MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return", size: 15)
+                // Wider on purpose, as a MacBook's return is, and named on its face as there, so it reads as the Enter key
+                // and not a stretched arrow (gate 2 on 2a2d036).
+                MacKeyCap(label: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return", size: 13)
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("screen.return")
             }
@@ -1231,7 +1233,7 @@ struct RemoteScreenView: View {
                 if let icon { Image(systemName: icon).font(.system(size: 15, weight: .semibold)) }
                 else { Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8) }
             }
-            .frame(minWidth: 40, minHeight: 40).contentShape(Rectangle())
+            .frame(minWidth: 30, maxWidth: .infinity, minHeight: 30, maxHeight: .infinity).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
     }
@@ -1251,13 +1253,18 @@ struct RemoteScreenView: View {
             // Both halves the same width, as wide as nine keys where the page allows.
             let page = min(crease.midX - half, width - crease.midX - half) - 12 - 16
             let each = max(min(Self.dockHalf, page), 0)
+            // The keys take the size that fits the half they're in: at his size open flat the last arrow hung out of its
+            // pill's end, and the right pill stretched to match left an empty place in it (gate 2 on 2a2d036). Each pill
+            // is as long as its keys, both of one key size, the same distance from the fold.
+            let compact = each < Self.dockHalf, n: CGFloat = compact ? 8 : 9
+            let k = max(min(Self.dockKey, ((each - Self.dockGap * (n - 1)) / n).rounded(.down)), 30)
             HStack(spacing: 0) {
-                Group { if dockOpen { capsule { HStack(spacing: Self.dockGap) { dockKeys(compact: each < Self.dockHalf) }.frame(width: each, alignment: .leading) } } }
+                Group { if dockOpen { capsule { dockKeys(compact: compact, key: k) } } }
                     .frame(width: max(0, crease.midX - half), alignment: .trailing)
                 Color.clear.frame(width: half * 2, height: 1)
                 Group {
-                    if dockOpen { capsule { HStack(spacing: Self.dockGap) { dockTools(compact: each < Self.dockHalf, spread: true) }.frame(width: each) } }
-                    else { capsule { dockTools() } }
+                    if dockOpen { capsule { dockTools(compact: compact, key: k) } }
+                    else { capsule { dockTools(key: k) } }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1281,8 +1288,8 @@ struct RemoteScreenView: View {
             .glassEffect(.regular, in: Capsule())
     }
     // Left of the fold: ⌘ through →.
-    @ViewBuilder func dockKeys(compact: Bool = false) -> some View {
-        let k = Self.dockKey
+    @ViewBuilder func dockKeys(compact: Bool = false, key: CGFloat = dockKey) -> some View {
+        let k = key
         MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16).frame(width: k, height: k)
         keyButton("esc", "Escape") { keys.tap(MacKey.esc) }.frame(width: k, height: k)
         if !compact { keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }.frame(width: k, height: k) }
@@ -1294,8 +1301,8 @@ struct RemoteScreenView: View {
     }
     // Right of the fold: ⌫ ⏎, the tools and Done. `spread`: the hide key and Done keep to the far end of their capsule,
     // which is as wide as the keys' one, whatever is between.
-    @ViewBuilder func dockTools(compact: Bool = false, spread: Bool = false) -> some View {
-        let k = Self.dockKey
+    @ViewBuilder func dockTools(compact: Bool = false, spread: Bool = false, key: CGFloat = dockKey) -> some View {
+        let k = key
         // Return stays with the keys tucked away too: Enter is always one press away on the Mac's screen (Richard,
         // 2026-11-20: "an easily accessible enter button when doing screen").
         if !dockOpen { MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: k, height: k) }

@@ -373,7 +373,14 @@ struct SessionTerminal: View {
             }
             if panes {
                 let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
-                return .panes(seam: min(max(crease?.midX ?? w / 2, w * 0.3), w * 0.7), gutter: min(max(24, (crease?.width ?? 0) / 2 + 4), 40))
+                // The hinge is the window's middle on the Duo, as FoldSplit takes it for the tab pages: a crease read more
+                // than 3 % away from there (mid-turn, or the simulator's own display at his size) is not laid out by, or the
+                // terminal ran across the fold where the tabs didn't (gate 2 on 2a2d036, session-his: 14 to 451.7 pt).
+                let f = g.frame(in: .global)
+                let win = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds.width ?? (f.maxX + f.minX)
+                let centre = win / 2 - f.minX
+                let seam = crease.map { abs($0.midX - centre) <= w * 0.03 ? $0.midX : centre } ?? centre
+                return .panes(seam: min(max(seam, w * 0.3), w * 0.7), gutter: min(max(24, (crease?.width ?? 0) / 2 + 4), 40))
             }
             if onItsSide(w) { return .panes(seam: ((w - Self.rail(g)) * 0.5).rounded(), gutter: 12) }
             return .column

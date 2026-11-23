@@ -70,25 +70,31 @@ struct DashboardTab: View {
         if let f = remote.fail { return (f.text, .red, false) }
         if let d = remote.said { return (d, .green, false) }
         switch seen {
+        // Each a line that fits the narrowest card whole (one line, the card's height never changes with it).
         case .looking: return ("Looking at the Mac…", .secondary, false)
-        case .unsupported: return ("This Mac has no dashboard to drive yet", .secondary, false)
+        case .unsupported: return ("No dashboard on this Mac yet", .secondary, false)
         case .away: return ("Can’t reach the Mac", .secondary, false)
         case .off: return ("Not running on the Mac", .secondary, false)
         case .asleep: return ("The Mac’s display is off", .secondary, false)
-        case .aside: return ("Out of the way while Screen is open", .secondary, false)
-        case .behind: return ("Behind another app on the Mac", .secondary, false)
+        case .aside: return ("Aside while Screen is open", .secondary, false)
+        case .behind: return ("Behind another app", .secondary, false)
         case .on: return ("On the Mac’s screen", .green, false)
         }
     }
-    // The mode, in his two names for it, and what is taking turns. Only said while the dashboard runs.
-    var mode: (name: String, symbol: String, say: String)? {
-        // Nothing is said of the mode while the Mac can't be asked.
-        guard ready, running, let st else { return nil }
+    // The mode, in his two names for it, and what is taking turns. Always a line, so the card is one height in every
+    // state (gate 2 on 2a2d036: 246, 314 and 329 pt as the states went): while the dashboard can't say its mode, the
+    // line says what the remote is waiting for.
+    var mode: (name: String, symbol: String, say: String) {
+        guard ready else { return ("Remote", "dot.radiowaves.left.and.right", seen == .looking ? "Asking the Mac what its dashboard shows" : "It works again when the Mac answers") }
+        guard running, let st else { return ("Off", "moon", "Start it to put boards and pages on the Mac") }
         let bed = ConsolePlace.fromBed(st, pose: model.pose)
         let name = bed ? "From bed" : "At the desk", symbol = bed ? "bed.double" : "desktopcomputer"
         if st.glance == true { return (name, symbol, "Glance covers the boards with big, dim figures until you turn it off") }
         // A page up with the turns on: the turns wait for a board (it said "a page stays up" beside Take turns on).
-        guard st.board != nil else { return (name, symbol, st.rotate == true ? "A page is up; pick a board and the turns go on" : "A page stays up until you pick a board") }
+        guard st.board != nil else {
+            let page = ConsolePlace.pages.first { $0.id == st.page }?.name ?? "A page"
+            return (name, symbol, st.rotate == true ? "\(page) is up; pick a board and the turns go on" : "\(page) stays up; the boards aren’t taking turns")
+        }
         let large = st.text == "room" ? ", in large text" : ""
         guard st.rotate == true else { return (name, symbol, "Staying on this board\(large)") }
         // The boards the Console says are taking turns, and its own pace (an older bridge: the phone's reckoning).
@@ -125,7 +131,7 @@ struct DashboardTab: View {
                             else if remote.said != nil && remote.fail == nil { Image(systemName: "checkmark.circle.fill").font(.footnote).foregroundStyle(.green).frame(width: 12, height: 12) }
                             else { Circle().fill(status.color == .secondary ? Color(white: 0.45) : status.color).frame(width: 8, height: 8).frame(width: 12, height: 12) }
                             Text(status.say).font(.subheadline).foregroundStyle(status.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
-                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(1).minimumScaleFactor(0.85)
                         }
                         .accessibilityIdentifier("remote.status")
                     }
@@ -133,7 +139,8 @@ struct DashboardTab: View {
                 }
                 .accessibilityElement(children: .combine)
                 .animation(Motion.quick, value: status.say)
-                if let m = mode {
+                let m = mode
+                Group {
                     // The mode is a label, not a link: plain, its sign grey. Its line under it, full width, two lines held
                     // in every state, so the card keeps its height and no word is left alone on a line beside the label
                     // (Fable gate on 9c093cb).
@@ -255,14 +262,22 @@ struct DashboardTab: View {
 
     // MARK: The switches
 
-    func row(_ title: String, _ note: String, _ symbol: String) -> some View {
-        Label {
-            VStack(alignment: .leading, spacing: 2) {
-                // Whole in the narrowest pane (open flat at his size): short names, and a note that may take a second line.
-                Text(title).fixedSize(horizontal: false, vertical: true)
-                Text(note).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-        } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
+    func row(_ title: String, _ note: String, _ symbol: String) -> some View { SwitchLabel(title: title, note: note, symbol: symbol) }
+    // A switch's name, note and sign, dimmed whole when the switch can't act, as the board keys are (gate 2 on 2a2d036:
+    // the names stayed bright beside greyed switches).
+    struct SwitchLabel: View {
+        let title: String, note: String, symbol: String
+        @Environment(\.isEnabled) private var enabled
+        var body: some View {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    // Whole in the narrowest pane (open flat at his size): short names, and a note that may take a second line.
+                    Text(title).fixedSize(horizontal: false, vertical: true)
+                    Text(note).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
+            .opacity(enabled ? 1 : 0.4)
+        }
     }
     var switches: some View {
         Section {

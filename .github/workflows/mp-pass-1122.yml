@@ -89,12 +89,16 @@ jobs:
           # Every tab and Settings. suffix, display, then extra arguments.
           tabs() {
             local x=$1 d=$2; shift 2
-            for T in 0 1 2 4 5 6 9; do shot tab$T$x $d 8 -tab $T "$@"; done
+            for T in 0 1 2 4 5 6; do shot tab$T$x $d 8 -tab $T "$@"; done
+            # Settings as he opens it, by the gear (a still taken at launch could come before the push).
+            shotdrag tab9$x $d "tap gear" -tab 0 "$@"
           }
           # The Upgrade page (Control > Upkeep > Updates) in its states, and scrolled to its foot (the log).
           upgrades() {
             local x=$1 d=$2 sx=$3; shift 3
             for u in room freed checksred downloading patches noreturn done; do shot upgrade-$u$x $d 9 -tab 5 -pose upgrade-$u "$@"; done
+            # The red check's row whole, the page scrolled to it.
+            shotdrag upgrade-checksred-low$x $d "drag $sx 0.75 $sx 0.35 0.4" -tab 5 -pose upgrade-checksred "$@"
             for u in room downloading patches; do
               shotdrag upgrade-$u-low$x $d "drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4" -tab 5 -pose upgrade-$u "$@"
             done
@@ -164,6 +168,7 @@ jobs:
           screens -portrait 3
           shot screen-hisportrait 3 9 -tab 0 -pose screen -openScreen YES -windowSize 604x859
           for u in checksred done downloading; do shot upgrade-$u-portrait 3 9 -tab 5 -pose upgrade-$u; done
+          shotdrag upgrade-checksred-low-portrait 3 "drag 0.5 0.75 0.5 0.35 0.4" -tab 5 -pose upgrade-checksred
           film upgrade-remove-portrait 3 4 "drag 0.5 0.7 0.5 0.45 0.4;tap cleanup.caches" -tab 5 -pose upgrade-room
           remote -portrait 3 0.5
           # A turn from upright to flat and back, on Status and on the Dashboard.
@@ -179,6 +184,7 @@ jobs:
           live -his 3 -windowSize 859x604
           tabs -open 3
           screens -open 3
+          for u in checksred room done; do shot upgrade-$u-open 3 9 -tab 5 -pose upgrade-$u; done
           crashes
           ls dist | wc -l
       - name: Publish

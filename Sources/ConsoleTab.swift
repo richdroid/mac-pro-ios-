@@ -66,7 +66,7 @@ enum ConsolePlace {
         if let b = s.board, let x = boards.first(where: { $0.id == b }) { return (x.name, x.symbol) }
         if let p = s.page, let x = pages.first(where: { $0.id == p }) { return (x.name, x.symbol) }
         if s.page == "boards" { return ("Boards", "rectangle.on.rectangle.angled") }
-        return ("The Console is open", "macwindow")
+        return ("The dashboard is open", "macwindow")
     }
 }
 
@@ -128,19 +128,20 @@ final class ConsoleRemote: ObservableObject {
         Task { try? await Task.sleep(nanoseconds: 5_000_000_000); if saidCount == mine { withAnimation(Motion.quick) { said = nil } } }
     }
     // What a yes means, in his words; the bridge's own sentence wins where it has one (the display).
+    // Short enough for one line in the narrowest card, so the card never grows with its answer (gate 2 on 2a2d036).
     static func done(_ cmd: String, _ arg: String, _ st: ConsoleState?) -> String {
         switch cmd {
-        case "show": return "The dashboard is on the Mac’s screen"
-        case "hide": return "The dashboard is hidden"
+        case "show": return "On the Mac’s screen"
+        case "hide": return "Hidden on the Mac"
         case "board":
             if arg == "off" { return "Back to the pages" }
-            if arg == "next" || arg == "previous" { return "\(ConsolePlace.boards.first { $0.id == st?.board }?.name ?? "The next board") is on the Mac" }
-            return "\(ConsolePlace.boards.first { $0.id == arg }?.name ?? "The board") is on the Mac"
-        case "page": return "\(ConsolePlace.pages.first { $0.id == arg }?.name ?? "The page") is on the Mac"
-        case "rotate": return arg == "on" ? "The boards take turns" : "The boards stay put"
-        case "text": return arg == "room" ? "Large text, to read across the room" : "Desk-size text"
-        case "glance": return arg == "on" ? "Glance is on: big, dim figures" : "Glance is off"
-        case "display": return arg == "on" || arg == "wake" ? "The display is on" : "The display is off"
+            if arg == "next" || arg == "previous" { return "\(ConsolePlace.boards.first { $0.id == st?.board }?.name ?? "The next board") is up" }
+            return "\(ConsolePlace.boards.first { $0.id == arg }?.name ?? "The board") is up"
+        case "page": return "\(ConsolePlace.pages.first { $0.id == arg }?.name ?? "The page") is up"
+        case "rotate": return arg == "on" ? "Taking turns" : "Staying on this board"
+        case "text": return arg == "room" ? "Large text" : "Desk-size text"
+        case "glance": return arg == "on" ? "Glance is on" : "Glance is off"
+        case "display": return arg == "on" ? "Display held on" : arg == "wake" ? "Display on" : "Display off"
         default: return "Done"
         }
     }
@@ -189,7 +190,7 @@ final class ConsoleRemote: ObservableObject {
                 }
                 withAnimation(Motion.quick) {
                     busy = nil; answered += 1
-                    defer { confirm(cmd == "display" && arg == "on" ? "The display stays on until you turn it off." : Self.done(cmd, arg, state)) }
+                    defer { confirm(Self.done(cmd, arg, state)) }
                     switch cmd {
                     case "show": state = ConsoleState(running: true, frontmost: true, fullscreen: true, page: state?.page ?? "home", board: state?.board, rotate: state?.rotate ?? false, animations: state?.animations ?? "full", display: "awake", glance: state?.glance ?? false)
                     case "hide": state?.frontmost = false
@@ -214,11 +215,11 @@ final class ConsoleRemote: ObservableObject {
                 }
                 return
             }
-            let (e, st, say) = await model.api.consoleCommand(cmd, arg)
+            let (e, st, _) = await model.api.consoleCommand(cmd, arg)
             withAnimation(Motion.quick) {
                 if let st { state = st }
                 busy = nil
-                if let e { fail = (key, Self.named(e)); refused += 1 } else { answered += 1; confirm(say ?? Self.done(cmd, arg, st)) }
+                if let e { fail = (key, Self.named(e)); refused += 1 } else { answered += 1; confirm(Self.done(cmd, arg, st)) }
             }
             // A refusal stays until his next press (which clears it): gone by itself after a few seconds, it could be
             // missed, and the card then read as if the press had worked (designer gate 1, 2026-11-21).

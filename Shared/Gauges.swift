@@ -119,6 +119,9 @@ struct SparkLine: View {
     // The height the line is drawn against, moved with the slide: a chart with no fixed top rescaled to its new highest
     // reading in one frame, a V flattened at once (Fable gate on 9c093cb, the Download chart).
     @State private var scale: Double?
+    // A new window that isn't the old one moved on (the first live reading over the one kept from last time): the new
+    // line fades in over the old rather than replacing it in one frame (gate 2 on 2a2d036: four charts redrew on open).
+    @State private var window = 0
     // Shapes, not a Canvas, for the same reason as the dials' ticks: never a blank chart for a frame.
     var body: some View {
         let shown = glide > 0 ? (drawn ?? values) : values
@@ -132,7 +135,11 @@ struct SparkLine: View {
             }
             // Only what slid off the left is cut; the line's round ends keep their room.
             .clipShape(Rectangle().inset(by: -2))
+            .id(window)
+            .transition(.opacity)
             .onChange(of: values) { old, new in slide(from: old, to: new) }
+            // Held from the first frame, so a reading that lands before the first change is never drawn in one frame.
+            .onAppear { if glide > 0, drawn == nil { drawn = values; scale = Self.top(values, top) } }
         }
     }
     static func top(_ v: [Double], _ fixed: Double?) -> Double { max(fixed ?? v.max() ?? 1, 0.0001) }
@@ -145,9 +152,8 @@ struct SparkLine: View {
         let seconds = glide
         // The same window moved on by one to three readings: drawn from where it was, then slid.
         guard old.count == new.count, let k = (1...3).first(where: { k in old.count > k + 1 && Array(old.dropFirst(k)) == Array(new.dropLast(k)) }) else {
-            // Not a step along (a new window): the line as it is, its scale eased rather than cut.
-            withTransaction(still) { drawn = new; lead = 0; origin = 0; scale = from }
-            DispatchQueue.main.async { withAnimation(.easeInOut(duration: min(seconds, 0.6))) { scale = to } }
+            // Not a step along (a new window): the new line faded in over the old one.
+            withAnimation(.easeInOut(duration: min(seconds, 0.5))) { window += 1; drawn = new; lead = 0; origin = 0; scale = to }
             return
         }
         withTransaction(still) { drawn = Array(old.prefix(k)) + new; lead = k; origin = 0; scale = from }
