@@ -318,6 +318,7 @@ struct HoldKey: View {
 // One safe clean-up: what it is, how much it frees, and Remove. Remove asks the Mac what it would take away (a dry run,
 // nothing changed), shows that as the question, and runs only on his OK with the Mac's one-time nonce.
 struct CleanupRow: View {
+    @Environment(\.paneLayout) private var panes
     let model: AppModel
     let item: UpgradeFeed.Cleanup
     let done: () -> Void
@@ -342,7 +343,23 @@ struct CleanupRow: View {
                     .overlay { if busy { ProgressView().controlSize(.small) } }
                     .frame(minWidth: 76, minHeight: 44)
                     .accessibilityIdentifier("cleanup." + item.id)
-                    .confirmationDialog("Remove \(item.name)?", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } }), titleVisibility: .visible) {
+                    // Open flat the question opens to the key's left, in its own pane: the system's bubble, centred on the
+                    // key, crossed the fold with its Remove on the hinge (gate 3 on dd63870, his size).
+                    .popover(isPresented: .init(get: { panes && asking != nil }, set: { if !$0 { asking = nil } }), attachmentAnchor: .point(.leading), arrowEdge: .trailing) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Remove \(item.name)?").font(.headline)
+                            Text(asking.map { "This will " + MPActionRow.lowerFirst($0.say) } ?? "").font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: 10) {
+                                Button("Cancel") { asking = nil }.buttonStyle(.bordered).frame(maxWidth: .infinity)
+                                Button("Remove", role: .destructive) { if let a = asking { asking = nil; run(a.nonce) } }
+                                    .buttonStyle(.borderedProminent).tint(.red).frame(maxWidth: .infinity)
+                                    .accessibilityIdentifier("cleanup.confirm")
+                            }
+                        }
+                        .padding(16).frame(width: 250)
+                        .presentationCompactAdaptation(.popover)
+                    }
+                    .confirmationDialog("Remove \(item.name)?", isPresented: .init(get: { !panes && asking != nil }, set: { if !$0 { asking = nil } }), titleVisibility: .visible) {
                         if let a = asking {
                             Button("Remove", role: .destructive) { run(a.nonce) }
                             Button("Cancel", role: .cancel) {}
@@ -613,16 +630,19 @@ struct UpgradeView: View {
         ConsolePage(title: "Upgrade", place: "macupgrade", away: false, lastRead: feed.lastRead) {
             if let f {
                 let s = f.steps(checksRed: !red.isEmpty || publicLink, checked: checks != nil && !checking)
-                standing(f)
-                if showsRoom(f) { room(f, s) }
+                if !(panes && fullLog) {
+                    standing(f)
+                    if showsRoom(f) { room(f, s) }
+                }
             } else if feed.unsupported {
                 Section { Text("The Mac’s bridge doesn’t report upgrades yet. It does after its next restart.").foregroundStyle(.secondary) }
             } else {
                 Section { HStack { ProgressView(); Text("Asking the Mac where the upgrade stands…").foregroundStyle(.secondary) } }
             }
             // Open flat the log fills the left pane under where the upgrade stands, beside the steps: the left pane was
-            // half empty (gate 3). In one column it stays at the foot, after the steps.
-            if panes { UpgradeLog(store: model.statusStore, full: $fullLog) }
+            // half empty (gate 3). In one column it stays at the foot, after the steps. Show all, open flat, opens the
+            // whole log in this pane, the steps staying beside it.
+            if panes { UpgradeLog(store: model.statusStore, full: $fullLog, whole: fullLog) }
         } right: {
             if let f, f.phase != "idle" {
                 rest(f, f.steps(checksRed: !red.isEmpty || publicLink, checked: checks != nil && !checking))
@@ -630,9 +650,11 @@ struct UpgradeView: View {
             }
             if !panes { UpgradeLog(store: model.statusStore, full: $fullLog) }
         }
-        // The whole log, from the page, not from inside a row of its list: hung off the row, it went with the row when
-        // the list let it go, and closing it left the page's foot black (gate 3).
-        .screenCover(isPresented: $fullLog) { FullLog(log: model.statusStore.status?.upgrade.log ?? "").environmentObject(model) }
+        // The whole log in one column: a page pushed from this one, with the system's Back (from the page, not from a
+        // row of its list, which went with the row when the list let it go: gate 3).
+        .navigationDestination(isPresented: Binding(get: { fullLog && !panes }, set: { if !$0 { fullLog = false } })) {
+            LogPage(log: model.statusStore.status?.upgrade.log ?? "").railRoom(listMargin: 20)
+        }
         .onChange(of: feed.value?.download?.percent, initial: true) { _, p in DownloadClock.shared.note(p) }
         .task {
             if let p = posed { feed.set(p.feed); await check(); return }
@@ -653,6 +675,8 @@ struct UpgradeLog: View {
     // hadn't drawn yet never copied it, and the row stood empty (gate 3, "the Log row is blank").
     @ObservedObject var store: StatusStore
     @Binding var full: Bool
+    // Open flat with Show all pressed: every line, in this pane, as tall as the pane allows.
+    var whole = false
     // The newest lines, drawn plainly: the Updates page's LogPreview parks the lines that don't fit 5000 pt above
     // itself, which inside a List row left the row, and at the page's foot the whole page, blank (CI 017ec21).
     static let shown = 12
@@ -663,6 +687,12 @@ struct UpgradeLog: View {
         Section {
             if log.isEmpty {
                 Text("The Mac hasn’t sent its update log yet.").foregroundStyle(.secondary)
+            } else if whole {
+                UpdateLog(log: log, fills: true)
+                    .containerRelativeFrame(.vertical) { h, _ in max(h - 150, 240) }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .accessibilityIdentifier("upgrade.log")
             } else {
                 let all = Self.lines(log)
                 VStack(alignment: .leading, spacing: LogPreview.gap) {
@@ -684,8 +714,8 @@ struct UpgradeLog: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Log")
                 Spacer()
-                if !log.isEmpty { Button("Show all") { full = true }.textCase(nil).foregroundStyle(macBlue) }
+                if !log.isEmpty { Button(whole ? "Fewer" : "Show all") { full.toggle() }.textCase(nil).foregroundStyle(macBlue).accessibilityIdentifier("upgrade.logAll") }
             }
-        } footer: { if !log.isEmpty { Text("The update service’s own lines, newest at the foot; tap for all of them. Red is a failure, green a step done.") } }
+        } footer: { if !log.isEmpty, !whole { Text("The update service’s own lines, newest at the foot; tap for all of them. Red is a failure, green a step done.") } }
     }
 }

@@ -288,6 +288,9 @@ struct RemoteScreenView: View {
                     crease = CGRect(x: (w / 2 - 20).rounded(), y: 0, width: 40, height: h)
                 }
             }
+            // The build's shots at his size (-windowSize): the simulator's hinge is the middle of its own wider display, his
+            // is the middle of his, so the window's middle is where his crease runs (gate 3 on dd63870). Never on the phone.
+            if ShotWindow.size != nil, let c = crease, w > h { crease = CGRect(x: (w / 2 - c.width / 2).rounded(), y: c.minY, width: c.width, height: c.height) }
             return Fold(crease: crease,
                         folded: hingeFolded ?? !g.reservedRegions(kind: .division).isEmpty,
                         covered: covered, cores: cores)

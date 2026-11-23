@@ -544,17 +544,34 @@ extension EnvironmentValues { var bottomBar: CGFloat { get { self[BottomBarKey.s
 // 10 pt short of the pill, as it does where the system's strip gives the room.
 struct RailRoom: ViewModifier {
     var listMargin: CGFloat = 0
+    // The page's own margin is taken off wherever the room is, the system's strip included, so its cards end on the
+    // same line as a page that sets none (Mac Pro's pushed lists beside its tabs: at his size open flat the strip is
+    // the wider and they ended 20 pt in, gate 3 on dd63870). Off, the margin is taken only off the rail's extra room.
+    var always = false
     @Environment(\.sideRail) private var rail
     @Environment(\.bottomBar) private var bar
     @State private var has: CGFloat = 0
     func body(content: Content) -> some View {
-        content
-            .safeAreaPadding(.trailing, rail > has ? max(0, rail - has - listMargin) : 0)
-            .safeAreaPadding(.bottom, bar)
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
+        if always, rail > 0 {
+            // The trailing safe area read in the same layout pass as the page, by a reader that ignores it (so its proxy
+            // sees it); the page inside is given the whole room itself, since the safe area no longer reaches it. Read
+            // afterwards (onGeometryChange) it was a layout late after a turn (gate 3, posture-dash 12.60-12.73).
+            GeometryReader { g in
+                content
+                    .safeAreaPadding(.trailing, max(max(rail, g.safeAreaInsets.trailing) - listMargin, 0))
+                    .safeAreaPadding(.bottom, bar)
+                    .frame(width: g.size.width, height: g.size.height)
+            }
+            .ignoresSafeArea(.container, edges: .trailing)
+        } else {
+            content
+                .safeAreaPadding(.trailing, rail > has ? max(0, rail - has - listMargin) : 0)
+                .safeAreaPadding(.bottom, bar)
+                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
+        }
     }
 }
-extension View { func railRoom(listMargin: CGFloat = 0) -> some View { modifier(RailRoom(listMargin: listMargin)) } }
+extension View { func railRoom(listMargin: CGFloat = 0, always: Bool = false) -> some View { modifier(RailRoom(listMargin: listMargin, always: always)) } }
 
 // Tabs with the rail drawn along the trailing edge, for where the system's own would hold too few and put the rest
 // under "More" (the Duo folded on its side holds four). Never a More list: every tab is in the rail, one tap away.

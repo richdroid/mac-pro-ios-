@@ -103,7 +103,8 @@ jobs:
               shotdrag upgrade-$u-low$x $d "drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4" -tab 5 -pose upgrade-$u "$@"
             done
             # The whole log opened from the page and closed: the page must come back whole, never black at its foot.
-            film upgrade-log$x $d 4 "drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;tap upgrade.log;tap log.done" -tab 5 -pose upgrade-downloading "$@"
+            # One column the whole log is a page pushed and taken back with Back; open flat (LOGTAPS) it opens in its pane.
+            film upgrade-log$x $d 4 "drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;drag $sx 0.8 $sx 0.2 0.4;${LOGTAPS:-tap upgrade.log;tap BackButton}" -tab 5 -pose upgrade-downloading "$@"
             # A clean-up's question: it hangs off the Remove key.
             film upgrade-remove$x $d 4 "drag $sx 0.7 $sx 0.45 0.4;tap cleanup.caches" -tab 5 -pose upgrade-room "$@"
           }
@@ -177,9 +178,11 @@ jobs:
           # Open flat at his size first, then the simulator's.
           $D "$DEVICE" rotate 3; sleep 5
           tabs -his 3 -windowSize 859x604
-          upgrades -his 3 0.22 -windowSize 859x604
+          LOGTAPS="tap upgrade.logAll;tap upgrade.logAll" upgrades -his 3 0.22 -windowSize 859x604
           backs -his 3 -windowSize 859x604
           screens -his 3 -windowSize 859x604
+          # The red check's row whole in the right pane, scrolled there.
+          shotdrag upgrade-checksred-right-his 3 "drag 0.7 0.75 0.7 0.35 0.4" -tab 5 -pose upgrade-checksred -windowSize 859x604
           remote -his 3 0.22 -windowSize 859x604
           live -his 3 -windowSize 859x604
           tabs -open 3

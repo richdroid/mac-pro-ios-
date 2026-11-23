@@ -358,7 +358,10 @@ struct ConsolePage<Left: View, Right: View>: View {
         ScrollViewReader { proxy in
             List {
                 Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
-                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0)).listRowSeparator(.hidden)
+                        // The tabs' own title section (Screen.list): 14 pt under the name and a 3 pt gap, so a pushed page's title,
+                        // first heading and first card sit on the tabs' lines (gate 3 on dd63870: 5 and 12 pt low on Settings and Upgrade).
+                        .listSectionSpacing(.custom(3))
                 if away, side != .right { Section { StaleLine(lastRead: lastRead) } }
                 Group {
                     if side != .right { left() }

@@ -979,7 +979,8 @@ struct Screen<Content: View>: View {
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
             // One column: the title goes up with the page, inside its scroll view (HandTitle), as on the list tabs; pinned
             // above it, the content was cut flat under it (designer gate, 2026-11-14).
-            if side != .all { paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 2).padding(.bottom, 2) }
+            // 4 pt, not 2: the hand-drawn page's title and first card sat 2 pt above the lists' (gate 3 on dd63870, macOS).
+            if side != .all { paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4).padding(.bottom, 2) }
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             }
@@ -987,7 +988,7 @@ struct Screen<Content: View>: View {
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
         .modifier(PageLead(on: side != .right))
-        .environment(\.handTitle, side == .all ? AnyView(paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 2).padding(.bottom, 2)) : nil)
+        .environment(\.handTitle, side == .all ? AnyView(paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4).padding(.bottom, 2)) : nil)
     }
     var body: some View {
         let _ = SwipeLog.mark("screen \(tab) body")
@@ -1022,7 +1023,7 @@ struct Screen<Content: View>: View {
             // with 20 pt off every card ran 10 pt under the pill open upright (Fable gate on 9c093cb: 606 against 596).
             // A pushed page's list does set its 20 pt beside the room, so the pages below keep listMargin 20: with the
             // whole room they ended 20 pt short of the tabs (gate 2 on 2a2d036: 566 against 586).
-            .railRoom()
+            .railRoom(always: true)
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
         .onReceive(model.statusStore.$status) { take($0) }
@@ -1073,7 +1074,7 @@ struct StackPages: ViewModifier {
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
             .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom(listMargin: 20) }
             // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
-            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom(listMargin: 20) }
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom(listMargin: 20, always: true) }
             // All processes, from the tab itself; from a history, that page opens them over itself.
             .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom(listMargin: 20) }
@@ -1093,7 +1094,9 @@ struct StackPages: ViewModifier {
                 case .actions: MacActionsView(model: model)
                 case .upgrade: UpgradeView(model: model)
                 } }
-                .railRoom(listMargin: 20)
+                // Lists all, which set their 20 pt beside the room: taken off wherever the room comes from, so they end on
+                // the tabs' line open flat at his size too (gate 3 on dd63870: 754.7 against 774.7).
+                .railRoom(listMargin: 20, always: true)
             }
     }
 }
@@ -1263,7 +1266,13 @@ struct LiveFigure: View {
                 Text(number).font(Self.big).lineLimit(1)
                     .contentTransition(.numericText(value: WebTile.number(value)))
             }
-            if !unit.isEmpty { Text(unit).font(Self.small).lineLimit(1).transaction { if !closing { $0.animation = nil } } }
+            // Gaining a digit, the unit slides out quickly as the new digit rolls in, ahead of it (it was put there in one
+            // frame, about 17 pt, gate 3 on dd63870); losing one, it closes up once the roll is over (closing).
+            let grows = settled.map { number.count > $0.count } ?? false
+            if !unit.isEmpty {
+                Text(unit).font(Self.small).lineLimit(1)
+                    .transaction { t in if grows { t.animation = t.animation == nil ? nil : .easeOut(duration: 0.18) } else if !closing { t.animation = nil } }
+            }
         }
         .onAppear { settled = number }
         .onChange(of: number) { _, now in
@@ -2456,7 +2465,7 @@ struct UpgradeTab: View {
                 .buttonStyle(PressStyle())
                 .accessibilityLabel("Log, newest lines").accessibilityHint("Opens the whole log")
         }
-        .screenCover(isPresented: $fullLog) { FullLog(log: s.upgrade.log).environmentObject(model) }
+        .navigationDestination(isPresented: $fullLog) { LogPage(log: s.upgrade.log).railRoom(listMargin: 20) }
         .task { if model.pose == "fulllog" { try? await Task.sleep(nanoseconds: 1_200_000_000); fullLog = true } }
     }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
@@ -2474,11 +2483,13 @@ struct UpgradeTab: View {
             // The log takes the room left under Details, and never less than twelve lines: folded that is more than the
             // screen has, so the page scrolls to it (Richard, 2026-11-13: "log is too small when folded"; CI 35659b7 had
             // room for one entry).
+            // 15 between the parts: with each heading's own 12 above it, a card's foot is 31 pt from the next heading, as on
+            // every list page (it was 26, 42 pt: gate 3 on dd63870, "Details" and "Log").
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 15) {
                     VStack(alignment: .leading, spacing: 12) {
                         if let t = handTitle { t }
-                        VStack(alignment: .leading, spacing: 26) {
+                        VStack(alignment: .leading, spacing: 15) {
                             // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
                             VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
                             agent
@@ -2673,6 +2684,34 @@ struct FullLog: View {
                 .toolbarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("log.done") } }
         }
+    }
+}
+// The whole update log as a page of its own, pushed with the system's Back (gate 3 on dd63870: as a cover it spread
+// across the fold open flat with the rail gone, and folded its Done sat in the content while the side strip was empty).
+// Open flat it keeps to the left of the hinge, as a pane's cards do.
+struct LogPage: View {
+    @Environment(\.paneLayout) private var panes
+    let log: String
+    var body: some View {
+        GeometryReader { g in
+            let f = g.frame(in: .global)
+            #if canImport(UIKit)
+            let win = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds.width ?? (f.maxX + f.minX)
+            #else
+            let win = f.maxX + f.minX
+            #endif
+            // Open flat: up to the hinge (the window's middle on the Duo) less the panes' 24 pt gutter.
+            let width = panes ? max(min(win / 2 - f.minX - 24, g.size.width), 200) : g.size.width
+            VStack(alignment: .leading, spacing: 12) {
+                PaneHeading(title: "Log")
+                UpdateLog(log: log, fills: true)
+            }
+            .padding(.leading, panes ? 14 : 20).padding(.trailing, panes ? 0 : 20).padding(.bottom, 8)
+            .frame(width: width, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .background(groupedBackground.ignoresSafeArea())
+        .pushedTitle()
     }
 }
 extension Status.Upgrade {
