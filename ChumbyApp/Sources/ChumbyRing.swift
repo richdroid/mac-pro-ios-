@@ -71,28 +71,50 @@ enum RingLink {
 @MainActor enum RingPresenter {
     #if canImport(UIKit)
     private static weak var shown: UIViewController?
+    // The page built and laid out ahead, as soon as a ring is known, so presenting it is only the move: built at the
+    // moment of presenting, its first layout took 0.6–0.9 s of the main thread inside the 0.4 s rise (gate, 11-22).
+    private static var ready: UIViewController?
+    private static func window() -> UIWindow? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow
+    }
+    private static func make(_ model: ChumbyModel, in window: UIWindow) -> UIViewController {
+        let host = UIHostingController(rootView: RingScreen().environmentObject(model))
+        host.modalPresentationStyle = .overFullScreen
+        host.view.frame = window.bounds
+        host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+        return host
+    }
+    static func prepare(_ model: ChumbyModel) {
+        guard ready == nil, shown == nil, let w = window() else { return }
+        SwipeLog.note("ring page built ahead")
+        ready = make(model, in: w)
+    }
+    static func discard() { ready = nil }
     static func sync(_ model: ChumbyModel) {
         if !model.ringScreen {
-            if let s = shown, !s.isBeingDismissed { s.dismiss(animated: true) }
+            if let s = shown, !s.isBeingDismissed { model.holdForMove(0.7); s.dismiss(animated: true) }
             shown = nil
             return
         }
         guard shown == nil else { return }
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard let window = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow, var top = window.rootViewController else { return }
+        guard let window = window(), var top = window.rootViewController else { return }
         // The frontmost page; an alert is never presented from (the page under it is).
         while let next = top.presentedViewController, !next.isBeingDismissed, !(next is UIAlertController) { top = next }
         guard top.presentedViewController == nil else { return }
-        let host = UIHostingController(rootView: RingScreen().environmentObject(model))
-        // Over the page under it, which stays in the window as it was: presented .fullScreen, iOS took Home out while
-        // the page was up and laid it out afresh as it left (no rail at first, then the next alarm squashed over the
-        // device, then a jump: gate, 11-22). The page's own sea is opaque, so nothing shows through.
-        host.modalPresentationStyle = .overFullScreen
+        let host = ready ?? make(model, in: window)
+        ready = nil
+        model.holdForMove(0.7)
+        // (.overFullScreen, in make: over the page under it, which stays in the window as it was. Presented .fullScreen,
+        // iOS took Home out while the page was up and laid it out afresh as it left: no rail at first, then the next
+        // alarm squashed over the device, then a jump; gate, 11-22. The page's own sea is opaque.)
         shown = host
         top.present(host, animated: true)
     }
     #else
     static func sync(_ model: ChumbyModel) {}
+    static func prepare(_ model: ChumbyModel) {}
+    static func discard() {}
     #endif
 }
 

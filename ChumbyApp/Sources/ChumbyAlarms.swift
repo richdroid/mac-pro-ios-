@@ -978,14 +978,17 @@ struct AlarmsTab: View {
     // in. Changed inside one animation, the list traded the two pages' rows through each other.
     @State private var paneFaded = false
     @State private var paneSwap: Task<Void, Never>?
+    // Where a swap under way is going: a turn or a fold in the middle of it carries that page over (an editor asked for
+    // just as the phone turned upright was lost with the cancelled swap: gate, 11-22, the upright editor still).
+    @State private var pendingPane: Pane?
     func show(_ p: Pane) {
-        paneSwap?.cancel(); paneSwap = nil
+        paneSwap?.cancel(); paneSwap = nil; pendingPane = p
         guard p != pane else { if paneFaded { withAnimation(.easeOut(duration: 0.2)) { paneFaded = false } }; return }
         paneSwap = Task { @MainActor in
             withAnimation(.easeOut(duration: 0.12)) { paneFaded = true }
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled else { return }
-            pane = p
+            pane = p; pendingPane = nil
             try? await Task.sleep(nanoseconds: 30_000_000)
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
@@ -1077,11 +1080,12 @@ struct AlarmsTab: View {
         // sheet already up stays a sheet. Never a page lost to a fold.
         .onChange(of: wide) { _, w in
             paneSwap?.cancel(); paneSwap = nil; paneFaded = false
+            let target = pendingPane ?? pane; pendingPane = nil
             if w {
                 if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
                 else { pane = .schedule }
             } else {
-                switch pane {
+                switch target {
                 case .settings: dayPage = nil; model.alarmsPage = true
                 case .day(let k): dayPage = k; model.alarmsPage = true
                 case .editor(let a): editing = EditTarget(alarm: a)

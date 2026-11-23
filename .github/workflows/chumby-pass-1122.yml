@@ -16,7 +16,7 @@ concurrency:
 jobs:
   pass:
     runs-on: xcode-27
-    timeout-minutes: 150
+    timeout-minutes: 190
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +39,7 @@ jobs:
           done
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 100
+        timeout-minutes: 140
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -126,6 +126,16 @@ jobs:
             remock; warm $M/liveringing; film ringpage$2 $1 18 $M/liveringing -tab 0 -pose ringpagedemo -swipeLog YES
             # A nap set from its chip, counting down, and called off (the row keeps its own words as it fades).
             remock; film napdemo$2 $1 26 $M/live -tab 2 -pose napdemo
+            # An alarm starting to ring while Home shows the next alarm (12 s after the first reading).
+            remock; film ringsoon$2 $1 26 $M/liveringsoon -tab 0 -swipeLog YES
+            # An alarm's editor opening, and its log (where the open costs the main thread).
+            remock; film editoropen$2 $1 14 $M -tab 2 -pose editor -swipeLog YES
+            # Calendar settings, then the way back: Back (folded and upright) or Done (open flat, in its pane).
+            remock; rec backtap$2 $1 $M/live -tab 2 -pose calsettings -swipeLog YES
+            sleep 20; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/p-backtap$2-pushed.png
+            $D "$DEVICE" tree > dist/p-backtap$2-tree.log 2>&1 || true
+            $D "$DEVICE" tap "Back" || $D "$DEVICE" tap "Alarms" || $D "$DEVICE" tap "Done" || echo "back failed"; sleep 4
+            cut backtap$2 $1
           }
           xcrun simctl ui "$DEVICE" appearance light
           # Folded.
@@ -133,24 +143,26 @@ jobs:
           tabs 1 ""
           # Snooze, then Stop, pressed as the Lock Screen's card and the notification press them, through an old copy of sys.
           remock; warm $M/livestale; film ringdoor 1 16 $M/livestale -tab 0 -pose ringdoor
-          # Calendar settings pushed over Alarms, then Back tapped at the top of the side column (a still first, to show
-          # where it is); then pushed again and swiped away from the display's leading edge.
-          remock; rec backtap 1 $M/live -tab 2 -pose calsettings
-          sleep 20; xcrun simctl io "$DEVICE" screenshot --display=1 dist/p-backtap-pushed.png
-          # The system's Back, by its label (tap takes a label; touch takes a place), its place in the rail's column if not.
-          $D "$DEVICE" tree > dist/p-backtap-tree.log 2>&1 || true
-          $D "$DEVICE" tap "Back" || $D "$DEVICE" tap "Alarms" || $D "$DEVICE" touch 0.893 0.29 || echo "back failed"; sleep 4
-          cut backtap 1
+          # The launch from cold with the launch screen's snapshot cleared, so iOS draws the sea afresh: filmed from before
+          # the launch.
+          xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && rm -rf "$C/Library/SplashBoard" "$C/Library/Caches/Snapshots" || true
+          remock; film launch 1 12 $M -tab 0
+          # A warm launch into Channels: the rows there from the first frame, never filling in.
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 1; sleep 10; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; sleep 1
+          film channelswarm 1 10 $M -tab 1 -swipeLog YES
+          # Calendar settings pushed and swiped away from the display's leading edge.
           remock; rec swipeback 1 $M/live -tab 2 -pose calsettings
           sleep 20
           $D "$DEVICE" drag 0.01 0.5 0.75 0.5 0.45 || echo "swipe failed"; sleep 4
           cut swipeback 1
           # Channels: a channel of six in Edit, the last widget dragged to the top by its grip, then the second down two.
           remock; rec chdrag 1 $M/livemany -tab 1 -pose chedit -swipeLog YES
-          sleep 18
-          # As a person does it: let go over the top half of the first row (chmove … -> 0), then the second down two.
-          $D "$DEVICE" drag 0.75 0.775 0.75 0.255 2.5 || echo "drag failed"; sleep 2
-          $D "$DEVICE" drag 0.75 0.375 0.75 0.575 1.5 || echo "drag failed"; sleep 3
+          sleep 24
+          # As a person does it: the fifth row let go over the top half of the first (chmove [4] -> 0), then the first
+          # carried below the last (chmove [0] -> 6).
+          $D "$DEVICE" drag 0.75 0.675 0.75 0.255 2.5 || echo "drag failed"; sleep 3
+          $D "$DEVICE" drag 0.75 0.275 0.75 0.80 2.0 || echo "drag failed"; sleep 3
           cut chdrag 1
           slide ringslide 1 0.12 0.80 0.864
           gallery 4 1 card
@@ -168,9 +180,9 @@ jobs:
           # A channel of six in Edit, open upright: the last widget dragged up and let go over the top half of the first
           # row (chmove … -> 0), then the second down two.
           remock; rec chdrag-portrait 3 $M/livemany -tab 1 -pose chedit -swipeLog YES
-          sleep 16
-          $D "$DEVICE" drag 0.826 0.601 0.826 0.235 2.5 || echo "drag failed"; sleep 2
-          $D "$DEVICE" drag 0.826 0.316 0.826 0.459 1.5 || echo "drag failed"; sleep 3
+          sleep 22
+          $D "$DEVICE" drag 0.826 0.530 0.826 0.235 2.5 || echo "drag failed"; sleep 3
+          $D "$DEVICE" drag 0.826 0.245 0.826 0.625 2.0 || echo "drag failed"; sleep 3
           cut chdrag-portrait 3
           # A posture change with the app up: open upright to open flat and back (filmed as the display is mounted).
           now() { python3 -c 'import time; print(time.time())'; }
@@ -191,7 +203,9 @@ jobs:
         run: |
           (cd dist && zip -qr ../pass-shots.zip . -i '*.png' '*.log' || zip -q ../pass-shots.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
-          gh release view chumby-pass-1122 >/dev/null 2>&1 || gh release create chumby-pass-1122 --prerelease --title "Chumby pass 11-22" --notes "Work in progress: shots, films and logs from the chumby-pass-1122 branch."
+          # Afresh each run, so a film this run didn't make can't be taken for one of its own.
+          gh release delete chumby-pass-1122 --yes >/dev/null 2>&1 || true
+          gh release create chumby-pass-1122 --prerelease --title "Chumby pass 11-22" --notes "Work in progress: shots, films and logs from the chumby-pass-1122 branch."
           for f in pass-shots.zip status.txt dist/p-*.mp4; do
             [ -f "$f" ] || continue
             for i in 1 2 3; do gh release upload chumby-pass-1122 "$f" --clobber && break; sleep 15; done

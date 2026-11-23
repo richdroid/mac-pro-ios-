@@ -459,6 +459,7 @@ const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(J
   livemany: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)),
     chlist: { ...data.chlist, channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '1', '15'], ['W5', '1', '45'], ['W6', '1', '30'], ['W7', '1', '30'], ['W8', '1', '20']],
       list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15'], ['W5', 'NYT Top Headlines', '45'], ['W6', 'Flickr Interesting', '30'], ['W7', 'Stock Ticker', '30'], ['W8', 'Word of the Day', '20']] }, data.chlist.channels[1]] } },
+  liveringsoon: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)), ringAfter: 12000 },
   // The channel showing holds nothing yet, for the empty channel's still.
   chempty: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)),
     chlist: { ...data.chlist, channels: [{ id: 'A', conf: [], list: [['#', 'Default']] }, data.chlist.channels[1]] } },
@@ -558,7 +559,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|chempty|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|chempty|liveringsoon|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
@@ -668,6 +669,8 @@ function chumbyScene(q, s) {
     // The live scene's readings move as the real Chumby's do (its uptime, load, free memory and Wi-Fi), so a reading
     // changes Home's status rows every poll, as on his phone: the film of Home pulled past its end (chumby-homepull-
     // portrait) must show every one of them held while the page is past its end, not landing under the pull.
+    // liveringsoon: quiet when first read, then an alarm starts ringing 12 s later, with Home already showing its next alarm.
+    if (live.ringAfter && (a === 'sys' || a === 'ring')) { live.firstRead = live.firstRead || Date.now(); if (!live.rang && Date.now() - live.firstRead > live.ringAfter) { live.rang = true; live.sys.ring = 'r\tWork\tBeep'; } }
     if (a === 'sys' && live.stale && Date.now() - live.stale.at < 7000) { s.setHeader('X-Chumby-Age', String((Date.now() - live.stale.at) / 1000)); return json(live.stale.body); }
     if (a === 'sys') { const n = Math.floor(Date.now() / 1000); return json(scene === 'live' ? { ...live.sys, up: live.sys.up + n % 100000, load: 0.3 + (n % 7) / 10, memFree: live.sys.memFree - (n % 5) * 400, wifi: 60 + (n * 7) % 31 } : live.sys); }
     if (a === 'state') return json(stateNow(live.state));

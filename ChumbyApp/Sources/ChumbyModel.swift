@@ -226,7 +226,19 @@ final class ChumbyModel: ObservableObject {
     // the air for four frames (gate 4, 11-21, dbg-chdrag 72.36 s), and the list "constantly refreshes" (Richard, 11-17).
     // What's parked lands on Done.
     var reorderHold = false { didSet { if oldValue && !reorderHold { releaseHeld() }; if reorderHold != oldValue { SwipeLog.note("reorderHold \(reorderHold)") } } }
-    private var parks: Bool { (ScrollHold.holding || reorderHold) && stateConfirmed && !alarmsPage && !editingAlarm }
+    // A page coming or going over everything (the ringing page): readings wait until it has finished moving, so nothing
+    // under it is worked out mid-move (gate, 11-22: the page's leave stuck for four frames as a reading landed).
+    private var moveHoldUntil = Date.distantPast
+    func holdForMove(_ seconds: Double) {
+        moveHoldUntil = Date().addingTimeInterval(seconds)
+        SwipeLog.note("move hold \(seconds)")
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9) + 20_000_000)
+            guard let self, Date() >= self.moveHoldUntil else { return }
+            self.releaseHeld()
+        }
+    }
+    private var parks: Bool { (ScrollHold.holding || reorderHold || Date() < moveHoldUntil) && stateConfirmed && !alarmsPage && !editingAlarm }
     private func releaseHeld() {
         if heldSys != nil || heldState != nil { SwipeLog.note("held readings landed") }
         if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh, takenAt: h.at) } }

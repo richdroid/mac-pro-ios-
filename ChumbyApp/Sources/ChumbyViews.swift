@@ -665,7 +665,9 @@ struct RootView: View {
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
         // An editor in Alarms' right pane: its ✕ and ✓ in the side column.
-        .overlay(alignment: .topTrailing) { PaneActionDiscs() }
+        // Laid out on the whole display: the root's own frame stops at the safe area, which leaves the side column out,
+        // and the discs stood 84 pt left of the rail, on the editor's card (gate, 11-22).
+        .overlay { PaneActionDiscs().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).ignoresSafeArea() }
         .onAppear {
             SwipeLog.frames()
             // For the build: the ringing page opened as the app opens it by itself, on its first reading of the ring (on the
@@ -678,6 +680,8 @@ struct RootView: View {
             }
             if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
         }
+        // The ringing page built ahead while a ring is known, so opening it is only the move (RingPresenter.prepare).
+        .onChange(of: model.sys.ringing != nil) { _, r in if r { Task { try? await Task.sleep(nanoseconds: 300_000_000); RingPresenter.prepare(model) } } else { RingPresenter.discard() } }
         .onReceive(NotificationCenter.default.publisher(for: RingDesk.confirmedNote).receive(on: DispatchQueue.main)) { n in
             model.ringConfirmedElsewhere(stop: n.userInfo?["stop"] as? Bool ?? true, until: (n.userInfo?["until"] as? Double).flatMap { $0 > 0 ? $0 : nil })
         }
@@ -1140,7 +1144,10 @@ struct HomeTab: View {
                 .allowsHitTesting(false)
             }
             .frame(maxWidth: stageWidth)
-            .padding(.top, Self.wordTop + Self.wordHeight + wordGap + octLift)
+            // Open flat the ring's room is made above the octopus by lifting the wordmark into its top margin, so the
+            // octopus, the device and the caption stay where they are (gate, 11-22: they dropped 8 pt as a ring arrived);
+            // folded and upright, where the room is short, the stage makes it as before.
+            .padding(.top, Self.wordTop + Self.wordHeight + (wide ? restGap : wordGap) + octLift)
             // While it rings, bubbles keep coming.
             .task(id: ringing) {
                 while ringing && !Task.isCancelled { puff(2); try? await Task.sleep(nanoseconds: 450_000_000) }
@@ -1484,7 +1491,7 @@ struct HomeTab: View {
                             // Level with the device, not the wordmark: the controls are the Chumby's, so they start where its
                             // picture does, and the two panes read as one (Richard, 2026-11-09, open flat: "the stuff on the
                             // right side is like too far up"). The same sum as the stage's top padding, at rest.
-                            Color.clear.frame(height: Self.wordTop + Self.wordHeight + wordGap + octLift)
+                            Color.clear.frame(height: Self.wordTop + Self.wordHeight + restGap + octLift)
                             controls
                             more.padding(.top, Self.sectionGap)
                         }.padding(.horizontal, 12)
@@ -2116,10 +2123,7 @@ struct ChannelsTab: View {
         .padding(.horizontal, 10).padding(.vertical, 5)
         .background(.white.opacity(0.12), in: Capsule())
     }
-    // The reordered list: the channel's heading (held first, never moved), then the widgets that play.
-    struct Listed: Identifiable { let id: String; let row: EditorRow? }
-    var listed: [Listed] { [Listed(id: "#head", row: nil)] + shown.map { Listed(id: $0.id, row: $0) } }
-    func widgetRow(_ w: EditorRow, first: Bool = false) -> some View {
+    func widgetRow(_ w: EditorRow) -> some View {
         SwipeLog.mark("chrow \(w.name)")
         return HStack(alignment: .center, spacing: 16) {
             // The app's one remove control while editing (LeadingRemove), sliding in with the name in the same spring.
@@ -2155,7 +2159,7 @@ struct ChannelsTab: View {
         // One height in and out of Edit: the time capsule's (gate, 11-18: rows grew 11 pt on Edit).
         .frame(minHeight: 30)
         .padding(.vertical, 4)
-        .listRowBackground(GlassRow(top: first).overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
+        .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
     }
     // The end of the list: one row, tapped anywhere, that opens the picker.
     var addRow: some View {
@@ -2180,58 +2184,51 @@ struct ChannelsTab: View {
     // The channel's heading (its name and Edit) leads the section, drawn as a header was, on no glass.
     var channelSection: some View {
         Group {
-            Section {
-            // The channel's heading is the first item of the list being reordered, held in place: a widget dragged past
-            // the first row and let go over the heading lands first. Let go over a section header, or over a row outside
-            // the reordered list, the drop had nowhere to go and the row flew back (gate, 11-22: twice, no move at all).
-            // By id, never by index: following the playing channel swaps `rows` under the list.
-            ForEach(listed) { it in
-                if let w = it.row { widgetRow(w, first: it.id == shown.first?.id) }
-                else {
-                // The channel is the heading itself: its name, with the others in its menu (the tick on the one showing).
-                HStack(alignment: .firstTextBaseline) {
-                    Menu {
-                        Section("Channel") {
-                            ForEach(channels, id: \.id) { c in
-                                let name = title(c)
-                                // The tick at once; the switch (and the list following it, below) once the menu has closed.
-                                Button { model.tick(); MenuClose.then { model.playChannel(name, id: "nowPlaying") } } label: {
-                                    if name.trimmingCharacters(in: .whitespacesAndNewlines) == showing.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
-                                }
+            // The channel is the heading itself: its name, with the others in its menu (the tick on the one showing).
+            HStack(alignment: .firstTextBaseline) {
+                Menu {
+                    Section("Channel") {
+                        ForEach(channels, id: \.id) { c in
+                            let name = title(c)
+                            // The tick at once; the switch (and the list following it, below) once the menu has closed.
+                            Button { model.tick(); MenuClose.then { model.playChannel(name, id: "nowPlaying") } } label: {
+                                if name.trimmingCharacters(in: .whitespacesAndNewlines) == showing.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
                             }
                         }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(channels.first { $0.id == picked }.map(title) ?? (showing.isEmpty ? "Choose a channel" : showing)).font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
-                            Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold))
-                        }
-                        .foregroundStyle(.primary)
                     }
-                    .accessibilityLabel("Channel, \(pickedTitle)")
-                    .accessibilityHint("Choose the channel the Chumby shows")
-                    Spacer()
-                    if !shown.isEmpty || reordering {
-                        // The system's words for it: Edit, and Done in bold.
-                        Button(reordering ? "Done" : "Edit") {
-                            withAnimation(.snappy) { reordering.toggle() }
-                            // Done sends what was changed at once, rather than 5 s on.
-                            if !reordering { flush() }
-                        }
-                        .font(.body.weight(reordering ? .semibold : .regular)).foregroundStyle(.tint)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(channels.first { $0.id == picked }.map(title) ?? (showing.isEmpty ? "Choose a channel" : showing)).font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold))
                     }
+                    .foregroundStyle(.primary)
                 }
-                .textCase(nil)
-                .frame(minHeight: 32, alignment: .bottom)
-                    .headRow(top: 0, bottom: 14)
+                .accessibilityLabel("Channel, \(pickedTitle)")
+                .accessibilityHint("Choose the channel the Chumby shows")
+                Spacer()
+                if !shown.isEmpty || reordering {
+                    // The system's words for it: Edit, and Done in bold.
+                    Button(reordering ? "Done" : "Edit") {
+                        withAnimation(.snappy) { reordering.toggle() }
+                        // Done sends what was changed at once, rather than 5 s on.
+                        if !reordering { flush() }
+                    }
+                    .font(.body.weight(reordering ? .semibold : .regular)).foregroundStyle(.tint)
                 }
             }
+            .textCase(nil)
+            .frame(minHeight: 32, alignment: .bottom)
+            .headRow(top: 14, bottom: 0)
+            Section {
+            // By id, never by index: following the playing channel swaps `rows` under the list. The section is the system's
+            // own rounded card: the heading inside the reordered list (to catch a drop over it, which SwiftUI's List throws
+            // away all the same) left a moved row with the corners of its old place, a notch that never healed (gate,
+            // 11-22).
+            ForEach(shown, id: \.id) { widgetRow($0) }
                 .onMove { from, to in
-                    // Logged as widget places (the heading is list item 0): a drop at the top reads "-> 0".
-                    SwipeLog.note("chmove \(from.compactMap { $0 > 0 ? $0 - 1 : nil }) -> \(max(to - 1, 0)) (list \(Array(from)) -> \(to))")
-                    // Offsets in the widgets alone: the heading is item 0, never moved, and a drop at or just after it
-                    // is the top.
+                    SwipeLog.note("chmove \(Array(from)) -> \(to)")
                     var on = shown
-                    on.move(fromOffsets: IndexSet(from.compactMap { $0 > 0 ? $0 - 1 : nil }), toOffset: max(to - 1, 0))
+                    on.move(fromOffsets: from, toOffset: to)
                     // The list has already carried the row to its place under the finger: the new order is taken with
                     // no animation of its own, which redrew the dropped row (blank for a few frames, then back; film, 11-20).
                     var plain = Transaction(); plain.disablesAnimations = true
@@ -2245,7 +2242,6 @@ struct ChannelsTab: View {
                     OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34).accessibilityHidden(true)
                     Text("Nothing in this channel yet.").foregroundStyle(.secondary)
                 }
-                .listRowBackground(GlassRow(top: true))
             }
             if !picked.isEmpty { addRow }
             // A save held under an alarm is said calmly, in the secondary ink, and stays until it has gone; a real failure
@@ -3817,8 +3813,9 @@ struct PaneActionDiscs: View {
                 }
                 .buttonStyle(.plain).disabled(!a.canSave || a.busy).opacity(a.canSave ? 1 : 0.45).accessibilityLabel("Save")
             }
+            // From the display's own edges: the rail's centre line (SideRailTabs.centre from the trailing edge) and the
+            // place under the status where the system's ✕ stands.
             .padding(.trailing, SideRailTabs<EmptyView>.centre - Self.size / 2).padding(.top, Self.top)
-            .ignoresSafeArea()
             .transition(.opacity)
         }
     }
