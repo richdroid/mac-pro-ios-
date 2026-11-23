@@ -1045,8 +1045,11 @@ struct HomeTab: View {
         let top = foot - captionHeight
         // Wholly below: past the bottom bar or the home indicator too, where the page still draws (the room's own foot left
         // it half seen there, folded).
-        let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room + under - top + 4) : 0
-        if abs(push - captionPush) > 0.5 { captionPush = push }
+        // Richard, 11-23 ("too much space between the two elements", Home scrolled): the caption is no longer pushed wholly
+        // below the fold. Scrolled into view, that push left about 100 pt of empty ground between the next alarm and
+        // "Chumby Classic". It now always sits one section gap under the controls, and may meet the fold at rest.
+        _ = top
+        if captionPush != 0 { captionPush = 0 }
     }
     var k: CGFloat { stageWidth / 380 }
     var ringSize: CGFloat { 92 * k * 1.15 }
