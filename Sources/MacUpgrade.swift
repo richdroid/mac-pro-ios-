@@ -422,8 +422,19 @@ struct UpgradeView: View {
         .accessibilityElement(children: .combine)
     }
 
+    // What holds a ready install, said at the top of the page in place of "ready to install … hold the key", which stood
+    // over a red check (Fable gate on 9c093cb): the reason leads, once; the check's own row only names it.
+    func held(_ f: UpgradeFeed) -> UpgradeStanding? {
+        guard f.phase == "ready", !away, checks != nil, !checking else { return nil }
+        if !red.isEmpty {
+            return UpgradeStanding(symbol: "hand.raised.fill", color: .red, title: "Held by \(red.count == 1 ? "a check" : "\(red.count) checks")",
+                                   line: red.map { MacParts.say($0, check: true) }.joined(separator: "; ") + ". It can start once that’s clear.")
+        }
+        if publicLink { return UpgradeStanding(symbol: "hand.raised.fill", color: .red, title: "Held: on the public link", line: "The install only starts over Tailscale.") }
+        return nil
+    }
     @ViewBuilder func standing(_ f: UpgradeFeed) -> some View {
-        let st = UpgradeStanding.of(f, away: away, awayMinutes: Self.minutesAway(feed.lastRead))
+        let st = held(f) ?? UpgradeStanding.of(f, away: away, awayMinutes: Self.minutesAway(feed.lastRead))
         Section {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: st.symbol).font(.system(size: 30)).foregroundStyle(st.color).symbolRenderingMode(.hierarchical).frame(width: 36)
@@ -450,9 +461,15 @@ struct UpgradeView: View {
         }
     }
 
+    func roomLine(_ f: UpgradeFeed, _ s: [StepState]) -> String {
+        if f.phase == "done" { return "There was room." }
+        return s[0] == .done ? "\(UpgradeFeed.gb(f.free)) free; the update needs about \(UpgradeFeed.gb(f.want))." : "It needs about \(UpgradeFeed.gb(f.want)) free. There are \(UpgradeFeed.gb(f.free)): \(UpgradeFeed.gb(f.short)) short."
+    }
+    // The Make room section is shown (else step 1 heads the steps, so the list never starts at 2).
+    func showsRoom(_ f: UpgradeFeed) -> Bool { f.phase != "idle" && f.phase != "done" && !(away && f.underWay) }
     @ViewBuilder func room(_ f: UpgradeFeed, _ s: [StepState]) -> some View {
         Section {
-            step(1, s[0], s[0] == .done ? "\(UpgradeFeed.gb(f.free)) free; the update needs about \(UpgradeFeed.gb(f.want))." : "It needs about \(UpgradeFeed.gb(f.want)) free. There are \(UpgradeFeed.gb(f.free)): \(UpgradeFeed.gb(f.short)) short.")
+            step(1, s[0], roomLine(f, s))
             if s[0] != .done {
                 RoomBar(free: f.free, want: f.want).padding(.vertical, 4)
             }
@@ -484,13 +501,16 @@ struct UpgradeView: View {
     func checkLine(_ s: StepState) -> String {
         if checking || (checks == nil && failure == nil && s != .waiting) { return "Checking…" }
         if s == .waiting { return "Run when there is room and the patcher supports it." }
-        if !red.isEmpty { return "The install waits: " + red.map { MacParts.say($0, check: true) }.joined(separator: "; ") + "." }
-        if publicLink { return "The install only starts over Tailscale, never the public link." }
+        // Why is said at the top of the page; here only where.
+        if !red.isEmpty { return "Held by the check in red below." }
+        if publicLink { return "Held: it only starts over Tailscale." }
         return checks == nil ? "Not checked: the Mac didn’t answer." : "Nothing in the way."
     }
 
     @ViewBuilder func rest(_ f: UpgradeFeed, _ s: [StepState]) -> some View {
         Section {
+            // Step 1 here when Make room isn't on the page (done, or the Mac away mid-install): the steps started at 2.
+            if !showsRoom(f) { step(1, s[0], roomLine(f, s)) }
             step(2, s[1], patcherLine(f))
             if f.patcher?.newer == true, f.phase == "ready" || f.phase == "room" || f.phase == "held" {
                 // The patcher updates in its own app on the Mac: the Mac's screen, from here, is where to do it.
@@ -506,14 +526,19 @@ struct UpgradeView: View {
             step(4, s[3], checkLine(s[3]))
             if s[3] != .waiting, let c = checks {
                 ForEach(c.parts.filter { $0.part != "oclp" && $0.part != "updates" && $0.part != "restart" }) { p in
+                    // One short line a check, never wrapped: a pass says what is so ("Signs in by itself"), a red one names
+                    // the check (its reason leads the page). Name and state side by side said the same thing twice and
+                    // broke into three lines at his size open flat (Fable gate on 9c093cb).
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle().fill(p.bad ? Color.red : Color.green).frame(width: 8, height: 8)
-                        Text(MacParts.name(p.part, check: true)).font(.subheadline)
-                        Spacer(minLength: 8)
-                        // In his words, never the Mac's paths ("Scripts from /tmp kept", gate 3).
-                        Text(MacParts.say(p, check: true)).font(.footnote).foregroundStyle(p.bad ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary)).multilineTextAlignment(.trailing)
+                        Text(p.bad ? MacParts.name(p.part, check: true) : (MacParts.passed(p.part) ?? MacParts.name(p.part, check: true)))
+                            .font(.subheadline).foregroundStyle(p.bad ? Color.red : Color.primary)
+                            .lineLimit(1).minimumScaleFactor(0.85)
+                        Spacer(minLength: 0)
                     }
                     .padding(.leading, 40)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityValue(p.bad ? MacParts.say(p, check: true) : "")
                 }
                 if !red.isEmpty { Button { Task { await check() } } label: { Label("Check again", systemImage: "arrow.clockwise") }.disabled(checking) }
             }
@@ -589,7 +614,7 @@ struct UpgradeView: View {
             if let f {
                 let s = f.steps(checksRed: !red.isEmpty || publicLink, checked: checks != nil && !checking)
                 standing(f)
-                if f.phase != "idle" && f.phase != "done" && !(away && f.underWay) { room(f, s) }
+                if showsRoom(f) { room(f, s) }
             } else if feed.unsupported {
                 Section { Text("The Mac’s bridge doesn’t report upgrades yet. It does after its next restart.").foregroundStyle(.secondary) }
             } else {

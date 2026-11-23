@@ -201,7 +201,9 @@ final class AppModel: ObservableObject {
         // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
         if UserDefaults.standard.integer(forKey: "startTab") == 9 { UserDefaults.standard.set(0, forKey: "startTab") }
-        if Self.firstTab == 9 { nav.settingsTab = 0; nav.settingsOpen = true }
+        // Pushed once Status has drawn under it, as every other page asked for at launch is: pushed at once, open upright
+        // the page came up black, its tab never drawn under it (Fable gate on 9c093cb, tab9-portrait).
+        if Self.firstTab == 9 { whenDrawn { [weak self] in self?.nav.settingsTab = 0; self?.nav.settingsOpen = true } }
         let h = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         let p = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).

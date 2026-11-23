@@ -1018,7 +1018,9 @@ struct Screen<Content: View>: View {
             .settingsItem { model.nav.settingsTab = tab; model.nav.settingsOpen = true }
             // Clear of the rail drawn on its side (SideRailTabs), outermost as a pushed page takes it: on the list itself
             // the room was added to the list's own margin open upright, 20 pt more than a pushed page's (gate, 11-22).
-            .railRoom(listMargin: 20)
+            // The whole room, no list margin taken off: this app's lists set no margin beyond a safe area that wide, so
+            // with 20 pt off every card ran 10 pt under the pill open upright (Fable gate on 9c093cb: 606 against 596).
+            .railRoom()
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
         .onReceive(model.statusStore.$status) { take($0) }
@@ -1067,13 +1069,13 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
-            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).railRoom() }
             // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
-            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom(listMargin: 20) }
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).railRoom() }
             // All processes, from the tab itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
-            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom(listMargin: 20) }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom(listMargin: 20) }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).railRoom() }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).railRoom() }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).railRoom() }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
             .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 0 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
@@ -1089,7 +1091,7 @@ struct StackPages: ViewModifier {
                 case .actions: MacActionsView(model: model)
                 case .upgrade: UpgradeView(model: model)
                 } }
-                .railRoom(listMargin: 20)
+                .railRoom()
             }
     }
 }
@@ -1099,7 +1101,7 @@ struct ProcessesOverHistory: ViewModifier {
     @ObservedObject var nav: NavStore
     @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom(listMargin: 20) }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).railRoom() }
     }
 }
 // A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.
@@ -1169,14 +1171,6 @@ struct WebTile: View {
     static func distinct(_ a: [String]) -> [String] { var seen = Set<String>(); return a.filter { seen.insert($0).inserted } }
     // The figure's number, for which way its digits roll ("48.4 MB/s" is 48.4; the unit's size is in the words).
     static func number(_ v: String) -> Double { Double(v.prefix { $0.isNumber || $0 == "." }) ?? 0 }
-    func figureText(_ value: String) -> Text {
-        let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
-        let small = Font.system(size: 17, weight: .semibold)
-        guard value.first?.isNumber == true else { return Text(value).font(big) }
-        if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
-        guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
-        return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
-    }
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1199,11 +1193,9 @@ struct WebTile: View {
                 // new view, faded in over the old one in a fifth of a second, and the digits never rolled (Richard,
                 // 2026-11-20: "choppy and weird").
                 ViewThatFits(in: .horizontal) {
-                    ForEach(Array(Self.distinct([value] + figures).enumerated()), id: \.offset) { _, v in figureText(v).lineLimit(1).fixedSize() }
-                    figureText(figures.last ?? value).lineLimit(1)
+                    ForEach(Array(Self.distinct([value] + figures).enumerated()), id: \.offset) { _, v in LiveFigure(value: v).fixedSize() }
+                    LiveFigure(value: figures.last ?? value)
                 }
-                // Rolled up as the figure grows and down as it falls, over most of the time to the next reading.
-                .contentTransition(.numericText(value: Self.number(value)))
                 // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                 // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                 // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
@@ -1238,6 +1230,46 @@ struct WebTile: View {
         .accessibilityIdentifier("tile." + title)
         .accessibilityValue(onMac ? "On the Mac’s screen" : "")
         .accessibilityAction(named: "Show the past 24 hours", open)
+    }
+}
+
+// A tile's figure: the number large, its unit smaller after it. The number rolls up as it grows and down as it falls;
+// while it rolls its place is held at the wider of the old and new numbers, so the unit never sits on a digit coming in
+// or going out ("13 0KB/s" mid-roll, Fable gate on 9c093cb), and the unit moves only once the roll is over.
+struct LiveFigure: View {
+    let value: String
+    // The number last settled: its place is held from the very frame a new one comes until the roll is over.
+    @State private var settled: String?
+    @State private var rolls = 0
+    static let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
+    static let small = Font.system(size: 17, weight: .semibold)
+    // "48.4 MB/s" → ("48.4", " MB/s"), "97%" → ("97", "%"); words stay whole.
+    static func split(_ v: String) -> (String, String) {
+        guard v.first?.isNumber == true else { return (v, "") }
+        if v.hasSuffix("%") { return (String(v.dropLast()), "%") }
+        guard let gap = v.lastIndex(of: " ") else { return (v, "") }
+        return (String(v[..<gap]), String(v[gap...]))
+    }
+    var body: some View {
+        let (number, unit) = Self.split(value)
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            ZStack(alignment: .leading) {
+                if let settled, settled != number { Text(settled).font(Self.big).hidden().accessibilityHidden(true) }
+                Text(number).font(Self.big).lineLimit(1)
+                    .contentTransition(.numericText(value: WebTile.number(value)))
+            }
+            if !unit.isEmpty { Text(unit).font(Self.small).lineLimit(1).transaction { $0.animation = nil } }
+        }
+        .onAppear { settled = number }
+        .onChange(of: number) { _, now in
+            rolls += 1; let mine = rolls
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(LiveMotion.seconds * 1e9))
+                guard rolls == mine else { return }
+                var still = Transaction(); still.disablesAnimations = true
+                withTransaction(still) { settled = now }
+            }
+        }
     }
 }
 
@@ -1428,6 +1460,8 @@ struct Hero: View {
 // look", which opens that page. It read "All systems go" from the alerts alone while Control said "2 need a look", and
 // green before the Mac had said anything at all (audit, 2026-11-10); now that's a grey "Checking".
 struct HeroChips: View {
+    // When the app first drew its chips this launch.
+    static let openedAt = Date()
     let alerts: [Status.Alert]?
     // The parts that need a look: from the status when the Mac's bridge says, else what the app last read itself.
     var healthBad: Int?
@@ -1487,22 +1521,28 @@ struct HeroChips: View {
                     Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1, short: parts.map { summary.say($0).short }, opens: true) }
                         .buttonStyle(FlatStyle()).accessibilityHint("Opens Everything on the Mac")
                 } else { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
-                if !fresh {
-                    // Last time's figures while the first answer comes: their age, quietly, never a dimmed page.
-                    TimelineView(.periodic(from: .now, by: 5)) { c in
+                // One chip from the first frame: opening with a reading kept from moments ago, it says Live with its dot
+                // grey until the Mac's first answer lights it, so nothing is swapped as the app opens (it opened on
+                // "Updated 13 s ago" and cut to "Live" 0.8 s later, Fable gate on 9c093cb). Only a first answer that
+                // doesn't come within 3 s, or a kept reading over two minutes old, says its age instead.
+                TimelineView(.periodic(from: .now, by: fresh ? 3600 : 1)) { c in
+                    let settling = c.date.timeIntervalSince(Self.openedAt) < 3 && (pulse.lastFresh.map { c.date.timeIntervalSince($0) < 120 } ?? false)
+                    if fresh || settling {
+                        // The dot beats each time the Mac answers.
+                        chip({
+                            Circle().fill(fresh ? Color.green : Color.gray).frame(width: 9, height: 9)
+                                .animation(.easeOut(duration: 0.3), value: fresh)
+                                .keyframeAnimator(initialValue: 1.0, trigger: pulse.beats) { dot, k in dot.scaleEffect(k).opacity(2 - k) } keyframes: { _ in
+                                    KeyframeTrack {
+                                        CubicKeyframe(1.45, duration: 0.15)
+                                        CubicKeyframe(1.0, duration: 0.34)
+                                    }
+                                }
+                        }, "Live · \(route)")
+                    } else {
+                        // Last time's figures while the first answer comes: their age, quietly, never a dimmed page.
                         chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Updated \(StaleLine.ago($0, now: c.date))" } ?? "Connecting")
                     }
-                } else {
-                    // The dot beats each time the Mac answers.
-                    chip({
-                        Circle().fill(Color.green).frame(width: 9, height: 9)
-                            .keyframeAnimator(initialValue: 1.0, trigger: pulse.beats) { dot, k in dot.scaleEffect(k).opacity(2 - k) } keyframes: { _ in
-                                KeyframeTrack {
-                                    CubicKeyframe(1.45, duration: 0.15)
-                                    CubicKeyframe(1.0, duration: 0.34)
-                                }
-                            }
-                    }, "Live · \(route)")
                 }
             }
         }

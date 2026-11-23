@@ -16,7 +16,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 85
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,7 +35,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 70
+        timeout-minutes: 80
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -131,12 +131,21 @@ jobs:
             shot claude-scrolled$x $d 9 -tab 2 -pose scrolled "$@"
           }
 
+          # Back tapped on a pushed page, and the gear's push (the system's Back carries the id BackButton).
+          backs() {
+            local x=$1 d=$2; shift 2
+            film settings-push$x $d 3 "tap gear;tap BackButton" -tab 0 "$@"
+            film upgrade-back$x $d 3 "tap BackButton" -tab 5 -pose upgrade-room "$@"
+          }
+          # Runs are cut at the step's limit (run 1 ran out in its last posture: touches take 10 to 16 s each), so what the
+          # gate asked for goes first in each posture and nothing is shot twice at two sizes open flat.
           # Folded, upright.
           tabs "" 1
-          upgrades "" 1 0.4
-          remote "" 1 0.4
+          backs "" 1
           live "" 1
           screens "" 1
+          upgrades "" 1 0.4
+          remote "" 1 0.4
           film claude-pull 1 3 "drag 0.4 0.3 0.4 0.75 0.7" -tab 2
           # Folded, on its side.
           $D "$DEVICE" rotate 1; sleep 5
@@ -145,25 +154,31 @@ jobs:
           shot dash-consolebed-land 1 8 -tab 6 -pose consolebed
           shot screen-land 1 9 -tab 0 -pose screen -openScreen YES
           $D "$DEVICE" rotate 3; sleep 5
-          # Open, upright.
+          # Open, upright (his main posture), at the simulator's size and his.
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
           tabs -portrait 3
-          upgrades -portrait 3 0.5
-          remote -portrait 3 0.5
+          tabs -hisportrait 3 -windowSize 604x859
+          backs -portrait 3
           live -portrait 3
           screens -portrait 3
-          tabs -hisportrait 3 -windowSize 604x859
-          # Open flat, at the simulator's size and at his.
+          shot screen-hisportrait 3 9 -tab 0 -pose screen -openScreen YES -windowSize 604x859
+          for u in checksred done downloading; do shot upgrade-$u-portrait 3 9 -tab 5 -pose upgrade-$u; done
+          film upgrade-remove-portrait 3 4 "drag 0.5 0.7 0.5 0.45 0.4;tap cleanup.caches" -tab 5 -pose upgrade-room
+          remote -portrait 3 0.5
+          # A turn from upright to flat and back, on Status and on the Dashboard.
+          film posture-status 3 4 "rotate 3;rotate 1" -tab 0
+          film posture-dash 3 4 "rotate 3;rotate 1" -tab 6 -pose consoleboard
+          # Open flat at his size first, then the simulator's.
           $D "$DEVICE" rotate 3; sleep 5
-          tabs -open 3
-          upgrades -open 3 0.25
-          remote -open 3 0.22
-          screens -open 3
           tabs -his 3 -windowSize 859x604
           upgrades -his 3 0.22 -windowSize 859x604
+          backs -his 3 -windowSize 859x604
+          screens -his 3 -windowSize 859x604
           remote -his 3 0.22 -windowSize 859x604
           live -his 3 -windowSize 859x604
+          tabs -open 3
+          screens -open 3
           crashes
           ls dist | wc -l
       - name: Publish
@@ -171,6 +186,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Films the right way up: open upright the simulator records them upside down, open flat a quarter turn round.
+          for f in dist/*-portrait*.mp4 dist/*-hisportrait*.mp4 dist/macpro-posture-*.mp4; do [ -s "$f" ] && swift ci/film-turn.swift "$f" "$f.t.mp4" 180 && mv "$f.t.mp4" "$f"; done
+          for f in dist/*-his.mp4 dist/*-open.mp4; do [ -s "$f" ] && swift ci/film-turn.swift "$f" "$f.t.mp4" 90 && mv "$f.t.mp4" "$f"; done
           (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
           (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
           (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)

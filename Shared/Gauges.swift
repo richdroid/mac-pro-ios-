@@ -116,12 +116,15 @@ struct SparkLine: View {
     @State private var drawn: [Double]?
     @State private var lead = 0
     @State private var origin: CGFloat = 0
+    // The height the line is drawn against, moved with the slide: a chart with no fixed top rescaled to its new highest
+    // reading in one frame, a V flattened at once (Fable gate on 9c093cb, the Download chart).
+    @State private var scale: Double?
     // Shapes, not a Canvas, for the same reason as the dials' ticks: never a blank chart for a frame.
     var body: some View {
         let shown = glide > 0 ? (drawn ?? values) : values
         let k = glide > 0 && drawn != nil ? lead : 0
         if shown.count - k > 1 {
-            let hi = max(top ?? values.max() ?? 1, 0.0001)
+            let hi = glide > 0 && drawn != nil ? (scale ?? Self.top(values, top)) : Self.top(values, top)
             let steps = shown.count - k - 1, o = glide > 0 && drawn != nil ? origin : 0
             ZStack {
                 SparkPath(values: shown, hi: hi, closed: true, origin: o, steps: steps).fill(color.opacity(0.18))
@@ -132,28 +135,33 @@ struct SparkLine: View {
             .onChange(of: values) { old, new in slide(from: old, to: new) }
         }
     }
+    static func top(_ v: [Double], _ fixed: Double?) -> Double { max(fixed ?? v.max() ?? 1, 0.0001) }
     private func slide(from old: [Double], to new: [Double]) {
         var still = Transaction(); still.disablesAnimations = true
         // Stepping along (a page sliding, just arrived): the new line as it is, and nothing kept to slide from.
-        guard glide > 0 else { if drawn != nil { withTransaction(still) { drawn = nil; lead = 0; origin = 0 } }; return }
+        guard glide > 0 else { if drawn != nil { withTransaction(still) { drawn = nil; lead = 0; origin = 0; scale = nil } }; return }
+        // Where the scale stands now (its first reading, the old line's), and where it goes.
+        let from = drawn == nil ? Self.top(old, top) : (scale ?? Self.top(old, top)), to = Self.top(new, top)
+        let seconds = glide
         // The same window moved on by one to three readings: drawn from where it was, then slid.
         guard old.count == new.count, let k = (1...3).first(where: { k in old.count > k + 1 && Array(old.dropFirst(k)) == Array(new.dropLast(k)) }) else {
-            withTransaction(still) { drawn = new; lead = 0; origin = 0 }
+            // Not a step along (a new window): the line as it is, its scale eased rather than cut.
+            withTransaction(still) { drawn = new; lead = 0; origin = 0; scale = from }
+            DispatchQueue.main.async { withAnimation(.easeInOut(duration: min(seconds, 0.6))) { scale = to } }
             return
         }
-        withTransaction(still) { drawn = Array(old.prefix(k)) + new; lead = k; origin = 0 }
-        let seconds = glide
-        DispatchQueue.main.async { withAnimation(.linear(duration: seconds)) { origin = -CGFloat(k) } }
+        withTransaction(still) { drawn = Array(old.prefix(k)) + new; lead = k; origin = 0; scale = from }
+        DispatchQueue.main.async { withAnimation(.linear(duration: seconds)) { origin = -CGFloat(k); scale = to } }
     }
 }
 struct SparkPath: Shape {
     let values: [Double]
-    let hi: Double
+    var hi: Double
     let closed: Bool
     // Where the first value sits, in steps from the left edge, and how many steps span the width (0: the values').
     var origin: CGFloat = 0
     var steps = 0
-    var animatableData: CGFloat { get { origin } set { origin = newValue } }
+    var animatableData: AnimatablePair<CGFloat, Double> { get { AnimatablePair(origin, hi) } set { origin = newValue.first; hi = newValue.second } }
     func path(in rect: CGRect) -> Path {
         var line = Path()
         let step = rect.width / CGFloat(max(steps > 0 ? steps : values.count - 1, 1))

@@ -144,13 +144,22 @@ final class ConsoleRemote: ObservableObject {
         default: return "Done"
         }
     }
+    // The remote calls it the dashboard everywhere; the bridge's words call it the Console. One name on the card.
+    static func named(_ e: String) -> String {
+        e.replacingOccurrences(of: "The Console", with: "The dashboard").replacingOccurrences(of: "the Console", with: "the dashboard")
+    }
     // Counted when the Console's answer comes: the Dashboard's done and warn haptics (manifesto, haptic vocabulary).
     @Published var answered = 0
     @Published var refused = 0
     func refresh(_ model: AppModel) async {
         // A posed Console keeps what the posed buttons did to it; it is set once, as a real one would be read.
         if let posed = Self.posed(model.pose) {
-            if !read { state = posed; read = true; if model.pose == "consolestarting" { busy = "show" } }
+            if !read {
+                state = posed; read = true
+                if model.pose == "consolestarting" { busy = "show" }
+                // The build's shot of a press the dashboard didn't answer, said as the card says one.
+                if model.pose == "consolefail" { fail = ("next", Self.named("The Console didn’t answer.")); refused += 1 }
+            }
             return
         }
         do {
@@ -175,7 +184,7 @@ final class ConsoleRemote: ObservableObject {
                 try? await Task.sleep(nanoseconds: cmd == "show" ? 1_500_000_000 : 600_000_000)
                 // The build's shot of a refusal: the Console didn't answer in time, said under the keys, then gone.
                 if model.pose == "consolefail" {
-                    withAnimation(Motion.quick) { busy = nil; fail = (key, "The Console didn’t answer."); refused += 1 }
+                    withAnimation(Motion.quick) { busy = nil; fail = (key, Self.named("The Console didn’t answer.")); refused += 1 }
                     return
                 }
                 withAnimation(Motion.quick) {
@@ -209,7 +218,7 @@ final class ConsoleRemote: ObservableObject {
             withAnimation(Motion.quick) {
                 if let st { state = st }
                 busy = nil
-                if let e { fail = (key, e); refused += 1 } else { answered += 1; confirm(say ?? Self.done(cmd, arg, st)) }
+                if let e { fail = (key, Self.named(e)); refused += 1 } else { answered += 1; confirm(say ?? Self.done(cmd, arg, st)) }
             }
             // A refusal stays until his next press (which clears it): gone by itself after a few seconds, it could be
             // missed, and the card then read as if the press had worked (designer gate 1, 2026-11-21).

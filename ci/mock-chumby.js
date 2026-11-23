@@ -137,7 +137,9 @@ const liveMac = () => {
   m.mem.used = 1.2e10 + ((n * 11) % 23) * 2e8;
   m.load = [0.8 + (n % 9) / 4, 1.1, 0.9];
   m.net.rxRate = 20000 + ((n * 17) % 61) * 3000; m.net.txRate = 4000 + ((n * 5) % 13) * 900;
-  for (const k of Object.keys(m.hist)) { const h = m.hist[k]; h.push(h[(n + k.length) % h.length] * (0.7 + (n % 5) / 8)); h.shift(); }
+  // Rolled on by one reading each second, as the bridge's own 120-reading history is (each reading a function of its
+  // second), so the app's charts can be judged sliding, not redrawn.
+  for (const k of Object.keys(m.hist)) { const h = m.hist[k], L = h.length; m.hist[k] = h.map((_, i) => { const t = n - (L - 1 - i); return h[(t + k.length) % L] * (0.7 + (t % 5) / 8); }); }
   m.temps.forEach((t, i) => { t.c = Math.round(t.c + ((n * (i + 3)) % 7) - 3); });
   if (n % 2) m.apps.push({ name: 'TextEdit', pid: 18, cpu: 0, mem: 88000000 });
   if (n % 3 === 0) m.apps.splice(m.apps.findIndex(a => a.name === 'Music'), 1);

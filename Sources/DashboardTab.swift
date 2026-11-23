@@ -87,7 +87,8 @@ struct DashboardTab: View {
         let bed = ConsolePlace.fromBed(st, pose: model.pose)
         let name = bed ? "From bed" : "At the desk", symbol = bed ? "bed.double" : "desktopcomputer"
         if st.glance == true { return (name, symbol, "Glance covers the boards with big, dim figures until you turn it off") }
-        guard st.board != nil else { return (name, symbol, "A page stays up until you pick a board") }
+        // A page up with the turns on: the turns wait for a board (it said "a page stays up" beside Take turns on).
+        guard st.board != nil else { return (name, symbol, st.rotate == true ? "A page is up; pick a board and the turns go on" : "A page stays up until you pick a board") }
         let large = st.text == "room" ? ", in large text" : ""
         guard st.rotate == true else { return (name, symbol, "Staying on this board\(large)") }
         // The boards the Console says are taking turns, and its own pace (an older bridge: the phone's reckoning).
@@ -133,10 +134,15 @@ struct DashboardTab: View {
                 .accessibilityElement(children: .combine)
                 .animation(Motion.quick, value: status.say)
                 if let m = mode {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Label(m.name, systemImage: m.symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).labelStyle(.titleAndIcon).fixedSize()
-                        Text(m.say).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    // The mode is a label, not a link: plain, its sign grey. Its line under it, full width, two lines held
+                    // in every state, so the card keeps its height and no word is left alone on a line beside the label
+                    // (Fable gate on 9c093cb).
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label { Text(m.name).foregroundStyle(Color.primary) } icon: { Image(systemName: m.symbol).foregroundStyle(.secondary) }
+                            .font(.footnote.weight(.semibold)).labelStyle(.titleAndIcon)
+                        Text(m.say).font(.footnote).foregroundStyle(.secondary).lineLimit(2, reservesSpace: true)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("remote.mode")
                 }
@@ -260,11 +266,13 @@ struct DashboardTab: View {
     }
     var switches: some View {
         Section {
+            // Not running, the dashboard is started by the one key above (one door), so this switch waits with the rest.
             Toggle(isOn: Binding(get: { asked["show"] ?? (seen == .on || (running && st?.frontmost == true)) }, set: { want in
                 guard remote.busy == nil else { return }
                 asked["show"] = want
                 remote.send(model, "show", want ? "show" : "hide")
             })) { row("On screen", "Over other apps", "rectangle.inset.filled") }
+                .disabled(!running)
                 .accessibilityIdentifier("switch.show")
             Toggle(isOn: flag("display", st?.keepOn == true, "display")) { row("Display on", "Until you turn it off", "sun.max") }
                 .accessibilityIdentifier("switch.display")
@@ -283,7 +291,10 @@ struct DashboardTab: View {
                 HStack { Label("See the Mac’s screen", systemImage: "macwindow"); Spacer(minLength: 8); RowChevron() }.contentShape(Rectangle())
             }
             .accessibilityIdentifier("dash.screen")
-        } header: { Text("Switches") }
+        } header: { Text("Switches") } footer: {
+            // Why one switch is live while the others wait: the display is the Mac's, not the dashboard's.
+            if ready && !running { Text("The others work once the dashboard is running. The display works without it.") }
+        }
         .disabled(!ready)
     }
 }

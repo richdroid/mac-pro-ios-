@@ -639,39 +639,43 @@ struct RemoteScreenView: View {
     // Where a MacBook's function keys are: the Mac's own shortcuts on the left, this screen's tools and Done on the right.
     // `tight`: beside the cover's camera the row is 370 pt, not 446, so its gaps and its keys' least width come in a little.
     // `atTop`: the row is above the picture, so what a tool says (the clipboard's message) goes under it, not off the display.
+    // One key size along the row, the Mac's shortcuts and this screen's tools alike: the shortcuts stretched to 39 pt
+    // beside 32 pt tools, a fifth wider (Fable gate on 9c093cb, the folded Screen).
     func functionRow(tight: Bool, atTop: Bool = false) -> some View {
-        HStack(spacing: tight ? 3 : 5) {
-            ForEach([ScreenTool.esc, .missionControl, .terminal, .spotlight, .switchApps], id: \.self) { tool($0, tight: tight) }
+        let key: CGFloat = tight ? 29 : 32
+        return HStack(spacing: tight ? 3 : 5) {
+            ForEach([ScreenTool.esc, .missionControl, .terminal, .spotlight, .switchApps], id: \.self) { tool($0, tight: tight, key: key) }
             Spacer(minLength: tight ? 2 : 6)
-            ForEach([ScreenTool.keyboard, .copy, .paste, .signIn, .fit, .done], id: \.self) { tool($0, below: atTop) }
+            ForEach([ScreenTool.keyboard, .copy, .paste, .signIn, .fit, .done], id: \.self) { tool($0, below: atTop, key: key) }
         }
     }
     var showsFit: Bool { zoomed || fillZoom > 1.01 }
-    @ViewBuilder func tool(_ t: ScreenTool, tight: Bool = false, below: Bool = false) -> some View {
+    // `key`: the row's one key size; nil down the side column, where each place sets it.
+    @ViewBuilder func tool(_ t: ScreenTool, tight: Bool = false, below: Bool = false, key: CGFloat? = nil) -> some View {
         switch t {
-        case .esc: fnKey("esc", nil, "Escape", tight: tight) { keys.tap(MacKey.esc) }
-        case .missionControl: fnKey("", "rectangle.3.group", "Mission Control", tight: tight) { keys.tap(MacKey.up, with: [MacKey.control]) }
+        case .esc: fnKey("esc", nil, "Escape", tight: tight, side: key) { keys.tap(MacKey.esc) }
+        case .missionControl: fnKey("", "rectangle.3.group", "Mission Control", tight: tight, side: key) { keys.tap(MacKey.up, with: [MacKey.control]) }
         // Terminal, opened on the Mac. A window glyph here sent App Exposé, which he read as Terminal and got every window
         // instead (Richard, 2026-11-07: "terminal button works like show all windows button"). App Exposé is still
         // three fingers down.
-        case .terminal: fnKey("", "apple.terminal", "Open Terminal", tight: tight) { openTerminal() }
-        case .spotlight: fnKey("", "magnifyingglass", "Spotlight", tight: tight) { keys.tap(MacKey.space, with: [MacKey.command]) }
-        case .switchApps: fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps", tight: tight) { keys.switchApps() }
-        case .keyboard: toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Dictate or type", on: typing, compact: true) { typing.toggle() }
-        case .copy: clipButton(paste: false, compact: true, below: below)
-        case .paste: clipButton(paste: true, compact: true, below: below)
-        case .signIn: toolButton("key.fill", "Sign in to the Mac", compact: true) { signingIn = true }
-        case .fit: if showsFit { toolButton(fitIcon, fitLabel, compact: true) { fitScreen() } }
-        case .done: toolButton("xmark", "Done", on: true, compact: true) { model.screenOpen = false }
+        case .terminal: fnKey("", "apple.terminal", "Open Terminal", tight: tight, side: key) { openTerminal() }
+        case .spotlight: fnKey("", "magnifyingglass", "Spotlight", tight: tight, side: key) { keys.tap(MacKey.space, with: [MacKey.command]) }
+        case .switchApps: fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps", tight: tight, side: key) { keys.switchApps() }
+        case .keyboard: toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Dictate or type", on: typing, compact: true, side: key) { typing.toggle() }
+        case .copy: clipButton(paste: false, compact: true, side: key, below: below)
+        case .paste: clipButton(paste: true, compact: true, side: key, below: below)
+        case .signIn: toolButton("key.fill", "Sign in to the Mac", compact: true, side: key) { signingIn = true }
+        case .fit: if showsFit { toolButton(fitIcon, fitLabel, compact: true, side: key) { fitScreen() } }
+        case .done: toolButton("xmark", "Done", on: true, compact: true, side: key) { model.screenOpen = false }
         }
     }
-    func fnKey(_ label: String, _ icon: String?, _ a11y: String, tight: Bool = false, action: @escaping () -> Void) -> some View {
+    func fnKey(_ label: String, _ icon: String?, _ a11y: String, tight: Bool = false, side: CGFloat? = nil, action: @escaping () -> Void) -> some View {
         Button { tick(.light); action() } label: {
             Group {
                 if let icon { Image(systemName: icon).font(.system(size: 13, weight: .semibold)) }
-                else { Text(label).font(.system(size: 12, weight: .semibold)) }
+                else { Text(label).font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8) }
             }
-            .frame(minWidth: tight ? 27 : 30, maxWidth: 44, minHeight: 32).contentShape(Rectangle())
+            .frame(minWidth: side ?? (tight ? 27 : 30), maxWidth: side ?? 44, minHeight: side ?? 32, maxHeight: side).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
     }
