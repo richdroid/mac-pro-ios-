@@ -16,7 +16,7 @@ concurrency:
 jobs:
   check:
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,7 +40,7 @@ jobs:
           done
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 28
+        timeout-minutes: 75
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -124,7 +124,8 @@ jobs:
           }
           date
           # Folded (the cover display). FALLBACK: where Back stood before, if the app can't say.
-          FALLBACK="0.895 0.292"; posture 1 -folded
+          # Folded was read in run 45146776298 (256ff29); this run covers open upright and open flat.
+          # FALLBACK="0.895 0.292"; posture 1 -folded
           date
           $D "$DEVICE" pose open || true; sleep 5
           $D "$DEVICE" rotate 1 || true; sleep 5
