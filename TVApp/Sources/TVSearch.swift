@@ -885,7 +885,7 @@ private struct SearchIdle: View {
     // Titles to try: the films and shows of Stremio's home that aren't his own (Continue watching has its home on Watch).
     var tries: [String] {
         var seen = Set<String>(), out: [String] = []
-        let shownLeft = Set((part == .left || store.recent.isEmpty && flicked.isEmpty ? popular?.items.prefix(5).map { $0.title.lowercased() } : nil) ?? [])
+        let shownLeft = Set((flicked.isEmpty ? popular?.items.prefix(5).map { $0.title.lowercased() } : nil) ?? [])
         for r in home.rows where r.title != "Continue watching" {
             for i in r.items where !i.title.isEmpty && !i.isYouTube && !shownLeft.contains(i.title.lowercased()) && seen.insert(i.title.lowercased()).inserted { out.append(i.title); if out.count == 6 { return out } }
         }
@@ -899,18 +899,18 @@ private struct SearchIdle: View {
             switch part {
             case .all:
                 RecentSearches(store: store)
-                if store.recent.isEmpty && flicked.isEmpty { popularList }
+                if flicked.isEmpty { popularList }
                 tryList
                 flickedList
             case .left:
                 // His own first; with none yet, what's popular on Stremio, as posters he can flick. Never an empty pane.
+                // Under a few recent searches, the rest of the pane too: what he flicked, else what's popular (gate on
+                // eb040c7: one recent search, then half a pane empty).
                 if !store.recent.isEmpty { RecentSearches(store: store) }
-                else if !flicked.isEmpty { flickedList }
-                else { popularList }
+                if !flicked.isEmpty { flickedList } else { popularList }
             case .right:
                 // "Try searching" always has this side, so neither pane is ever blank open flat (gate on 4f36e1e).
                 tryList
-                if !store.recent.isEmpty { flickedList }
             }
         }
         .animation(.snappy, value: tries)
@@ -985,7 +985,7 @@ private struct RecentSearches: View {
                             .frame(minHeight: 44).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        Button { withAnimation(.snappy) { store.forget(t) } } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary).frame(width: 44, height: 44) }
+                        Button { withAnimation(.snappy) { store.forget(t) } } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.75)).frame(width: 44, height: 44) }  // live, so drawn as live (it was tertiary grey)
                             .buttonStyle(.plain).accessibilityLabel("Remove \(t)")
                     }
                     .padding(.leading, 20).padding(.trailing, 8)

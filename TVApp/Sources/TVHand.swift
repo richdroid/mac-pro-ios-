@@ -472,9 +472,12 @@ struct Liftable: ViewModifier {
             withTransaction(t) { Hand.shared.lifted = nil }
         }
         if c.judge(v) == .thrown {
-            send(v)
+            // The card flies first and the send goes as it lands: sent at the release, its start (the lip, the Remote and
+            // every tab taking "Starting…") redrew the app in the middle of the flight, which froze for 8 frames open
+            // upright and jumped to the lip in one open flat (gate on eb040c7). The stream was already looked for at the
+            // lift; 0.22 s at most.
             let tint = ImageStore.shared.cachedBand(URL(string: item.art))
-            c.fly(v) { Hand.shared.land(title: item.title, art: item.art, tint: tint); down() }
+            c.fly(v) { [self] in Hand.shared.land(title: item.title, art: item.art, tint: tint); down(); send(v) }
         } else {
             // Let go without having moved: put back, and that was a tap.
             let tapped = !far
@@ -544,7 +547,11 @@ final class LiftPress: UILongPressGestureRecognizer {
         if let t = touches.first { now = t.location(in: t.window); sample(t, event) }
         if state == .possible, quickUp, let f = from, let p = now {
             let dx = p.x - f.x, dy = p.y - f.y
-            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, Self.onShelf(touched) {
+            // Only a clearly upward flick: its first 8 pt at 600 pt/s or more. A slower drag up is the page scrolling
+            // (gate on eb040c7: a slow drag on Watch lifted a card and sent it).
+            let dt = (samples.last?.t ?? 0) - (samples.first?.t ?? 0)
+            let fast = dt > 0 && sqrt(dx * dx + dy * dy) / CGFloat(dt) >= 600
+            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, fast, Self.onShelf(touched) {
                 HandLog.note("lift quick-up")
                 state = .began
                 return

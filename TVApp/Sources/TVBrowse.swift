@@ -279,7 +279,7 @@ struct MediaCard: View {
             Group {
                 if let image { image.resizable().scaledToFill() }
                 else if noArt || still { CoverFallback(title: item.title, tint: shownBand) }
-                else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait().overlay { LoadingRing(radius: 0) } } }
+                else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() } }  // its shimmer alone: a light on every waiting poster read as stray cyan strokes (gate on eb040c7)
             }
                 .frame(width: cardWidth, height: coverHeight)
                 .clipped()

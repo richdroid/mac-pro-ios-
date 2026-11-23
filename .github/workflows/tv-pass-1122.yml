@@ -65,7 +65,7 @@ jobs:
           film() {
             local name=$1 display=$2 secs=$3 address=$4; shift 4
             local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
-            rm -f /tmp/tv-home-applied.log
+            rm -f /tmp/tv-home-applied.log /tmp/tv-flick-sends.log
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -swipeLog YES "$@"
@@ -86,9 +86,12 @@ jobs:
           # A finger on the D-pad's centre every 0.6 s for 6 s right after launch: the prewarm must wait it out.
           pressKeys() { sleep 4; for i in $(seq 1 10); do $D "$DEVICE" touch $PX $PY 0.08 || echo "touch failed"; sleep 0.6; done; }
           tapWake() { sleep 9; $D "$DEVICE" tap "Wake the TV" || $D "$DEVICE" tap "Wake" || echo "Wake not found"; }
-          tapBack() { sleep 14; $D "$DEVICE" tap "Back" || echo "Back not found"; }
+          # The system's Back, by its place under the lip (its name varies by posture), per posture in BX BY.
+          tapBack() { sleep 14; $D "$DEVICE" touch $BX $BY 0.08 || echo "Back touch failed"; }
           swipeBack() { sleep 14; $D "$DEVICE" drag 0.005 0.5 0.7 0.5 0.35 || echo "edge swipe failed"; }
-          scrollWatch() { sleep 10; $D "$DEVICE" drag 0.4 0.8 0.4 0.4 1.2 || true; sleep 1.5; $D "$DEVICE" drag 0.4 0.4 0.4 0.85 1.2 || true; }
+          # Slow, quick and a fling, up then back: the page scrolls every time (nothing lifted or sent), the top fade comes and goes.
+          scrollWatch() { sleep 10; $D "$DEVICE" drag 0.4 0.8 0.4 0.45 1.2 || true; sleep 1.5; $D "$DEVICE" drag 0.4 0.45 0.4 0.85 1.2 || true; sleep 1.5
+            $D "$DEVICE" drag 0.4 0.8 0.4 0.45 0.35 || true; sleep 1.5; $D "$DEVICE" drag 0.4 0.8 0.4 0.3 0.12 || true; sleep 2; $D "$DEVICE" drag 0.4 0.3 0.4 0.9 0.15 || true; }
           throwShelf() {
             sleep 10
             local at x y; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
@@ -105,34 +108,35 @@ jobs:
             curl -s $M/real/reset > /dev/null; shot title-series$x $d 14 $M/real -tab 3 -pose realseries
             curl -s $M/real/reset > /dev/null; ACT=dragList; film title-scroll$x $d 6 $M/real -tab 3 -pose realseries
             shot search$x $d 9 $M -tab 6
-            shot watch-early$x $d 5 $M -tab 3 -noPrewarm YES
+            shot watch-early$x $d 5 $M -tab 3
             shot watch$x $d 12 $M -tab 3
-            film tour-cold$x $d 30 $M/live -tab 0 -pose tour -noPrewarm YES
-            film tour-warm$x $d 30 $M/live -tab 0 -pose tour -tourDelay 10
-            ACT=pressKeys; film keys-during-prewarm$x $d 14 $M/live -tab 0
-            ACT=tapWake; film wake$x $d 5 $M/rasleep -tab 0
+            film tour$x $d 30 $M/live -tab 0 -pose tour
+            # The idle prewarm (off on the phone, "-prewarm YES" here only): a finger on the keys every 0.6 s for 6 s holds it off.
+            ACT=pressKeys; film keys-during-prewarm$x $d 14 $M/live -tab 0 -pose quiet -prewarm YES
+            ACT=tapWake; film wake$x $d 5 $M/rasleep -tab 0 -pose quiet
             curl -s $M/real/reset > /dev/null; ACT=tapBack; film back-tap$x $d 4 $M/real -tab 3 -pose realseries
             curl -s $M/real/reset > /dev/null; ACT=swipeBack; film back-swipe$x $d 4 $M/real -tab 3 -pose realseries
-            ACT=scrollWatch; film watch-scroll$x $d 3 $M -tab 3
+            ACT=scrollWatch; film watch-scroll$x $d 3 $M -tab 3 -pose quiet
             curl -s $M/fnormal/reset > /dev/null; ACT=throwShelf; film flick-shelf$x $d 10 $M/fnormal -tab 3 -pose shelf
             curl -s $M/fnormal/reset > /dev/null; ACT=throwTitle; film flick-title$x $d 10 $M/fnormal -tab 3 -pose flick-starting
             curl -s $M/real/reset > /dev/null; film search-pick$x $d 16 $M/real -tab 6 -pose realsearch
           }
           # The D-pad's centre, roughly, per posture (fractions of the display).
-          PX=0.66; PY=0.27; LX=0.1
+          PX=0.66; PY=0.27; LX=0.1; BX=0.07; BY=0.135
           set_for "" 1
           # The fold opened live, then turned, then closed, filmed on the main display while open.
-          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/tv-posture-live.mp4 > /dev/null 2>&1 & REC=$!
-          sleep 2
+          # (The main display is dark while folded, so the film starts once it's open.)
           xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/repisode -tab 0
           sleep 8
-          $D "$DEVICE" pose open; sleep 6; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" rotate 1; sleep 6
+          $D "$DEVICE" pose open; sleep 2
+          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/tv-posture-live.mp4 > /dev/null 2>&1 & REC=$!
+          sleep 4; $D "$DEVICE" rotate 1; sleep 6; $D "$DEVICE" rotate 3; sleep 6; $D "$DEVICE" rotate 1; sleep 6
           kill -INT $REC; wait $REC
           xcrun simctl terminate "$DEVICE" local.macpro.TV || true
-          PX=0.8; PY=0.3; LX=0.1
+          PX=0.8; PY=0.3; LX=0.1; BX=0.065; BY=0.19
           set_for "-portrait" 3
           $D "$DEVICE" rotate 3 || true; sleep 5
-          PX=0.72; PY=0.45; LX=0.8
+          PX=0.72; PY=0.45; LX=0.8; BX=0.04; BY=0.13
           set_for "-flat" 3
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist

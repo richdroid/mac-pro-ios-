@@ -659,7 +659,17 @@ final class TVModel {
     private static var read = 0, shown = 0
     // "-everyReading YES": every reading published, as before, for the build's before-and-after count.
     private static let everyReading = UserDefaults.standard.bool(forKey: "everyReading")
+    // When the TV first stopped answering the Mac, while what was shown still had it answering.
+    @ObservationIgnored private var offlineSince: Date?
     private func publish(_ s: TVStatus, data d: Data) {
+        // A blip leaves no trace: the TV not answering for a reading or two mid-film is held off for 8 s, as the Mac's own
+        // reach is (ProblemBanner), and only then said, on the lip and the Remote alike (gate on eb040c7: "Can't reach the
+        // TV" for 5 s mid-play).
+        if !s.online, let old = status, old.online, !staleStatus {
+            let since = offlineSince ?? Date()
+            offlineSince = since
+            if Date().timeIntervalSince(since) < 8 { return }
+        } else if s.online { offlineSince = nil }
         let unchanged = d == lastStatusBytes && status != nil
         lastStatusBytes = d
         #if os(iOS)

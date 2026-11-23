@@ -171,7 +171,7 @@ struct TitlePage: View {
                     let maxW = g.size.width * 0.55
                     let full = cardSize(maxH: g.size.height * (g.size.height < 560 ? 0.42 : 0.46), maxW: maxW).height
                     VStack(spacing: 0) {
-                        header.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
+                        header.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 14)
                         ZStack(alignment: .top) {
                             ScrollView {
                                 VStack(spacing: 0) {
@@ -252,7 +252,8 @@ struct TitlePage: View {
                 else { Art(url: URL(string: art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() } }
             }
             .frame(width: w, height: h).clipped()
-            chip.padding(10)
+            // The chip only on a poster tall enough to carry it whole (gate: "080p · 3.2 G" cut on the shrunken poster).
+            if h >= 120 { chip.padding(10) }
         }
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -383,19 +384,23 @@ struct TitlePage: View {
         let title = st.item.title
         // The card leaves first, with his speed, in the same turn as his release; the send follows on the next turn, so
         // nothing the send does can hold the card where he let go (gate on cbfc0b5: up to a second between the two).
+        // Sent as it lands, not in the turn after the release: the send's start redrew the app mid-flight, 159-250 ms
+        // stalls in the flight's second (gate on eb040c7).
         carry.fly(v) {
             Hand.shared.land(title: title, art: st.item.art, tint: tint)
             carry.reappear()
+            send?()
         }
-        Task { @MainActor in send?() }
     }
     // MARK: the words
     var facts: String {
         var parts: [String] = []
         let n = st.seasons.filter { $0 > 0 }.count
         if st.isSeries, n > 0 { parts.append(n == 1 ? "1 season" : "\(n) seasons") }
+        // Never when it was flicked ("Today", from Recently flicked): that's the list's word, not the film's.
         let sub = st.item.shownSubtitle
-        if !sub.isEmpty, !st.isSeries { parts.append(sub) }
+        let when = ["today", "yesterday", "earlier", "this week", "last week"]
+        if !sub.isEmpty, !st.isSeries, !when.contains(where: { sub.lowercased().hasSuffix($0) }) { parts.append(sub) }
         return parts.joined(separator: " · ")
     }
     var header: some View {
@@ -638,8 +643,9 @@ private struct ShrinkingCard<C: View>: View {
         let half = full / 2
         let h = max(half, full - s)
         let rise = max(0, s - half)
-        // Shrinks to half, then rises with the list, fading over the whole of its rise rather than vanishing at once.
-        let fade = max(0, min(1, 1 - rise / max(1, half + 12)))
+        // Shrinks to half, then fades as it starts to rise, gone before its top reaches the title above (gate on eb040c7:
+        // it slid under the title's words).
+        let fade = max(0, min(1, 1 - rise / 14))
         card(h)
             .padding(.top, 12 - rise)
             .opacity(fade)

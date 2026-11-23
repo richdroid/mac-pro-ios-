@@ -30,8 +30,13 @@ struct TVNow: Equatable {
         // Its play key waits for a fresh reading, as the Remote's does, so the two never disagree (gate 3, folded rfilm).
         // The Mac answers and the TV doesn't: said here as the Remote's picture says it, not the app last in front.
         if !model.staleStatus, !s.online { return TVNow(kind: .away, title: "Can’t reach the TV", line: nil, art: nil, playing: nil) }
-        if s.screen == "asleep" { return TVNow(kind: .asleep, title: "Off", line: nil, art: nil, playing: nil) }
-        if !model.staleStatus, let a = s.away { return TVNow(kind: .away, title: a.line, line: nil, art: nil, playing: nil) }
+        // One black TV, one name and one glyph, whichever way it went black (the box asleep, or the television off over
+        // HDMI-CEC): "Asleep", as the Remote and Status say it (TVShared's Away.line; gate on eb040c7: "Off" here).
+        if s.screen == "asleep" { return TVNow(kind: .asleep, title: "Asleep", line: nil, art: nil, playing: nil) }
+        if !model.staleStatus, let a = s.away {
+            if a == .off { return TVNow(kind: .asleep, title: a.line, line: nil, art: nil, playing: nil) }
+            return TVNow(kind: .away, title: a.line, line: nil, art: nil, playing: nil)
+        }
         if s.comingOn { return TVNow(kind: .home, title: "Waking the TV…", line: nil, art: nil, playing: nil) }
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
             return TVNow(kind: .video, title: p.showName, line: p.seasonEpisode.map { "S\($0.season) E\($0.episode)" } ?? p.channel,
@@ -138,7 +143,7 @@ struct Lip: View {
     @ViewBuilder func trailing(_ now: TVNow) -> some View {
         // On the Remote the big key in the pad's ring wakes it; the lip's own would be a second way on one screen.
         if now.kind == .asleep {
-            if tab != 0 { LipKey(icon: "power", label: "Turn the TV on") { model.key("wake") } }
+            if tab != 0 { LipKey(icon: "power", label: "Wake the TV") { if model.status?.away == .off { model.post("tv-on") } else { model.key("wake") } } }
         } else if now.playing != nil {
             let shown = model.shownPlaying(now.playing)
             LipKey(icon: shown == true ? "pause.fill" : "play.fill", label: shown == true ? "Pause" : "Play") { model.togglePlay(shown: shown) }

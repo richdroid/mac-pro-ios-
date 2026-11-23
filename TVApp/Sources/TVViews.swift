@@ -125,7 +125,7 @@ struct RootView: View {
             return
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
-        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps", "settingsnav", "settingsscript", "stremiotile"].contains(pose) { return }
+        if ["tour", "quiet", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps", "settingsnav", "settingsscript", "stremiotile"].contains(pose) { return }
         // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
         if pose == "mirror" {
             Task {
@@ -279,11 +279,12 @@ struct RootView: View {
             // Content full width on the left, the tabs a glass pill at the foot of one rail on the right, in every posture,
             // as in Mac Pro: never a bar along the foot (Richard's reference of 2026-11-21, "this is what iphone duo apps
             // look like"). The system's TabView drew one open upright.
-            // The other tabs are built ahead, one at a time and only while the phone sits untouched (whenIdle), so a tab's first
-            // open isn't its first build (0.5-1 s, tour logs 11-22), and launch never pays for them (the 2.4 s freeze of
-            // 598f47a's all-at-once build). "-noPrewarm YES" turns it off, for the build's cold-open measure.
+            // No tab is built ahead (gate on eb040c7): a whole tab's build is one turn of 350-1200 ms on the build's simulator,
+            // and wherever it lands, idle or not, the next touch or a flick in the air waits on it. Only "-prewarm YES" (the
+            // build's measure) turns the idle prewarm on. What a tab needs to open settled is fetched ahead instead
+            // (Music's words and queue: StatusFollower).
             SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, hidden: keyboardUp,
-                         prewarm: UserDefaults.standard.bool(forKey: "noPrewarm") ? [] : [3, 2, 6, 0], whenIdle: true) { t in
+                         prewarm: UserDefaults.standard.bool(forKey: "prewarm") ? [3, 2, 6, 0] : [], whenIdle: true) { t in
                 tabPage(t).environment(\.tabInFront, model.tab == t)
             }
             .onChange(of: model.tab) { was, t in
@@ -358,8 +359,18 @@ private struct StatusFollower: View {
         if model.nowMusic?.playing == true { return "music.note" }
         return "play.circle"
     }
+    // Mint's song: its words and the queue asked for as it changes, wherever he is, so Music opens with them in place rather
+    // than laying out without them and swapping (gate on eb040c7). One ask per song (or play/pause), not a poll.
+    var songKey: String? { model.musicIsCurrent ? model.nowMusic.map { $0.title + "|" + ((model.songPlaying($0) ?? false) ? "1" : "0") } : nil }
     var body: some View {
         Color.clear
+            .task(id: songKey) {
+                guard let m = model.nowMusic, songKey != nil, model.tab != 2 else { return }
+                MusicDetailStore.shared.follow(m.title)
+                await MusicDetailStore.shared.read(playing: model.songPlaying(m) == true)
+                if model.status?.airplay?.active != true { await QueueStore.shared.read() }
+                MusicDetailStore.shared.settle()
+            }
             .onChange(of: symbol, initial: true) { _, s in if s != playingSymbol { playingSymbol = s } }
             // The one picture behind every page follows what's on.
             .task(id: model.ambienceArt) {
@@ -1474,15 +1485,26 @@ struct RemoteTab: View {
             .layoutPriority(1)
     }
     var wakeShown: Bool { asleep || away == .off }
+    @State private var wakeAskedAt: Date?
     // Asleep, one big way to wake it over the pad, which wakes it too.
     @ViewBuilder var wake: some View {
         // The television off with the box still up is the same key, in the same place: it turns the television on.
         if wakeShown {
-            Button { model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") } } label: {
-                // All of "Wake the TV" where the pad is wide enough for it, else "Wake": never cut, never over the keys beside.
-                ViewThatFits(in: .horizontal) {
-                    Label("Wake the TV", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 20)
-                    Label("Wake", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 16)
+            Button {
+                model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") }
+                // Said on the key at once, until the TV answers (or 10 s): a press with nothing to show for it read as dead.
+                wakeAskedAt = Date()
+                #if os(iOS)
+                HitchLog.shared.note(asleep ? "wake: key wake sent" : "wake: tv-on sent")
+                #endif
+            } label: {
+                // One name everywhere, "Wake the TV": set a little smaller where the pad is narrow, never "Wake" alone
+                // (gate on eb040c7: two labels for one key).
+                TimelineView(.periodic(from: .now, by: 1)) { t in
+                    let waking = wakeAskedAt.map { t.date.timeIntervalSince($0) < 10 } ?? false
+                    Label(waking ? "Waking the TV…" : "Wake the TV", systemImage: "power").lineLimit(1).minimumScaleFactor(0.6).padding(.horizontal, 18)
+                        .contentTransition(.opacity)
+                        .overlay { if waking { LoadingRing(radius: 30) } }
                 }
                 .font(.title3.weight(.semibold)).frame(height: 60)
             }
@@ -1699,7 +1721,7 @@ struct RemoteTab: View {
                     VStack(spacing: 14) {
                         pad.frame(width: d, height: d)
                         ZStack {
-                            if musicShown { music }
+                            if musicShown, let m = model.nowMusic { Transport(size: g.key, playSize: g.play, playing: .some(model.songPlaying(m))).frame(width: g.width + g.gap) }
                             else {
                                 Transport(size: g.key, playSize: g.play).frame(width: g.width + g.gap)
                                     .opacity(idle ? 0.35 : 1).allowsHitTesting(!idle).accessibilityHidden(idle)
@@ -1795,7 +1817,11 @@ struct RemoteTab: View {
         }
         let groupB = VStack(spacing: gap) {
             ZStack {
-                if musicShown { music.transition(MirrorView.dip) }
+                // Mint's song: the same five keys, its own ⏯, and no title row: the lip names the song and the picture is its
+                // cover, so a third telling (Mint's mini player, with a second pause key) went (gate on eb040c7).
+                if musicShown, let m = model.nowMusic {
+                    Transport(size: g.key, playSize: g.play, playing: .some(model.songPlaying(m))).frame(width: g.width + g.gap).transition(MirrorView.dip)
+                }
                 else {
                     // Idle, still there, dimmed and still: a place kept, never a hole, and nothing to press that does nothing.
                     Transport(size: g.key, playSize: g.play).frame(width: g.width + g.gap)
@@ -1839,6 +1865,31 @@ struct RemoteTab: View {
         guard session else { return false }
         if let st = model.starting, !st.played { return true }
         return model.videoIsCurrent && model.status?.session != nil
+    }
+    var flatLeft: some View {
+        GeometryReader { g in
+            let w = max(0, g.size.width - 40)
+            let ph = w * 9 / 16
+            let used = ph + Self.barSlot + 46 + 3 * 14
+            let tw = TileRows<EmptyView>.layout(w, tile: TVLook.bannerSize.width, gap: TVLook.gap, least: 3).width
+            let th = tw * TVLook.bannerSize.height / TVLook.bannerSize.width
+            let rows = max(1, Int((g.size.height - used - 16 + TVLook.gap) / (th + TVLook.gap)))
+            VStack(alignment: .leading, spacing: 14) {
+                picture(closable: true).frame(width: w, height: ph)
+                ZStack {
+                    if !musicShown && barContent { progress }
+                    else { Capsule().fill(.white.opacity(0.1)).frame(height: RemoteGrid.barH).frame(maxHeight: .infinity, alignment: .top).padding(.top, 8) }
+                }
+                .frame(width: w, height: Self.barSlot)
+                ZStack { Color.clear; if seriesOn && (session || musicShown) { episodes } }.frame(width: w, height: 46)
+                if model.status?.apps?.isEmpty == false {
+                    QuickApps(rows: rows).frame(width: w).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 16)
     }
     @ViewBuilder var appStrip: some View {
         AppStrip().opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
@@ -1904,6 +1955,11 @@ struct RemoteTab: View {
                 .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
                 .overlay { episodesPanel() }
                 .frame(maxWidth: Self.narrow)
+            } else if size == .regular && panes && !lay {
+                // Open flat: one fixed frame on the left, whatever is on (gate on eb040c7: the tiles moved between states,
+                // idle had no bar, and a quarter of the pane was empty under them): the picture, the bar's place (a bare
+                // track when nothing's on), the episode line's place, then the apps as a grid down to the foot.
+                FoldSplit { flatLeft.overlay { episodesPanel() } } right: { keysColumn }
             } else if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
@@ -2414,10 +2470,11 @@ struct AppsPage: View {
 }
 struct QuickApps: View {
     @Environment(TVModel.self) var model
+    var rows = 2
     // Never two tiles at the pane's edges with a hole between (r18): at least three across, sized to share the width
-    // equally, as many as fit at the launcher's own size where there's more room. Up to two rows of whole tiles.
+    // equally, as many as fit at the launcher's own size where there's more room. Up to `rows` rows of whole tiles.
     var body: some View {
-        TileRows(tile: TVLook.bannerSize, gap: TVLook.gap, rows: 2, least: 3) { w in
+        TileRows(tile: TVLook.bannerSize, gap: TVLook.gap, rows: rows, least: 3) { w in
             ForEach(Array(AppsTab.watching(model.status?.apps ?? []).prefix(12))) { Banner(app: $0, width: w) }
         }
     }
@@ -2686,6 +2743,8 @@ struct Banner: View {
             }
             .frame(width: width, height: width * TVLook.bannerSize.height / TVLook.bannerSize.width)
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+            // One layer: dimmed (out of reach) the banner's two copies showed through each other, a ghost logo (gate on eb040c7).
+            .compositingGroup()
             .overlay { FrontRing(pkg: app.pkg) }
             .overlay(alignment: .topTrailing) { OnTVMark(pkg: app.pkg) }
             .shotSpot(browses && app.pkg == "com.stremio.one" ? "stremio" : "", pose: "stremiotile")
@@ -2700,7 +2759,8 @@ private struct FrontRing: View {
     @Environment(TVModel.self) var model
     let pkg: String
     var body: some View {
-        let on = model.frontApp == pkg
+        // Not while the TV can't be reached: nothing is known to be in front then.
+        let on = model.frontApp == pkg && model.status?.online != false
         RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5)
             // Pressed and not yet confirmed: the ring breathes, quietly, until the TV says the app is in front.
             .modifier(RingWaits(on: model.openingApp?.pkg == pkg))
@@ -2716,7 +2776,7 @@ private struct OnTVMark: View {
     @Environment(TVModel.self) var model
     let pkg: String
     var body: some View {
-        let on = model.frontApp == pkg && model.openingApp?.pkg != pkg
+        let on = model.frontApp == pkg && model.openingApp?.pkg != pkg && model.status?.online != false
         // Small and tucked into the corner, clear of the logo (it covered Stremio's O, gate on 4f36e1e).
         Image(systemName: "tv.fill").font(.system(size: 7, weight: .bold)).foregroundStyle(.black.opacity(0.85))
             .frame(width: 15, height: 15).background(TVLook.accent, in: Circle())
@@ -3805,7 +3865,9 @@ struct DiscoverColumn: View {
         return out
     }
     var shown: [MediaRow] {
-        part == .all ? rows : rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
+        // Continue watching leads the left pane, so the shelves start on the right: with one shelf, it's the right
+        // pane's, never both on the left and the right empty (gate on eb040c7).
+        part == .all ? rows : rows.enumerated().filter { (($0.offset + (continuing != nil ? 1 : 0)) % 2 == 0) == (part == .left) }.map(\.element)
     }
     // Continue watching leads, as large cards, about two and a half across: what he throws most nights (brief 3.3).
     var leadWidth: CGFloat { paneWidth < 1 ? 150 : max(132, min(190, (paneWidth - 40 - 20) / 2.5)) }
@@ -4174,7 +4236,9 @@ struct Ambience: View {
                     .clipped()
                     // A new picture crossfades over the last, in place.
                     .id(store.key)
-                    .transition(.opacity)
+                    // The new one fades in over the old, which goes only once it's covered: both fading at once dipped the
+                    // ground to near-black for a few frames (gate on eb040c7, a flick confirmed open flat).
+                    .transition(.asymmetric(insertion: .opacity, removal: .opacity.animation(.linear(duration: 0.15).delay(0.6))))
             }
             // Only the colour eases, and only the colour: an animation on the whole backdrop would grow it from a corner
             // as a page lays out.
