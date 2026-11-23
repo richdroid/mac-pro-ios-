@@ -429,7 +429,7 @@ struct AppBrowse: View {
         }
         .topShade().topFade()
         .environment(\.openRow, { row = $0 })
-        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true).railRoom() }
+        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true) }
         .background { Ambience() }
         .onScreen { on in
             if on { model.mood = source.mood } else if model.mood == source.mood { model.mood = nil }
@@ -446,7 +446,7 @@ struct AppBrowse: View {
                 if let item = store.rows.flatMap(\.items).first(where: { $0.stremioRef != nil && !$0.isYouTube }) { row = .info(item, source) }
             } else if let first = store.rows.first { row = .media(first, source) }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(source.name).toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         // The app itself on the TV, in the page's bar; not offered when it's already the app on the TV.
         .barPage {
             if model.status?.app != source.pkg {

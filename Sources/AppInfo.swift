@@ -98,7 +98,7 @@ struct AppInfoView: View {
         .holdsWhileMoving("appinfo")
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
-        .pushedTitle()
+        .pushedTitle("App Info")
         .task { await load() }
     }
 

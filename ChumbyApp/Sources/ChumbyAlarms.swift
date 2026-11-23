@@ -914,10 +914,6 @@ struct AlarmsTab: View {
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
     @State private var editing: EditTarget?
-    // Open, the right pane holds whatever would otherwise be a sheet, so nothing sits across the fold.
-    enum Pane: Equatable { case schedule, settings, editor(Alarm?), napEditor(Alarm?), day(String), template }
-    @State private var pane: Pane = .schedule
-    @State private var paneBack: Pane = .schedule
     @State private var removing: String?
     @State private var posed = false
     @AppStorage("missedDismissed") private var dismissedRaw = ""
@@ -942,50 +938,14 @@ struct AlarmsTab: View {
     // A one-off whose time is long gone can never ring again and is cleared at the next save; until then it isn't listed
     // as an alarm that's "off" (11-10: yesterday's one-off and its "just this once" sat in his list as two dead rows).
     var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded && !ChumbyState.isExpired($0, chumby: model.state.chumbyNow) }.sorted { $0.localMinutes < $1.localMinutes } }
-    var paneShown: Pane { wide ? pane : .schedule }
-    // Pages that bring their own list and title row (editor, day), shown in the right pane in place of its list.
-    var rightPage: AnyView? {
-        switch paneShown {
-        case .editor(let a): return AnyView(AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new"))
-        case .napEditor(let a): return AnyView(AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new")))
-        case .day(let k): return AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k))
-        case .template: return AnyView(AlarmEditor(calendarTemplate: true, close: { show(paneBack) }))
-        default: return nil
-        }
-    }
-    // Pages that bring their own title row (editor, day) have none from here.
-    var rightTitle: String? {
-        switch paneShown {
-        case .schedule: return " "
-        case .settings: return "Calendar settings"
-        default: return nil
-        }
-    }
-    // The right pane changing pages: the page there fades out, the next takes its place while nothing is drawn, and fades
-    // in. Changed inside one animation, the list traded the two pages' rows through each other.
-    @State private var paneFaded = false
-    @State private var paneSwap: Task<Void, Never>?
-    func show(_ p: Pane) {
-        paneSwap?.cancel(); paneSwap = nil
-        guard p != pane else { if paneFaded { withAnimation(.easeOut(duration: 0.2)) { paneFaded = false } }; return }
-        paneSwap = Task { @MainActor in
-            withAnimation(.easeOut(duration: 0.12)) { paneFaded = true }
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            guard !Task.isCancelled else { return }
-            pane = p
-            try? await Task.sleep(nanoseconds: 30_000_000)
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
-            paneSwap = nil
-        }
-    }
-    func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
+    // An editor is the system's sheet in every posture, with its Cancel and Save as the sheet's toolbar items.
+    func edit(_ a: Alarm?) { editing = EditTarget(alarm: a) }
     // The nap's editor: the nap set, or a new one.
-    func editNap(_ a: Alarm?) { if wide { show(.napEditor(a)) } else { editing = EditTarget(alarm: a, nap: true) } }
-    // Folded, and open in portrait, a day is a page pushed over Alarms like Calendar settings; open in landscape it fills
-    // the right pane.
-    func openDay(_ k: String) { if wide { show(.day(k)) } else { dayPage = k; model.alarmsPage = true } }
-    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPage = true } }
+    func editNap(_ a: Alarm?) { editing = EditTarget(alarm: a, nap: true) }
+    // A day, or Calendar settings, is a page pushed over Alarms in every posture, with the system's Back and edge swipe
+    // (it was swapped into the right pane open flat, with a Done of its own: Richard, 2026-11-23).
+    func openDay(_ k: String) { dayPage = k; model.alarmsPage = true }
+    func openSettings() { dayPage = nil; model.alarmsPage = true }
     @State private var dayPage: String?
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
@@ -1008,7 +968,7 @@ struct AlarmsTab: View {
     // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
     // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
-        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded), rightPage: rightPage) {
+        TwoPane {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
@@ -1031,15 +991,10 @@ struct AlarmsTab: View {
             }
             yours
         } right: {
-            switch paneShown {
-            case .schedule:
-                // The nap keeps one place, under the calendar's, open or folded, whatever the calendar's doing: it used to
-                // cross panes whenever the calendar had nothing listed, so it was never in one place.
-                calendar
-                nap
-            case .settings: CalendarSettingsSections()
-            default: EmptyView()
-            }
+            // The nap keeps one place, under the calendar's, open or folded, whatever the calendar's doing: it used to
+            // cross panes whenever the calendar had nothing listed, so it was never in one place.
+            calendar
+            nap
         }
         .seaList()
         // A nap set or called off moves anything it touches (the next alarm, the chip) in one spring, never in one frame.
@@ -1048,9 +1003,8 @@ struct AlarmsTab: View {
         // Back on this tab with the rows behind the Chumby (a change that came while it was away): put right at once.
         .onAppear { if napSwap == nil, napRowShown != (model.napDue != nil) { napRows = model.napDue != nil; napFaded = false } }
         .environment(\.openCalendarSettings, { openSettings() })
-        .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
-        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !wide }, set: { model.alarmsPage = $0 })) {
-            Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }.railRoom()
+        .navigationDestination(isPresented: $model.alarmsPage) {
+            Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
         }
         // Edge to edge (fillCover), with the zoom from its row.
         .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
@@ -1058,26 +1012,6 @@ struct AlarmsTab: View {
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         .onChange(of: model.openAlarm) { _, k in openAsked(k) }
-        // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
-        // across everything"): opened flat, what was pushed over the one list (Calendar settings, a day) moves to the
-        // right pane, and an editor opened there goes back to a sheet when the phone is folded or turned upright; a
-        // sheet already up stays a sheet. Never a page lost to a fold.
-        .onChange(of: wide) { _, w in
-            paneSwap?.cancel(); paneSwap = nil; paneFaded = false
-            if w {
-                if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
-                else { pane = .schedule }
-            } else {
-                switch pane {
-                case .settings: dayPage = nil; model.alarmsPage = true
-                case .day(let k): dayPage = k; model.alarmsPage = true
-                case .editor(let a): editing = EditTarget(alarm: a)
-                case .napEditor(let a): editing = EditTarget(alarm: a, nap: true)
-                case .template, .schedule: break
-                }
-                pane = .schedule
-            }
-        }
         .onAppear {
             wake.refreshPlan()
             openAsked(model.openAlarm)
@@ -1087,7 +1021,7 @@ struct AlarmsTab: View {
             // A moment late: on the first appearance the posture isn't read yet (PaneReader starts wide), and open
             // upright the pose opened the pane that isn't shown there instead of pushing the page.
             case "calsettings": Task { try? await Task.sleep(nanoseconds: 1_200_000_000); openSettings() }
-            case "template": if wide { show(.template) } else { openSettings() }
+            case "template": openSettings()
             case "calday": if let k = wake.plan.first?.key { openDay(k) }
             // A day with its own settings: a set time 25 minutes earlier than usual and a label of its own.
             case "caldayedit":
@@ -1135,11 +1069,11 @@ struct AlarmsTab: View {
                 // and is called off, all on screen.
                 Task {
                     try? await Task.sleep(nanoseconds: 2_000_000_000); openSettings()
-                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); model.alarmsPage = false
                     try? await Task.sleep(nanoseconds: 1_200_000_000); if let k = wake.plan.first?.key { openDay(k) }
-                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); model.alarmsPage = false
                     try? await Task.sleep(nanoseconds: 1_200_000_000); if let a = mine.first { edit(a) }
-                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { editing = nil }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); editing = nil
                     try? await Task.sleep(nanoseconds: 1_200_000_000); scrollTo = "nap"
                     try? await Task.sleep(nanoseconds: 1_200_000_000); UserDefaults.standard.set(10, forKey: "napLength"); await model.nap(10)
                     try? await Task.sleep(nanoseconds: 4_500_000_000); await model.cancelNap()
@@ -1395,7 +1329,7 @@ struct AlarmsTab: View {
     // The rule first, said plainly, and changed only as a rule; then the alarms it has set, checked against what the
     // Chumby really holds. A row opens that day, which is also changed only as "how long before".
     var ruleRow: some View {
-        Button { if wide { show(pane == .settings ? .schedule : .settings) } else { openSettings() } } label: {
+        Button { openSettings() } label: {
             HStack(spacing: 12) {
                 Image(systemName: "calendar.badge.clock").font(.system(size: 22, weight: .semibold)).foregroundStyle(ChumbyPalette.cal(scheme == .dark))
                     .frame(width: 44)
@@ -1411,7 +1345,7 @@ struct AlarmsTab: View {
         .buttonStyle(.plain)
         .accessibilityHint("Opens calendar settings")
         .zoomSource("calendar", in: editNS)
-        .listRowBackground(wide && pane == .settings ? AnyView(ChumbyPalette.cal(scheme == .dark).opacity(0.18)) : AnyView(GlassRow()))
+        .listRowBackground(GlassRow())
     }
     var calendar: some View {
         Section {
@@ -1719,9 +1653,7 @@ struct AlarmEditor: View {
     // The nap: a one-off named "Nap", so the Chumby treats it as its nap (never counted by newest_wins, never pinned). Its
     // name stays "Nap" for that reason, so there's no label; it has no repeat; its time is also set as a length from now.
     var nap = false
-    // Set when it's shown in the open Duo's right pane rather than as a sheet: how to go back.
-    var close: (() -> Void)?
-    init(original: Alarm? = nil, calendarTemplate: Bool = false, nap: Bool = false, close: (() -> Void)? = nil) { self.original = original; self.calendarTemplate = calendarTemplate; self.nap = nap; self.close = close }
+    init(original: Alarm? = nil, calendarTemplate: Bool = false, nap: Bool = false) { self.original = original; self.calendarTemplate = calendarTemplate; self.nap = nap }
     var title: String { nap ? "Nap" : calendarTemplate ? "How they ring" : original != nil ? "Edit alarm" : "Add alarm" }
     @AppStorage("napLength") private var napLength = 0
     static let napLengths = [10, 20, 30, 45, 60, 90]
@@ -1800,29 +1732,9 @@ struct AlarmEditor: View {
     }
 
     var body: some View {
-        if let close {
-            // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
-            // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
-            let buttons = HStack(spacing: 16) {
-                Button("Cancel") { stopTest(); close() }.disabled(saving)
-                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold).disabled(ringingNow) }
-            }
-            .foregroundStyle(.tint)
-            List {
-                PageTitle(title, pins: true) { buttons }
-                sections.listRowBackground(GlassRow())
-            }
-            .pinsTitle { PageTitle(title) { buttons } }
-            // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
-            // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
-            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-            .onDisappear { model.editingAlarm = false }
-            .fillCover(isPresented: $justOnce) { justOnceSheet }
-        } else {
-            // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
-            // system's items, each with a glyph, so on the Duo they take the side bar, Cancel at the top where Back goes
-            // and Save under it, and the form has the whole width (Richard, 2026-11-10: "not edge to edge … utilize
-            // sidebar"). As words alone iOS kept them in a row across the top: it sets no title-only item vertically.
+            // The system's sheet (from Alarms and the calendar's sound row), with Cancel and Save as the system's items,
+            // each with a glyph, so on the Duo they take the side bar, Cancel at the top where Back goes and Save under it.
+            // As words alone iOS kept them in a row across the top: it sets no title-only item vertically.
             NavigationStack {
                 Form { sections.listRowBackground(GlassRow()) }
                 .seaList().background { SeaBackground().ignoresSafeArea() }
@@ -1841,7 +1753,6 @@ struct AlarmEditor: View {
                 .onDisappear { model.editingAlarm = false }
                 .fillCover(isPresented: $justOnce) { justOnceSheet }
             }
-        }
     }
     // "Just this once" for this alarm's next ring, presented by the editor itself (the row that opens it sits far down a
     // lazy form, so a sheet of the row's own isn't there until it's been scrolled to).
@@ -1853,7 +1764,7 @@ struct AlarmEditor: View {
         guard ChumbyModel.pose == "reskip", original != nil else { return }
         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); justOnce = true }
     }
-    func finish() { stopTest(); if let close { close() } else { dismiss() } }
+    func finish() { stopTest(); dismiss() }
 
     var sections: some View {
             Group {

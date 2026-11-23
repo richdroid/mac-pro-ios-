@@ -200,7 +200,7 @@ struct TitleInfoPage: View {
         }
         .background { Ambience() }
         // No title in the bar: the name is set large in the page. The bar keeps its Back.
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(item.title).toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .task {
             guard let ref else { failed = true; return }

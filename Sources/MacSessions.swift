@@ -8,8 +8,8 @@ struct TermOption: Identifiable, Equatable { let number: Int; let text: String; 
 @MainActor
 enum TermCache {
     static var screens: [String: API.Term] = [:]
-    // What's typed in a session's box, and whether it had the keyboard as the page went: folded on its side the app's
-    // own tab rail takes over from the system's bar (SideRailTabs), and the page is made anew on the turn, so it takes
+    // What's typed in a session's box, and whether it had the keyboard as the page went: a turn or fold
+    // page may be made anew on the turn, so it takes
     // both back rather than losing his half-typed message and the keyboard (the session-turn film).
     static var drafts: [String: String] = [:]
     static var leftTyping: (key: String, at: Date)?
@@ -416,7 +416,7 @@ struct SessionTerminal: View {
     func onItsSide(_ w: CGFloat) -> Bool {
         #if os(iOS)
         guard let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first?.bounds.size else { return false }
-        // 500, not 560: the app's own rail on its side takes its room from the page's safe area (railRoom).
+        // 500, not 560: kept as it was laid out beside the side strip.
         return win.width > win.height && w >= 500
         #else
         return false
@@ -450,7 +450,7 @@ struct SessionTerminal: View {
         // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
         // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
-        .pushedTitle()
+        .pushedTitle(session.name)
         .preferredColorScheme(.dark)
         .haptic(.tap, trigger: sends)
         .task {

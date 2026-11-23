@@ -1,0 +1,147 @@
+name: System navigation check (system-1123)
+# Branch-only check for the move to the system's own navigation in the Mac Pro, Chumby and TV apps (Richard, 2026-11-23:
+# "in line with latest ios documentation on everything"): the system TabView, the system Back with its edge swipe and its
+# long-press history menu, and system sheets. Every tab of all three apps folded, open upright and open flat, and per
+# app per posture one film: a page pushed then Back tapped, pushed then swiped back from the edge, Back held for its
+# history menu, then a sheet opened and closed. Published to the system-1123 release. Never runs on main.
+on:
+  push:
+    branches: [system-1123]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: system-1123
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the launch art
+        run: |
+          swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+          swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          for APP in MacPro Chumby TV; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+          done
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 28
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          P=build-sim/Build/Products/Debug-iphonesimulator
+          for A in MacPro Chumby TV; do xcrun simctl install "$DEVICE" $P/$A.app; done
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          node ci/mock-chumby.js &
+          sleep 2
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # Each app: bundle, the stand-in it talks to, its tabs, a launch onto a pushed page, a launch with a sheet up.
+          MAC=local.macpro.MacPro; CH=local.macpro.Chumby; TV=local.macpro.TV
+          M=http://127.0.0.1:9002
+          addr() { case $1 in $MAC) echo http://127.0.0.1:9001;; $CH) echo http://127.0.0.1:9000;; $TV) echo $M;; esac; }
+          tabs() { case $1 in $MAC) echo "0 1 2 4 5 6";; $CH) echo "0 1 2 3 4";; $TV) echo "3 0 2 6";; esac; }
+          short() { case $1 in $MAC) echo macpro;; $CH) echo chumby;; $TV) echo tv;; esac; }
+          # Two deep where the app can (Status > CPU > Processes; TV Settings > TV settings), so the held Back has a history.
+          pushargs() { case $1 in $MAC) echo "-tab 0 -openHistory cpu -openProcesses cpu";; $CH) echo "-tab 2 -pose calsettings";; $TV) echo "-tab 9 -pose tvsettings";; esac; }
+          sheetargs() { case $1 in $MAC) echo "-address $(addr $MAC) -tab 0 -pose otaoffer";; $CH) echo "-address $(addr $CH) -tab 2 -pose editor";; $TV) echo "-address $M/rmint -tab 2 -queueSheet YES";; esac; }
+          shot() { xcrun simctl io "$DEVICE" screenshot --display=$1 dist/$2.png; }
+          # Where the app found the system's Back (and a sheet's Close, Cancel or Done), from its -findBack log.
+          backlog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" $1 data 2>/dev/null) && cat "$c/Library/Caches/back-at.txt" 2>/dev/null; }
+          backat() { local a; a=$(backlog $1 | head -1); case "$a" in none|"") echo "$FALLBACK";; *) echo "$a";; esac; }
+          closeat() { backlog $1 | sed -n 's/^close \([0-9.]* [0-9.]*\)$/\1/p' | head -1; }
+          # Every tab, one shot each.
+          tabshots() {
+            local d=$1 x=$2 b
+            for b in $MAC $CH $TV; do
+              for T in $(tabs $b); do
+                xcrun simctl launch "$DEVICE" $b -address $(addr $b) -tab $T
+                sleep 7
+                shot $d $(short $b)-tab$T$x
+                xcrun simctl terminate "$DEVICE" $b || true
+              done
+            done
+          }
+          # One film per app: Back tapped, the edge swipe, Back held (its menu shot while up), then a sheet opened and
+          # closed with its own toolbar item where it has one, else the system's swipe down.
+          navfilm() {
+            local b=$1 d=$2 x=$3 n at
+            n=$(short $b)-nav$x
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            for step in tap swipe hold; do
+              xcrun simctl launch "$DEVICE" $b -address $(addr $b) -findBack YES -swipeLog YES $(pushargs $b)
+              sleep 10
+              shot $d $n-$step-page
+              at=$(backat $b); echo "$n $step: back at $at"
+              case $step in
+                tap) $D "$DEVICE" touch $at 0.08 || echo "tap failed" ;;
+                swipe) $D "$DEVICE" drag 0.01 0.5 0.9 0.5 0.8 || echo "drag failed" ;;
+                hold) $D "$DEVICE" touch $at 1.4 || echo "hold failed"; sleep 0.8; shot $d $n-hold-menu ;;
+              esac
+              sleep 2.5
+              shot $d $n-$step-after
+              backlog $b > dist/$n-$step-back.log
+              xcrun simctl terminate "$DEVICE" $b || true
+              sleep 1
+            done
+            xcrun simctl launch "$DEVICE" $b -findBack YES $(sheetargs $b)
+            sleep 12
+            shot $d $n-sheet-open
+            at=$(closeat $b); echo "$n sheet: close at ${at:-none}"
+            if [ -n "$at" ]; then $D "$DEVICE" touch $at 0.08 || echo "tap failed"
+            else $D "$DEVICE" drag 0.5 0.06 0.5 0.97 0.4 || echo "drag failed"; fi
+            sleep 2.5
+            shot $d $n-sheet-closed
+            backlog $b > dist/$n-sheet-back.log
+            xcrun simctl terminate "$DEVICE" $b || true
+            kill -INT $REC; wait $REC
+          }
+          posture() {
+            local d=$1 x=$2 b
+            tabshots $d $x
+            for b in $MAC $CH $TV; do navfilm $b $d $x; done
+          }
+          date
+          # Folded (the cover display). FALLBACK: where Back stood before, if the app can't say.
+          FALLBACK="0.895 0.292"; posture 1 -folded
+          date
+          $D "$DEVICE" pose open || true; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          FALLBACK="0.065 0.049"; posture 3 -upright
+          date
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          FALLBACK="0.948 0.222"; posture 3 -flat
+          date
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view system-1123 >/dev/null 2>&1 || gh release create system-1123 --prerelease --title "System navigation check" --notes "Branch system-1123: every tab and the Back, swipe, long-press and sheet films of the Mac Pro, Chumby and TV apps."
+          for f in shots.zip status.txt; do
+            for i in 1 2 3; do gh release upload system-1123 "$f" --clobber && break; sleep 15; done
+          done

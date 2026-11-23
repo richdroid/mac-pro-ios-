@@ -164,7 +164,7 @@ struct TitlePage: View {
         .onChange(of: st.item.art) { _, a in
             if let i = model.titleGrounds.firstIndex(where: { $0.id == groundID }) { model.titleGrounds[i] = .init(id: groundID, tab: model.titleGrounds[i].tab, art: a) }
         }
-        .navigationTitle("")
+        .navigationTitle(st.item.title).toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)

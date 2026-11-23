@@ -25,25 +25,16 @@ struct SoundListPage: View {
     let name: String
     let sections: [PickSection]
     let current: String
-    var pane = false
     // Writes the value (the tab shows it at once); then the page goes back.
     let pick: (String) -> Void
     let done: () -> Void
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let close = AnyView(Button("Close") { done() }.foregroundStyle(.tint))
-        Group {
-            if pane {
-                List { content(close: close) }
-                    .pinsTitle { PageTitle(name) { close } }
-            } else {
-                List { content(close: nil) }.pushedPage("soundlist")
-            }
-        }
+        List { content }.pushedPage("soundlist", title: name)
     }
-    @ViewBuilder private func content(close: AnyView?) -> some View {
-        if let close { PageTitle(name, pins: true) { close } } else { PageTitle(name) }
+    @ViewBuilder private var content: some View {
+        PageTitle(name)
         if let f = model.failed("test") {
             FailNote(text: f).listRowBackground(Color.clear)
         }

@@ -304,7 +304,7 @@ struct HistoryView: View {
         // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
         // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
-        .pushedTitle()
+        .pushedTitle(metric.title)
         .animation(.easeOut(duration: 0.2), value: hours)
         .animation(Motion.quick, value: stale)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }

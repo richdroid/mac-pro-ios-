@@ -216,7 +216,6 @@ struct RingScreen: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button { close() } label: { Label("Close", systemImage: "xmark") } }
             }
-            .horizontalBars()
         }
         .tint(ChumbyPalette.acc(dark))
         .onAppear {

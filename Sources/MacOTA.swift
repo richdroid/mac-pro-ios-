@@ -579,7 +579,7 @@ struct VersionHistoryView: View {
         .topEdge()
         // The page's name as large as every tab's, never the small bar title it was (17 pt, under the 20 pt app name in the
         // card below it, beside a 34 pt "Apps" one Back away), and placed as every pushed page's is (pushedTitle).
-        .pushedTitle()
+        .pushedTitle("Version History")
         .task { await load() }
     }
     private func pane(header: Bool, showBuilds: Bool, afterNewest: Bool = false) -> some View {

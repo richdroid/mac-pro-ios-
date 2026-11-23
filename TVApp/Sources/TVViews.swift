@@ -14,8 +14,8 @@ struct TVApp: App {
     init() {
         // Neither is needed for the first frame, so neither holds it up.
         #if os(iOS)
-        TVNavHook.register = { NavTransit.shared.register($0) }
-        TVNavHook.began = { NavTransit.shared.begin($0) }
+        // NavTransit watches every push and pop from the first (it holds a page's layout under the edge swipe).
+        _ = NavTransit.shared
         // Long-form audio is what lets the AirPlay list move the whole phone's audio, not only this app's.
         DispatchQueue.global(qos: .userInitiated).async {
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
@@ -269,18 +269,18 @@ struct RootView: View {
     // The Playing tab's glyph, kept here only when it changes (PlayingGlyph below works it out), so a status reading
     // never redraws the whole tab view.
     @State private var playingSymbol = "play.circle"
-    // The rail steps aside only while a software keyboard really covers the foot, as BottomBarTabs' bar does: above the
-    // keyboard it ran into the status folded on its side. A field with focus is not enough (a hardware keyboard, or the
-    // keyboard still to come): Search open upright then showed no tabs at all (gate of f9ca25f).
-    @State private var keyboardUp = false
     var body: some View {
         let _ = SwipeLog.mark("body root")
         PaneReader {
-            // Content full width on the left, the tabs a glass pill at the foot of one rail on the right, in every posture,
-            // as in Mac Pro: never a bar along the foot (Richard's reference of 2026-11-21, "this is what iphone duo apps
-            // look like"). The system's TabView drew one open upright.
-            SideRailTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, hidden: keyboardUp) { t in
-                tabPage(t).environment(\.tabInFront, model.tab == t)
+            // The system's own tabs, placed by iOS: down the side strip folded and open in landscape, a bar along the foot
+            // open upright (HIG, iPhone Duo, "Vertical controls"; Richard, 2026-11-23: "in line with latest ios
+            // documentation on everything").
+            TabView(selection: tabBinding) {
+                ForEach(Self.railItems) { it in
+                    Tab(value: it.value) {
+                        tabPage(it.value).environment(\.tabInFront, model.tab == it.value)
+                    } label: { it.label }
+                }
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
@@ -293,20 +293,12 @@ struct RootView: View {
             // A poster lifted off a shelf, over everything, where his finger has it (Liftable).
             .overlay { HandOverlay() }
         }
-        #if canImport(UIKit)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
-            guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-            let screen = UIScreen.main.bounds.height
-            keyboardUp = f.height > 120 && f.minY < screen - 120
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
-        #endif
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { Hand.shared.screen = $0 } }
         // What follows the status lives in small views of its own, so only they redraw when it changes.
         .background { StatusFollower(playingSymbol: $playingSymbol) }
         .overlay(alignment: .top) { ProblemBanner() }
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 2, 6]) { model.tab = $0 } }
+        .onAppear { BackFinder.start(); followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 2, 6]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task { await BrowseStore.shared(.stremio).loadHome() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
@@ -318,9 +310,8 @@ struct RootView: View {
     }
 }
 
-// Whether the tab a view is on is the one in front. The rail keeps each tab once shown, under the one in front
-// (SideRailTabs), where the system's TabView took it off screen: leaving a tab no longer ends its views' appearance, so
-// what must stop when he leaves one (the TV's live picture, the AirPlay search, polling) follows this as well.
+// Whether the tab a view is on is the one in front: what must stop when he leaves a tab (the TV's live picture, the
+// AirPlay search, polling) follows this as well as its appearance.
 // (tabInFront lives in TVTheme, beside SettledAnimation, which follows it too.)
 // On screen: appeared, on the tab in front. Each on is matched by one off, as onAppear by onDisappear.
 private struct OnScreen: ViewModifier {
@@ -471,7 +462,7 @@ struct Page<C: View>: View {
         VStack(spacing: 0) {
         Lip(tab: tab).environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
             // Its right end in line with the page's under it, the rail's column clear from top to foot.
-            .railRoom()
+            
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
@@ -491,7 +482,7 @@ struct Page<C: View>: View {
                 }
                 // Clear of the rail, keys, last rows and all: nothing of the page sits under the pill. Inside the stack, on
                 // each page pushed too, so a pushed page's own Back strip is counted once, not added to it.
-                .railRoom()
+                
                 // Status' page, heading and all, moved up by the bar's room as one: a move, not a new layout, so nothing
                 // under it measures itself again; its foot reaches down as far.
                 .padding(.bottom, -barRoom)
@@ -499,11 +490,11 @@ struct Page<C: View>: View {
                 .toolbar(showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
-                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).railRoom() }
+                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true) }
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
                 .navigationDestination(for: TitleRoute.self) { r in
-                    if let t = TitleRoutes.target(r) { TitlePage(target: t).railRoom() }
+                    if let t = TitleRoutes.target(r) { TitlePage(target: t) }
                 }
                 .modifier(SettingsPages(tab: tab))
                 .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
@@ -587,36 +578,9 @@ private struct MovingTitle: View {
             .opacity(Double(max(0, 1 - y / 44)))
     }
 }
-
-// A page opened from a tab: its name set large as the first thing on it, leading the headings under it, and its way
-// back and its one action in a glass bar laid over the page at the foot, by the side bar, rather than loose circles
-// floating over the side bar (Richard, 2026-11-05: "maybe a like bar i can bring on top of the interface"). The bar is
-// there on arrival and at the top, steps away as he scrolls down into the page, and comes back the moment he scrolls up.
-@MainActor
-final class PageBarState: ObservableObject {
-    @Published private(set) var shown = true
-    // The page bringing its own place into view as it opens (a show's page scrolls to the episode playing) is not him
-    // scrolling: in its first moments the bar stays, so Back is there on arrival (2026-11-07 portrait shots: the show's
-    // page opened with no Back at all).
-    private let born = Date()
-    func follow(_ old: CGFloat, _ new: CGFloat) {
-        guard Date().timeIntervalSince(born) > 1.5 else { return }
-        let want: Bool? = new < 24 ? true : new - old > 6 ? false : old - new > 6 ? true : nil
-        if let want, want != shown { withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) { shown = want } }
-    }
-}
-private struct PageBarKey: EnvironmentKey { static let defaultValue: PageBarState? = nil }
-extension EnvironmentValues { var pageBar: PageBarState? { get { self[PageBarKey.self] } set { self[PageBarKey.self] = newValue } } }
-// On each scrolling part of such a page: up summons the bar, down sends it off. The bounce past either end is ignored.
+// On each scrolling part of a page: it says when it's moving (ScrollMoving).
 private struct SummonsBar: ViewModifier {
-    @Environment(\.pageBar) private var bar
-    func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: CGFloat.self) { g in
-            let end = g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom - g.containerSize.height
-            return min(g.contentOffset.y + g.contentInsets.top, max(end, 0))
-        } action: { old, new in bar?.follow(old, new) }
-        .modifier(ScrollMoving())
-    }
+    func body(content: Content) -> some View { content.modifier(ScrollMoving()) }
 }
 // Every scrolling page says when it's moving (BackToTop and SummonsBar carry this): the TV's polled status waits while
 // one is, so no row changes height under a page pulled past its end, which snaps the page back in one move instead of
@@ -677,80 +641,27 @@ struct PageHeading: View {
             .accessibilityAddTraits(.isHeader)
     }
 }
-struct PageBar<Actions: View>: View {
-    @Environment(TVModel.self) var model
-    @Environment(\.dismiss) private var dismiss
-    // Where back goes, for a page that isn't a pushed one (a show's page over everything); a pushed page pops.
-    var back: (() -> Void)? = nil
-    // A full bar across the page's foot (a show's or stream's page), rather than a capsule hugging its controls (r26).
-    var full = false
-    // Off where Back is the side bar's: the bar carries only the page's own action.
-    var showsBack = true
-    @ViewBuilder let actions: () -> Actions
-    var body: some View {
-        HStack(spacing: 2) {
-            // Alone, back says so in words, so the bar is a bar and never a loose glass circle over the page (r24).
-            let alone = Actions.self == EmptyView.self
-            if showsBack {
-            Button { model.tick(); if let back { back() } else { dismiss() } } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold))
-                    if alone { Text("Back").font(.subheadline.weight(.semibold)) }
-                }
-                .padding(.leading, alone ? 16 : 0).padding(.trailing, alone ? 18 : 0)
-                .frame(minWidth: 50, minHeight: 50).contentShape(Rectangle())
-            }
-            .buttonStyle(PressIcon()).accessibilityLabel("Back")
-            }
-            if full { Spacer(minLength: 0) }
-            actions()
-        }
-        .padding(.horizontal, 3)
-        .frame(maxWidth: full ? .infinity : nil)
-        .glassEffect(.regular.interactive(), in: Capsule())
-    }
-}
-// An action in the bar: its glyph and what it does, in words, so it says something on its own.
+// An action in the page's toolbar: its glyph and its name, so the system can show either (HIG, toolbar items).
 struct PageBarAction: View {
     @Environment(TVModel.self) var model
     let title: String, icon: String
     let action: () -> Void
     var body: some View {
-        Button { model.tick(); action() } label: {
-            Label(title, systemImage: icon).font(.subheadline.weight(.semibold)).padding(.leading, 6).padding(.trailing, 14).frame(height: 50).contentShape(Rectangle())
-        }
-        .buttonStyle(PressIcon())
+        Button { model.tick(); action() } label: { Label(title, systemImage: icon) }
     }
 }
 private struct BarPage<Actions: View>: ViewModifier {
-    @Environment(TVModel.self) private var model
-    @Environment(\.paneLayout) private var panes
-    @StateObject private var bar = PageBarState()
     let actions: () -> Actions
     func body(content: Content) -> some View {
         content
-            .environment(\.pageBar, bar)
             // The system's own Back, laid out by iOS the Duo's way: at the top of the side strip folded and open in
             // landscape, in the top bar open in portrait, with the edge swipe (Apple's HIG for iPhone Duo, "Vertical
-            // controls"; Richard, 2026-11-08: "the back button is retarded and not iphone duo standard"). The hand-made
-            // Back tab in the side bar and the foot capsule before it are gone. The page draws its own large heading, so
-            // the bar carries no title of its own. Only a page's own action (Open on TV, Edit) keeps a small bar at the foot.
+            // controls"). The page draws its own large heading, so the bar draws no title (each page names itself to
+            // the system with toolbar(removing: .title), for Back's history menu). A page's own action (Open on TV)
+            // is the system's toolbar item.
             .toolbar(.visible, for: .navigationBar)
-            // The bar draws no title: each page sets its own to "" where it wins (the heading is drawn in the content). A
-            // title emptied here, or removed with toolbar(removing: .title), lost to the page's, and the system printed
-            // "Continue watching" above the page's heading a second time (c2db3e9's and bff5ee8's runs, every posture).
             .navigationBarTitleDisplayMode(.inline)
-            .overlay(alignment: .bottomTrailing) {
-                if Actions.self != EmptyView.self {
-                PageBar(showsBack: false, actions: actions)
-                    .padding(.trailing, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
-                    .opacity(bar.shown ? 1 : 0)
-                    .offset(y: bar.shown ? 0 : 18)
-                    .scaleEffect(bar.shown ? 1 : 0.94, anchor: .bottomTrailing)
-                    .allowsHitTesting(bar.shown)
-                    .accessibilityHidden(!bar.shown)
-                }
-            }
+            .toolbar { ToolbarItemGroup(placement: .primaryAction) { actions() } }
     }
 }
 extension View {
@@ -772,7 +683,7 @@ struct ConnectionView: View {
         .background { Ambience() }
         // No title in the bar: the page draws its own large heading, and the system printed the title above it a second
         // time (c2db3e9's and bff5ee8's runs; emptied from outside, the page's own won). Back over this page reads "Back".
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Connection").toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         .barPage()
         .onAppear { address = model.address }
     }
@@ -950,7 +861,7 @@ struct RowList<Content: View>: View {
             .summonsBar()
             .topShade().topFade()
             .background { Ambience() }
-            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(title).toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
             .barPage()
     }
 }
@@ -2280,7 +2191,7 @@ struct AppsPage: View {
         AppsTab()
             .summonsBar().topShade()
             .background { Ambience() }
-            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Apps").toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
             .barPage()
     }
 }
@@ -2753,7 +2664,7 @@ struct AppsTab: View {
     }
     var body: some View {
         let _ = SwipeLog.mark("body apps")
-        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).railRoom() }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true) }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
             #endif
@@ -4115,11 +4026,12 @@ struct UnderFlickGround: ViewModifier {
             .animation(covered ? .easeIn(duration: 0.22) : .easeOut(duration: 0.15), value: covered)
     }
 }
-// The bar's title emptied for a page that draws its own heading; off, whatever the page set stands.
+// No title drawn in the bar for a page that draws its own heading. The page's own name still reaches the system, for
+// Back and the long press on Back (the history menu).
 private struct Untitled: ViewModifier {
     let on: Bool
     @ViewBuilder func body(content: Content) -> some View {
-        if on { content.navigationTitle("").navigationBarTitleDisplayMode(.inline) } else { content }
+        if on { content.toolbar(removing: .title).navigationBarTitleDisplayMode(.inline) } else { content }
     }
 }
 extension View { func underFlick(barHidden: Bool = false, warms: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden, warms: warms)) } }
