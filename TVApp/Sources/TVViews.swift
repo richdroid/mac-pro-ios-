@@ -258,7 +258,7 @@ struct RootView: View {
     @ViewBuilder private func tabPage(_ t: Int) -> some View {
         switch t {
         case 3: Page(title: "Watch", tab: 3, accessory: AnyView(WatchFilterKey()), retaps: resets[3, default: 0]) { FilmsTab() }
-        case 0: Page(title: "Remote", tab: 0, retaps: resets[0, default: 0]) { RemoteTab() }
+        case 0: Page(title: "Remote", tab: 0, accessory: AnyView(SpeakerKey()), retaps: resets[0, default: 0]) { RemoteTab() }
         default: Page(title: "Search", tab: 6, retaps: resets[6, default: 0]) { SearchPage() }
         }
     }

@@ -20,6 +20,7 @@ struct TitleRoute: Hashable { let id: UUID }
     var streams: [StremioStream] = []
     var finding = false
     var noStreams = false
+    var streamsUnreachable = false
     var chosen: String?
     var failed: Set<String> = []
     var startOver = false
@@ -91,11 +92,12 @@ struct TitleRoute: Hashable { let id: UUID }
     func findStreams(again: Bool = false) async {
         guard let r = ref, let v = video else { return }
         if !again, let l = StreamCache.shared.inHand(type: r.type, imdb: r.imdb, video: v) { set(l); return }
-        finding = true; noStreams = false
+        finding = true; noStreams = false; streamsUnreachable = false
         let l = await StreamCache.shared.streams(type: r.type, imdb: r.imdb, video: v, again: again)
         guard v == video else { return }
         finding = false
-        if let l, !l.isEmpty { set(l) } else { noStreams = true }
+        // No answer at all (the Mac or the launcher's link out of reach) is said apart from an answer with nothing in it.
+        if let l, !l.isEmpty { set(l) } else { noStreams = true; streamsUnreachable = l == nil }
     }
     private func set(_ l: [StremioStream]) {
         // One frame, no stagger: the list is laid out whole.
@@ -385,10 +387,21 @@ struct TitlePage: View {
         if st.streams.isEmpty {
             HStack(spacing: 10) {
                 if st.finding || (!st.noStreams && st.video != nil) { ProgressView().controlSize(.small) }
-                Text(st.noStreams ? "No streams found" : st.video == nil ? "Choose an episode" : "Finding streams…")
-                    .font(.system(size: 17)).foregroundStyle(.secondary)
+                else if st.noStreams { Image(systemName: st.streamsUnreachable ? "wifi.exclamationmark" : "tray").foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(st.finding ? "Finding streams…" : st.noStreams ? (st.streamsUnreachable ? "Couldn’t get streams" : "No streams found") : st.video == nil ? "Choose an episode" : "Finding streams…")
+                        .font(.system(size: 17, weight: st.noStreams && !st.finding ? .semibold : .regular)).foregroundStyle(st.noStreams && !st.finding ? .primary : .secondary)
+                    if st.noStreams && !st.finding {
+                        Text(st.streamsUnreachable ? "The Mac didn’t answer." : "None of your add-ons has this one.").font(.system(size: 15)).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if st.noStreams && !st.finding {
+                    Button("Try Again") { model.tick(); Task { await st.findStreams(again: true) } }
+                        .buttonStyle(.bordered).buttonBorderShape(.capsule).tint(.white)
+                }
             }
-            .frame(height: StreamRow.height, alignment: .leading)
+            .frame(minHeight: StreamRow.height, alignment: .leading)
         } else {
             let all = st.streams
             let shown = st.showsAllStreams ? all : Array(all.prefix(5))
