@@ -19,7 +19,9 @@ enum ThrowRules {
     static let downCancel: CGFloat = 200
     // The commit line: this share of the screen's height above the card's rest, but never more than this share of the
     // way to the lip, so a card resting low on the page can still reach it (the line sat at or above the lip for them).
-    static let commitShare: CGFloat = 0.3
+    // 0.24: at 0.3 the line sat 250 pt over a card resting low open upright, and a carry 13 pt short was put back (gate on
+    // b9269a7).
+    static let commitShare: CGFloat = 0.24
     static let commitReach: CGFloat = 0.55
     // The flight never dawdles, and is gone within this long.
     static let floorSpeed: CGFloat = 1600
@@ -135,6 +137,8 @@ enum ThrowRules {
     @ObservationIgnored private var downAt = Date()
     @ObservationIgnored private var firstMoveLogged = false
     init(lifted: Bool = false) { self.lifted = lifted }
+    private static let holdID = UUID()
+    func releaseHold() { ScrollHold.set(Self.holdID, moving: false) }
     var liftScale: CGFloat { lifted ? 1.04 : 1.03 }
     private var restCenter: CGPoint { CGPoint(x: rest.midX, y: rest.midY) }
     private var lipY: CGFloat { let l = Hand.shared.lipFrame; return l.height > 0 ? l.midY : 30 }
@@ -152,6 +156,9 @@ enum ThrowRules {
         withAnimation(.spring(response: 0.18, dampingFraction: 0.8)) { scale = liftScale }
         over = false; downAt = Date(); firstMoveLogged = false
         Hand.shared.carrying = true
+        // The TV's polled status waits while a card is in the hand or in the air, as it does under a moving page: a
+        // reading landing mid-flight redrew the app and held the flight 50 ms a frame open flat (gate on 339958b).
+        ScrollHold.set(Self.holdID, moving: true)
         HandFeel.pickUp()
         HandLog.note("down rest=\(Int(rest.midX)),\(Int(rest.midY)) commitY=\(Int(commitY)) lipY=\(Int(lipY))")
     }
@@ -212,6 +219,7 @@ enum ThrowRules {
         } completion: { [weak self] in
             guard let self, self.phase == .returning else { return }
             self.phase = .rest
+            self.releaseHold()
             then?()
         }
     }
@@ -230,8 +238,11 @@ enum ThrowRules {
         var dx = v.width, dy = v.height
         if sp < 120 || dy > -60 { dx = 0; dy = -1 }
         let rise = max(0, center.y - lipY)
+        _ = rise
+        // Into the lip's own picture slot (8 pt in, 64 x 40), whichever way it was thrown: landing at the finger's x put it
+        // over the lip's title (gate on b9269a7). It shrinks into the slot and dissolves into the lip's picture there.
         var x = center.x + (dy < 0 ? dx / -dy * rise : 0)
-        if lip.width > 0 { x = min(max(x, lip.minX + ThrowRules.lipPicture.width / 2 + 8), lip.maxX - ThrowRules.lipPicture.width / 2 - 8) }
+        if lip.width > 0 { x = lip.minX + 8 + ThrowRules.lipPicture.width / 2 }
         let to = CGSize(width: offset.width + x - center.x, height: offset.height + lipY - center.y)
         let ddx = to.width - offset.width, ddy = to.height - offset.height
         let dist = max(1, sqrt(ddx * ddx + ddy * ddy))
@@ -244,16 +255,32 @@ enum ThrowRules {
             offset = to; scale = small; tilt = 0
         } completion: { [weak self] in
             guard let self else { return }
-            var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { self.phase = .gone; self.opacity = 0 }
+            // Into the lip's picture with a short fade, not cut out in one frame (gate on 339958b).
+            self.phase = .gone
+            withAnimation(.easeOut(duration: 0.12)) { self.opacity = 0 }
             HandFeel.thud()
             HandLog.note("gone")
             withAnimation(.easeOut(duration: 0.3)) { Hand.shared.glow = 0 }
             landed()
+            // The poll may land again once the send's own redraw is past.
+            Task { @MainActor in try? await Task.sleep(nanoseconds: 300_000_000); self.releaseHold() }
         }
     }
+    // Takes over another carry exactly as it is (where it is, its size and tilt), to fly it from the window's layer.
+    func adopt(_ o: Carry) {
+        rest = o.rest
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { offset = o.offset; scale = o.scale; tilt = o.tilt; opacity = 1; phase = .held }
+    }
+    // Out of sight where it is, its flight drawn by another carry; back with reappear().
+    func hideForFlight() {
+        phase = .gone; opacity = 0
+        Hand.shared.carrying = false
+        if over { over = false; Hand.shared.committed = false }
+        releaseHold()
+    }
     // Back at its place, unseen, then faded in: the page's card is still the page's after a throw.
-    func reappear(after s: Double = 0.5) {
+    func reappear(after s: Double = 1.2) {  // after the send's redraw, so its fade is seen (gate on 339958b)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000))
             guard phase == .gone else { return }
@@ -268,6 +295,7 @@ enum ThrowRules {
         guard phase == .held || phase == .returning else { return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { offset = .zero; scale = 1; tilt = 0; opacity = 1; phase = .rest }
+        releaseHold()
         Hand.shared.carrying = false
         Hand.shared.glow = 0
         if over { over = false; Hand.shared.committed = false }
@@ -358,7 +386,8 @@ struct VelocityTrack {
     static func sendBest(_ model: TVModel, item: MediaItem, velocity: CGSize) {
         guard let ref = item.stremioRef else { sendPlain(model, target: FlickTarget(item: item, source: .stremio)); return }
         // The lip has the title from the release on, while the stream is looked for: never the TV's old state first.
-        model.beginStart(.init(title: item.title, art: item.art, line: nil, note: "Finding the stream…"), target: FlickTarget(item: item, source: .stremio))
+        // Straight to "Starting…": "Finding the stream…" showed for a frame (gate on b9269a7).
+        model.beginStart(.init(title: item.title, art: item.art, line: nil), target: FlickTarget(item: item, source: .stremio))
         let lineage = model.startingTarget?.lineage
         // A newer start (or one called off) owns the lip by the time an answer comes: this one says nothing over it.
         let ours = { model.startingTarget?.lineage == lineage && model.starting != nil }
@@ -467,14 +496,15 @@ struct Liftable: ViewModifier {
         guard c.phase == .held, Hand.shared.lifted?.id == liftID else { return }
         // The tap iOS may report with this release is this release, not a second action.
         ShelfHand.shared.handledAt = Date()
-        let down: () -> Void = {
-            var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { Hand.shared.lifted = nil }
-        }
+        // The shelf's own card comes back into its place with a fade, never a cut (gate on 339958b).
+        let down: () -> Void = { withAnimation(.easeOut(duration: 0.3)) { Hand.shared.lifted = nil } }
         if c.judge(v) == .thrown {
-            send(v)
+            // The card flies first and the send goes as it lands: sent at the release, its start (the lip, the Remote and
+            // every tab taking "Starting…") redrew the app in the middle of the flight, which froze for 8 frames open
+            // upright and jumped to the lip in one open flat (gate on eb040c7). The stream was already looked for at the
+            // lift; 0.22 s at most.
             let tint = ImageStore.shared.cachedBand(URL(string: item.art))
-            c.fly(v) { Hand.shared.land(title: item.title, art: item.art, tint: tint); down() }
+            c.fly(v) { [self] in Hand.shared.land(title: item.title, art: item.art, tint: tint); down(); send(v) }
         } else {
             // Let go without having moved: put back, and that was a tap.
             let tapped = !far
@@ -542,14 +572,8 @@ final class LiftPress: UILongPressGestureRecognizer {
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         if let t = touches.first { now = t.location(in: t.window); sample(t, event) }
-        if state == .possible, quickUp, let f = from, let p = now {
-            let dx = p.x - f.x, dy = p.y - f.y
-            if dx * dx + dy * dy > 64, dy < 0, abs(dx) <= -dy * 0.577, Self.onShelf(touched) {
-                HandLog.note("lift quick-up")
-                state = .began
-                return
-            }
-        }
+        // Ruling R4 (gate on b9269a7): no quick-up lift at all. A thumb's fling starts the same way, and a scroll that sends a
+        // film is the worst failure. Only the still hold lifts.
         let was = state
         super.touchesMoved(touches, with: event)
         if was == .possible, state == .failed { HandLog.note("lift failed: moved before the hold") }
@@ -563,10 +587,8 @@ final class LiftPress: UILongPressGestureRecognizer {
     }
     // The scrolls wait for the quick lift to be ruled out (10 pt, or the hold), so an upward drag on a shelf is the hand's
     // and not the page's. The recognizer's own answer, not a delegate's: SwiftUI's gesture bridge owns the delegate.
-    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
-        guard quickUp, other is UIPanGestureRecognizer, other.view is UIScrollView else { return false }
-        return Self.onShelf(touched)
-    }
+    // No quick-up (R4): the scrolls never wait on this one.
+    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool { false }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         if let t = touches.first { now = t.location(in: t.window); sample(t, event) }
         super.touchesEnded(touches, with: event)
@@ -628,8 +650,10 @@ struct LiftRecognizer: UIGestureRecognizerRepresentable {
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
     func makeUIGestureRecognizer(context: Context) -> LiftPress {
         let g = LiftPress()
-        g.minimumPressDuration = 0.15
-        g.allowableMovement = 10
+        // A still hold, as iOS's own drag: 0.38 s with under 6 pt of travel. Anything that moves first is the scroll's
+        // (ruling R1, gate on 339958b: a slow drag lifted through the 0.15 s hold after 9 pt and sent).
+        g.minimumPressDuration = 0.38
+        g.allowableMovement = 6
         g.cancelsTouchesInView = true
         g.quickUp = quickUp
         return g
@@ -675,7 +699,7 @@ struct HandOverlay: View {
                 Art(url: URL(string: l.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() }
                     .frame(width: l.rect.width, height: l.rect.height)
                     .clipShape(RoundedRectangle(cornerRadius: l.wide ? 10 : 8, style: .continuous))
-                    .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
+                    .shadow(color: .black.opacity(c.phase == .flying || c.phase == .gone ? 0 : 0.5), radius: 18, y: 10)
                     .scaleEffect(c.scale)
                     .rotationEffect(.degrees(c.tilt))
                     .opacity(c.opacity)

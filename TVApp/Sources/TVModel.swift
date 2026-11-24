@@ -462,7 +462,7 @@ final class TVModel {
     private func releaseHeld() {
         guard let h = heldStatus else { return }
         heldStatus = nil
-        publish(h.status, data: h.data)
+        Timing.measure("publish held status") { publish(h.status, data: h.data) }
     }
     func warmBanners() {
         let urls = (status?.apps ?? []).filter(\.hasIcon).compactMap { url("/api/tv/icon?pkg=\($0.pkg)&v=2") }
@@ -632,7 +632,7 @@ final class TVModel {
         // Never the first answer since launch (every page is waiting on it), and never one with nothing shown yet.
         if polled, !unchanged, !staleStatus, status != nil, s != status, ScrollHold.holding { SwipeLog.note("status held"); heldStatus = (d, s); return }
         if heldStatus != nil { heldStatus = nil; SwipeLog.note("held status landed") } else if !unchanged, s != status { SwipeLog.note("status landed") }
-        publish(s, data: d)
+        Timing.measure("publish status") { publish(s, data: d) }
     }
     // A reading that only says the clock has run on as it was already running: the same thing playing (or paused) at
     // the spot the last reading put it by now, give or take a second and a half. Every page works the spot out from
@@ -659,7 +659,17 @@ final class TVModel {
     private static var read = 0, shown = 0
     // "-everyReading YES": every reading published, as before, for the build's before-and-after count.
     private static let everyReading = UserDefaults.standard.bool(forKey: "everyReading")
+    // When the TV first stopped answering the Mac, while what was shown still had it answering.
+    @ObservationIgnored private var offlineSince: Date?
     private func publish(_ s: TVStatus, data d: Data) {
+        // A blip leaves no trace: the TV not answering for a reading or two mid-film is held off for 8 s, as the Mac's own
+        // reach is (ProblemBanner), and only then said, on the lip and the Remote alike (gate on eb040c7: "Can't reach the
+        // TV" for 5 s mid-play).
+        if !s.online, let old = status, old.online, !staleStatus {
+            let since = offlineSince ?? Date()
+            offlineSince = since
+            if Date().timeIntervalSince(since) < 8 { return }
+        } else if s.online { offlineSince = nil }
         let unchanged = d == lastStatusBytes && status != nil
         lastStatusBytes = d
         #if os(iOS)
@@ -712,7 +722,6 @@ final class TVModel {
             HitchLog.shared.note(String(format: "first status %.2f s after the foreground", Date().timeIntervalSince(foregroundAt)))
             #endif
         }
-        PhonePlayer.shared.follow(s)
         NextUp.shared.follow(s)
     }
     // His choice, kept from one visit and one launch to the next.
@@ -887,7 +896,7 @@ final class TVModel {
 final class MirrorStore: ObservableObject {
     @Published private(set) var image: TVImage?
     @Published private(set) var at = Date.distantPast
-    func set(_ i: TVImage?) { image = i; if i != nil { at = Date() } }
+    func set(_ i: TVImage?) { Timing.measure("mirror still set") { image = i; if i != nil { at = Date() } } }
     // The last still, kept between launches: the Remote's first arrival shows the TV's screen as it last was (dimmed as
     // old, the light running round it) rather than an empty box (gates 3 and 4). Written at most every 20 s.
     private static var file: URL? { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-shot.img") }

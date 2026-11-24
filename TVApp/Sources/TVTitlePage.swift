@@ -168,13 +168,6 @@ struct TitlePage: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            if st.ref != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { model.tick(); PhoneOpen.open(st.cardItem, model: model) } label: { Label("Play on iPhone", systemImage: "iphone") }
-                }
-            }
-        }
         .task { await st.load(model) }
         // Called off while it was still starting (the lip pulled down, or Stop held): the card comes back out of the lip.
         .onChange(of: model.starting) { was, now in

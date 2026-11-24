@@ -208,6 +208,7 @@ final class HitchLog: NSObject {
     private var flushing: Task<Void, Never>?
     func start() {
         MainTurns.start()
+        Timing.start()
         guard link == nil, UserDefaults.standard.string(forKey: "pose") != nil else { return }
         let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
         l.add(to: .main, forMode: .common)
@@ -268,5 +269,85 @@ enum MainTurns {
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
     }
+}
+#endif
+
+// The method for speed (gate R5, 11-22): only in the build's logged runs (-swipeLog YES), never on his phone.
+// - Timing.measure("step") around each suspect piece of main-thread work: "step <name> N ms" in the hitch log (8 ms and
+//   over), and while it runs it's what the watchdog names.
+// - The watchdog: a thread of its own pings the main thread every 40 ms; a main thread silent for 250 ms or more is logged
+//   when it comes back, "main stuck N ms in <step>", the step (or the last body drawn) it was in when it went quiet.
+// - Bodies: how many times each big view's body ran, every 2 s ("bodies: remote 12 playing 3 ..."), so a reading or a
+//   move that redraws a page it shouldn't shows up as a count.
+#if os(iOS)
+enum Timing {
+    nonisolated(unsafe) private static var label = "idle"
+    private static let lock = NSLock()
+    static var on: Bool { SwipeLog.on }
+    static func set(_ s: String) { lock.lock(); label = s; lock.unlock() }
+    static func now() -> String { lock.lock(); defer { lock.unlock() }; return label }
+    @MainActor @discardableResult static func measure<T>(_ name: String, _ f: () throws -> T) rethrows -> T {
+        guard on else { return try f() }
+        let was = now(); set(name)
+        let t0 = CACurrentMediaTime()
+        defer {
+            let ms = (CACurrentMediaTime() - t0) * 1000
+            set(was)
+            if ms >= 8 { HitchLog.shared.note(String(format: "step %@ %.0f ms", name, ms)) }
+        }
+        return try f()
+    }
+    // A body ran: counted, and named as what the main thread is doing until something else is.
+    nonisolated(unsafe) private static var bodies: [String: Int] = [:]
+    static func body(_ name: String) {
+        guard on else { return }
+        set("body " + name)
+        lock.lock(); bodies[name, default: 0] += 1; lock.unlock()
+    }
+    @MainActor static func start() {
+        guard on, !started else { return }
+        started = true
+        // The counts, every 2 s, only when something ran.
+        Task { @MainActor in
+            while true {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                lock.lock(); let b = bodies; bodies = [:]; lock.unlock()
+                if !b.isEmpty { HitchLog.shared.note("bodies: " + b.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: " ")) }
+            }
+        }
+        final class Watch: @unchecked Sendable {
+            let lock = NSLock()
+            var lastPong = CACurrentMediaTime()
+            var stuckIn: String?
+        }
+        let w = Watch()
+        let t = Thread {
+            while true {
+                Thread.sleep(forTimeInterval: 0.04)
+                w.lock.lock()
+                let gap = CACurrentMediaTime() - w.lastPong
+                if gap > 0.25, w.stuckIn == nil { w.stuckIn = Timing.now() }
+                w.lock.unlock()
+                DispatchQueue.main.async {
+                    w.lock.lock()
+                    let n = CACurrentMediaTime(), g = n - w.lastPong
+                    w.lastPong = n
+                    let what = w.stuckIn ?? Timing.now()
+                    if g > 0.25 { w.stuckIn = nil }
+                    w.lock.unlock()
+                    if g > 0.25 { MainActor.assumeIsolated { HitchLog.shared.note(String(format: "main stuck %.0f ms in %@", g * 1000, what)) } }
+                }
+            }
+        }
+        t.name = "main-watchdog"; t.qualityOfService = .userInteractive
+        t.start()
+    }
+    @MainActor private static var started = false
+}
+#else
+enum Timing {
+    static func measure<T>(_ name: String, _ f: () throws -> T) rethrows -> T { try f() }
+    static func body(_ name: String) {}
+    static func start() {}
 }
 #endif

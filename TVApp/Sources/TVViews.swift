@@ -37,14 +37,12 @@ struct TVApp: App {
                 // update automatically").
                 .onChange(of: phase, initial: true) { _, p in
                     switch p {
-                    case .active: model.start(); PhonePose.launch(model); TVNotify.shared.share()
+                    case .active: model.start(); TVNotify.shared.share()
                     case .background: model.background()
                     default: break
                     }
                 }
-                .phoneContinuation()
                 .onOpenURL { u in
-                    if u.host == "phone" { PhoneOpen.open(url: u, model: model) }
                     // What is playing has one home each: a film or show is the Remote's, a song Music's (widgets and the island ask for 2).
                     if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 2 && model.videoIsCurrent ? 0 : t }  // 9: Status, Settings pushed
                     // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
@@ -245,7 +243,6 @@ struct RootView: View {
     static let railItems = [
         RailItem(value: 3, title: "Watch", symbol: "film"),
         RailItem(value: 0, title: "Remote", symbol: "av.remote"),
-        RailItem(value: 2, title: "Music", symbol: "music.note"),
         RailItem(value: 6, title: "Search", symbol: "magnifyingglass"),
     ]
     private var tabBinding: Binding<Int> {
@@ -262,7 +259,6 @@ struct RootView: View {
         switch t {
         case 3: Page(title: "Watch", tab: 3, accessory: AnyView(WatchFilterKey()), retaps: resets[3, default: 0]) { FilmsTab() }
         case 0: Page(title: "Remote", tab: 0, retaps: resets[0, default: 0]) { RemoteTab() }
-        case 2: Page(title: "Music", tab: 2, retaps: resets[2, default: 0]) { PlayingTab() }
         default: Page(title: "Search", tab: 6, retaps: resets[6, default: 0]) { SearchPage() }
         }
     }
@@ -296,18 +292,27 @@ struct RootView: View {
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { Hand.shared.screen = $0 } }
         // What follows the status lives in small views of its own, so only they redraw when it changes.
         .background { StatusFollower(playingSymbol: $playingSymbol) }
-        .overlay(alignment: .top) { ProblemBanner() }
+        // The Mac out of reach is the lip's to say ("Reconnecting…"); a pill here covered every page's title (tv-pass-1122).
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { BackFinder.start(); followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 2, 6]) { model.tab = $0 } }
+        .onAppear { BackFinder.start(); followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 6]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
-        .task { await BrowseStore.shared(.stremio).loadHome() }
+        .task {
+            await BrowseStore.shared(.stremio).loadHome()
+            // Watch's films asked for at launch too (the data only, no views), so its first visit is filled (tv-pass-1122).
+            await BrowseStore.discover(UserDefaults.standard.string(forKey: "watchKind") ?? "movie").load()
+        }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
     }
     // Control Center and Siri can ask before this view exists, so the request waits in a flag.
     func followRequest() {
         if FlickRequest.wantsRemote { FlickRequest.wantsRemote = false; model.tab = 0 }
-        if FlickRequest.wantsAirPlay { model.tab = 2 }
+        if FlickRequest.wantsAirPlay { FlickRequest.wantsAirPlay = false; model.tab = 0 }
     }
+}
+
+extension View {
+    // Dimmed and still in its place while the TV sleeps: a key that does nothing then never looks live.
+    func sleepDim(_ on: Bool) -> some View { opacity(on ? 0.35 : 1).allowsHitTesting(!on).accessibilityHidden(on) }
 }
 
 // Whether the tab a view is on is the one in front: what must stop when he leaves a tab (the TV's live picture, the
@@ -361,7 +366,6 @@ private struct ProblemBanner: View {
         if !model.reachable { return "Can’t reach the Mac" }
         // On the Remote it's said in the dark picture itself, under its cut-wire glyph: the pill sat on the picture's edge
         // upright, across the hinge open flat, and in the status strip folded (Remote gate 4).
-        if model.status?.online == false, model.tab != 0 { return "The Mac can’t reach the TV" }
         return nil
     }
     // Calm amber for the Mac out of reach (only ever after a sustained failure); red is kept for the TV itself down.
@@ -404,11 +408,14 @@ private struct TopShade: ViewModifier {
     func body(content: Content) -> some View { content.scrollEdgeEffectHidden(true, for: .top) }
 }
 // The fade itself, from the very top of the display, so it reaches under the side bar and the clock too.
-private struct TopFade: ViewModifier {
+// `on` false: no fade, for a page at rest at its top, whose first heading would sit in it, grey (tv-pass-1122).
+struct TopFade: ViewModifier {
+    var on = true
     func body(content: Content) -> some View {
         content.mask {
             VStack(spacing: 0) {
-                LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom).frame(height: 24)
+                LinearGradient(colors: [.black.opacity(on ? 0 : 1), .black], startPoint: .top, endPoint: .bottom).frame(height: 24)
+                    .animation(.easeOut(duration: 0.15), value: on)
                 Color.black
             }
             .ignoresSafeArea()
@@ -1235,6 +1242,7 @@ struct RemoteTab: View {
     @ObservedObject private var nextUp = NextUp.shared
     // The build's shot of the typing bar opens with it up.
     @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
+    @State private var wakeAskedAt: Date?
     // The layout's own idea of typing: on with the keyboard key, and off only once the keyboard has gone, so the page
     // never lays itself out in the room a keyboard still on its way down leaves (Remote gate 4: for half a second it
     // split into two columns upright, crushed open flat, and came back under the keyboard folded).
@@ -1348,7 +1356,6 @@ struct RemoteTab: View {
                         Color.black
                         VStack(spacing: 8) {
                             Image(systemName: unreachable ? "wifi.slash" : away?.glyph ?? "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
-                            if unreachable { Text("The Mac can’t reach the TV").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.75)) }
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
@@ -1364,18 +1371,40 @@ struct RemoteTab: View {
             .layoutPriority(1)
     }
     // Asleep, one big way to wake it over the pad, which wakes it too.
+    var wakeShown: Bool { asleep || away == .off }
     @ViewBuilder var wake: some View {
         // The television off with the box still up is the same key, in the same place: it turns the television on.
-        if asleep || away == .off {
-            Button { model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") } } label: {
-                // All of "Wake the TV" where the pad is wide enough for it, else "Wake": never cut, never over the keys beside.
-                ViewThatFits(in: .horizontal) {
-                    Label("Wake the TV", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 20)
-                    Label("Wake", systemImage: "power").lineLimit(1).fixedSize().padding(.horizontal, 16)
+        if wakeShown {
+            Button {
+                model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") }
+                // Said on the key at once, until the TV answers (or 10 s): a press with nothing to show for it read as dead.
+                wakeAskedAt = Date()
+            } label: {
+                // The whole ring is the key: the glyph over the words, never cut. "Waking the TV…" with the light running round
+                // it after a press; still asleep 10 s on, it says so (tv-pass-1122).
+                TimelineView(.periodic(from: .now, by: 1)) { t in
+                    let since = wakeAskedAt.map { t.date.timeIntervalSince($0) }
+                    let waking = since.map { $0 < 10 } ?? false
+                    let stuck = since.map { $0 >= 10 && $0 < 40 } ?? false
+                    GeometryReader { g in
+                        let d = min(g.size.width, g.size.height)
+                        VStack(spacing: d * 0.04) {
+                            Image(systemName: "power").font(.system(size: max(16, d * 0.16), weight: .semibold))
+                            Text(waking ? "Waking the TV…" : stuck ? "Still asleep. Try again" : "Wake the TV")
+                                .font(.system(size: max(12, min(20, d * 0.12)), weight: .semibold))
+                                .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
+                                .contentTransition(.opacity)
+                        }
+                        .padding(d * 0.12)
+                        .frame(width: d, height: d)
+                        .overlay { if waking { LoadingRing(radius: d / 2) } }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
-                .font(.title3.weight(.semibold)).frame(height: 60)
+                .contentShape(Circle())
             }
-            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
+            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel("Wake the TV")
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else if let away, !unreachable {
             TelevisionKey(away: away).transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
@@ -1387,17 +1416,20 @@ struct RemoteTab: View {
         VStack(spacing: 12) {
             // Power joins the top row like a real remote's, rather than sitting alone under everything.
             HStack(spacing: 0) {
-                GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: grid.key).slot()
-                GlassKey(icon: "chevron.left", label: "Back", key: "back", size: grid.key).slot()
-                GlassKey(icon: "house.fill", label: "Home", key: "home", size: grid.key).slot()
+                // While the big wake key is up in the pad's ring, these step back, dimmed in their places: one way to wake the
+                // TV on the page, and nothing lit that does nothing (tv-pass-1122).
+                GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: grid.key).sleepDim(wakeShown).slot()
+                GlassKey(icon: "chevron.left", label: "Back", key: "back", size: grid.key).sleepDim(wakeShown).slot()
+                GlassKey(icon: "house.fill", label: "Home", key: "home", size: grid.key).sleepDim(wakeShown).slot()
                 // Lit while the typing bar is up, and closes it again.
                 Button { model.tick(); withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { typing.toggle() } } label: {
                     Image(systemName: "keyboard").font(.system(size: grid.key * 0.35, weight: .medium)).foregroundStyle(typing ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.primary))
                         .frame(width: grid.key, height: grid.key).contentShape(Circle())
                 }
                 .buttonStyle(.plain).keyGlass().accessibilityLabel(typing ? "Stop typing" : "Type on TV")
+                .sleepDim(wakeShown)
                 .slot()
-                GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu", size: grid.key).slot()
+                GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu", size: grid.key).sleepDim(wakeShown).slot()
             }
             // Typing takes the transport's room, in every posture: folded the keyboard sliced it in half, and upright it sat
             // across the hinge (Remote gate 4).
@@ -1432,34 +1464,10 @@ struct RemoteTab: View {
     // The pad with volume, across the column's whole width: − and + at the column's two edges (over the first and last
     // keys of the row below) with the pad between them and a slim level bar under it; or, where the column is tall, the
     // pad as wide as the column with − bar + on a row under it. The pad is the ring that fits the height it's given.
+    // The pad on its row, as big as the row allows (volume went, 2026-11-24: "idc abt volume in tv app").
     func padRow(_ grid: RemoteGrid) -> some View {
-        let d = grid.padWidth
-        return Group {
-            if grid.volBelow {
-                VStack(spacing: 14) {
-                    pad.frame(width: d, height: grid.pad)
-                    HStack(spacing: RemoteGrid.sideGap) {
-                        VolumeKey(down: true, size: grid.key)
-                        // Room beside the track for its two speakers, clear of the keys' glass.
-                        VolumeBar().padding(.horizontal, 16)
-                        VolumeKey(down: false, size: grid.key)
-                    }
-                }
-            } else {
-                VStack(spacing: RemoteGrid.volGap) {
-                    HStack(spacing: 0) {
-                        VolumeKey(down: true, size: grid.key)
-                        Spacer(minLength: 0)
-                        pad.frame(width: d, height: grid.pad)
-                        Spacer(minLength: 0)
-                        VolumeKey(down: false, size: grid.key)
-                    }
-                    VolumeBar().frame(width: d)
-                }
-            }
-        }
-        .frame(width: grid.width)
-        .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
+        let d = min(grid.pad, grid.width)
+        return pad.frame(width: d, height: d).frame(width: grid.width)
     }
     // The pad, dimmed while the TV can't be reached. Asleep, its keys step back and the wake button sits in the empty ring.
     var pad: some View {
@@ -1474,7 +1482,7 @@ struct RemoteTab: View {
     var musicShown: Bool { !model.staleStatus && model.musicIsCurrent }
     @ViewBuilder var music: some View {
         if musicShown, let m = model.nowMusic {
-            MiniPlayer(music: m).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).transition(.opacity)
+            Transport(playing: .some(model.songPlaying(m))).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).transition(.opacity)
         }
     }
     // The bar and the episode line under the picture, with their spacing: the picture is sized as if they're always there,
@@ -1591,8 +1599,8 @@ struct RemoteTab: View {
         // One arrangement whatever is on: the picture beside the pad, and places kept for the bar, the transport and the
         // episode line. It was two (the picture over the pad when nothing was on), and the first reading, about 1.5 s after
         // opening, moved everything from one to the other in a spring (audit of 5b7b503). What's on only fills the places.
-        let rows: CGFloat = 5
-        let fixed = 2 * grid.key + Self.barSlot + grid.play + 46 + strip + 8
+        let rows: CGFloat = 4
+        let fixed = grid.key + Self.barSlot + grid.play + 46 + strip + 8
         let room = max(0, height - fixed - gap * rows)
         let w = grid.width
         let d = max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
@@ -1604,24 +1612,25 @@ struct RemoteTab: View {
                     pad.frame(width: d, height: d)
                 }
                 .frame(width: w)
-                ZStack { Color.clear; if !musicShown { progress } }.frame(width: grid.width, height: Self.barSlot)
                 ZStack {
-                    Color.clear
-                    if musicShown { music }
-                    else if session { Transport(size: grid.key, playSize: grid.play).frame(width: grid.width + grid.gap) }
+                    if !musicShown && session { progress }
+                    // Nothing on: the bar's bare track, so its place reads as the bar it is, never a hole (tv-pass-1122).
+                    else { Capsule().fill(.white.opacity(0.1)).frame(height: RemoteGrid.barH).frame(maxHeight: .infinity, alignment: .top).padding(.top, 8) }
+                }.frame(width: grid.width, height: Self.barSlot)
+                ZStack {
+                    if musicShown, let m = model.nowMusic { Transport(size: grid.key, playSize: grid.play, playing: .some(model.songPlaying(m))).frame(width: grid.width + grid.gap) }
+                    else {
+                        // Idle: still there, dimmed and still, so no key ever moves when something starts (tv-pass-1122).
+                        let idle = !session
+                        Transport(size: grid.key, playSize: grid.play).frame(width: grid.width + grid.gap)
+                            .opacity(idle ? 0.35 : 1).allowsHitTesting(!idle).accessibilityHidden(idle)
+                    }
                 }
                 .frame(width: grid.width, height: grid.play)
                 .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
                 ZStack { Color.clear; if seriesOn && (session || musicShown) { episodes } }.frame(width: grid.width, height: 46)
                 VStack(spacing: gap) {
                     keysBlock(grid, transport: false)
-                    HStack(spacing: RemoteGrid.sideGap) {
-                        VolumeKey(down: true, size: grid.key)
-                        VolumeBar().padding(.horizontal, 16)
-                        VolumeKey(down: false, size: grid.key)
-                    }
-                    .frame(width: grid.width)
-                    .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
                 }
                 .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
                 .modifier(KeysArrive(gate: keysGate))
@@ -2257,43 +2266,6 @@ private struct TileGrid<Content: View>: View {
         }
     }
 }
-struct MiniPlayer: View {
-    @Environment(TVModel.self) var model
-    @ObservedObject private var phone = PhonePlayer.shared
-    let music: TVStatus.Music
-    // AirPlayed from this phone, the phone's own player says what it is and takes the press, ahead of the TV.
-    var song: PhonePlayer.Song? { phone.drives ? phone.song : nil }
-    var body: some View {
-        HStack(spacing: 12) {
-            Button { model.tab = 2 } label: {
-                HStack(spacing: 12) {
-                    Cover(url: URL(string: music.art), image: song == nil ? nil : phone.art, key: song.map { "phone \($0.id)" }, mode: .fill) { Color.white.opacity(0.1) }
-                        .frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Two lines where the column is narrow (folded): "Sample So…" was cut at 11 letters (Remote gate 3).
-                        Text(song?.title ?? music.title).font(.subheadline.weight(.semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                        Text(song?.artist ?? music.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("Now playing: \(song?.title ?? music.title)")
-            if song != nil { PlayKey(playing: phone.playing, size: 44) { phone.toggle() } }
-            else { PlayKey(playing: model.songPlaying(music), size: 44) }
-        }
-        .padding(10)
-        // Mint's own colour, or the song's, never the colour of whatever else is on the page (r24: a Mint song sat on
-        // Stremio purple).
-        // From the image cache on the first draw when it's known, so the card doesn't change colour after it's up.
-        .background((band ?? ImageStore.shared.cachedBand(URL(string: music.art)) ?? Color(hex: 0x3EB489)).opacity(0.32), in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
-        .tvCard()
-        .task(id: music.art) {
-            guard let u = URL(string: music.art) else { band = nil; return }
-            band = await ImageStore.shared.band(u)
-        }
-    }
-    @State private var band: Color?
-}
-
 // The five keys under whatever's playing, the same on the Remote and on Playing: back, ten back, play, ten on, next.
 // Stremio's player ignores the media keys, so with it open the jumps go through its seek bar, back is the start of the
 // episode and then the one before, and next is the next episode. Five keys always, in the top row's five places: an
@@ -2761,283 +2733,6 @@ private struct SpinRing: View {
     }
 }
 
-// One row from an app's own home, by its name, with its place kept while it comes: what was last played in Mint, on
-// Playing (on the Apps tab until 2026-11-10, with Stremio's Continue watching, which is Watch's).
-struct Shelf: View {
-    @Environment(TVModel.self) var model
-    @ObservedObject var store: BrowseStore
-    let title: String
-    init(source: MediaSource, title: String) { store = .shared(source); self.title = title }
-    var row: MediaRow? { store.query.isEmpty ? store.rows.first { $0.title == title } : nil }
-    var body: some View {
-        // Always something on screen, even before the row has come, or nothing would ever ask for it.
-        VStack(alignment: .leading, spacing: 0) {
-            if let row, !row.items.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    RowHeader(title: title, route: .media(row, store.source)).padding(.leading, 20)
-                    if let since = store.keptSince { KeptNote(since: since).padding(.top, -6).padding(.bottom, 6) }
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(alignment: .top, spacing: 10) {
-                            ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source == .mint ? 128 : 112) }
-                        }
-                        .padding(.horizontal, 20)
-                    }
-                    .rowEdge()
-                    .opacity(store.keptSince != nil ? 0.55 : 1)
-                }
-            } else if store.rows.isEmpty && !store.failed && store.query.isEmpty {
-                // Its place is kept while it comes, so the rows under it don't get pushed down when it does.
-                let w: CGFloat = store.source == .mint ? 128 : 112
-                PlaceholderShelf(cardWidth: w, cardHeight: MediaCard.height(w, store.source), headed: true)
-            } else { Color.clear.frame(height: 0) }
-        }
-        // The row fades in over its waiting shapes, which it replaces in place, rather than cutting in.
-        .settledAnimation(.easeOut(duration: 0.25), value: row == nil)
-        .settledAnimation(.easeOut(duration: 0.25), value: store.keptSince != nil)
-        .task { await store.load() }
-    }
-}
-
-// MARK: - Playing
-#if os(iOS)
-struct RoutePicker: UIViewRepresentable {
-    private static weak var current: AVRoutePickerView?
-    // iOS has no call for this, so press the picker's own button. If that ever stops working, the button is still there.
-    static func open() -> Bool {
-        func button(in v: UIView) -> UIButton? {
-            if let b = v as? UIButton { return b }
-            for s in v.subviews { if let b = button(in: s) { return b } }
-            return nil
-        }
-        guard let current, let b = button(in: current) else { return false }
-        b.sendActions(for: .touchUpInside)
-        return true
-    }
-    func makeUIView(context: Context) -> AVRoutePickerView {
-        let v = AVRoutePickerView(); Self.current = v; v.clipsToBounds = true; v.tintColor = .white; v.activeTintColor = UIColor(TVLook.accent); v.prioritizesVideoDevices = false
-        return v
-    }
-    func updateUIView(_ v: AVRoutePickerView, context: Context) {}
-}
-#endif
-
-// Flick up to send the phone to the TV. Apple Music goes straight to Mint, from anywhere.
-// Anything else opens the AirPlay list, since iOS lets only the owner of the phone choose a route.
-struct FlickCard: View {
-    @Environment(TVModel.self) var model
-    // Away from home there's nothing to AirPlay to, so AirPlay isn't offered. Sending a song by name still is.
-    @ObservedObject private var reach = AirPlayReach.shared
-    @State private var title = ""
-    @State private var artist = ""
-    @State private var art: Image?
-    @State private var showPicker = false
-    func refresh() {
-        #if os(iOS)
-        guard MPMediaLibrary.authorizationStatus() == .authorized else {
-            if MPMediaLibrary.authorizationStatus() == .notDetermined { MPMediaLibrary.requestAuthorization { _ in Task { @MainActor in refresh() } } }
-            return
-        }
-        // A paused song is left over from earlier; whatever is really playing belongs to another app, so AirPlay it.
-        let player = MPMusicPlayerController.systemMusicPlayer
-        let item = player.playbackState == .playing ? player.nowPlayingItem : nil
-        title = item?.title ?? ""; artist = item?.artist ?? ""
-        if let i = item?.artwork?.image(at: CGSize(width: 500, height: 500)) { art = Image(uiImage: i) } else { art = nil }
-        #endif
-    }
-    #if os(iOS)
-    // Sent here by the Action Button or Siri, with nothing in Apple Music to send.
-    func openAirPlayIfAsked() {
-        // Only once this card is really on screen, so the request isn't used up by a hidden tab.
-        guard FlickRequest.wantsAirPlay, model.tab == 2 else { return }
-        FlickRequest.wantsAirPlay = false
-        Task {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard await AirPlayReach.shared.check() else { model.say("AirPlay can’t see the TV from here. It needs home Wi-Fi."); return }
-            // Mint comes to the front, ready to receive, while the list opens.
-            model.post("music-now")
-            if !RoutePicker.open() { showPicker = true }
-        }
-    }
-    #endif
-    func flick() {
-        model.tick()
-        #if os(iOS)
-        refresh()
-        if !title.isEmpty {
-            // The phone only stops once the TV has it, so a failed send never silences the music.
-            model.flick(FlickTarget(
-                item: MediaItem(title: title, subtitle: artist, art: "", id: "", kind: "song"), source: .mint, image: art,
-                send: ("flick", ["title": title, "artist": artist]),
-                sent: { MPMusicPlayerController.systemMusicPlayer.pause() }))
-        } else if reach.inReach {
-            // Mint comes to the front first, ready to receive.
-            model.post("music-now")
-            // By the name the TV has in the phone's AirPlay list, which is "Google TV" (it said "Mint Music", which isn't there).
-            if RoutePicker.open() { model.say("Choose Google TV") } else { showPicker = true }
-        }
-        #endif
-    }
-    // Nothing to offer when this phone is already AirPlaying to the TV, the TV is already playing the same song, or the
-    // phone isn't playing anything at all.
-    var alreadyThere: Bool {
-        if model.status?.airplay?.active == true { return true }
-        guard !title.isEmpty, let m = model.status?.music else { return false }
-        return m.title.caseInsensitiveCompare(title) == .orderedSame
-    }
-    var body: some View {
-        Group {
-            if alreadyThere || title.isEmpty {
-                // Nothing to offer, but the AirPlay picker stays in reach for the Action Button and Siri.
-                #if os(iOS)
-                // Clipped to its point: unclipped, the picker draws its whole glyph, a faint AirPlay ring on the page.
-                RoutePicker().frame(width: 1, height: 1).clipped().opacity(0.01).allowsHitTesting(false).accessibilityHidden(true)
-                #else
-                Color.clear.frame(height: 0)
-                #endif
-            } else { card }
-        }
-        .onAppear {
-            refresh()
-            #if os(iOS)
-            MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
-            openAirPlayIfAsked()
-            #endif
-        }
-        .onScreen { $0 ? reach.begin() : reach.end() }
-        #if os(iOS)
-        .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in openAirPlayIfAsked() }
-        .onChange(of: model.tab) { _, _ in openAirPlayIfAsked() }
-        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }
-        .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Google TV. AirPlay only reaches the TV on home Wi-Fi.") }
-        #endif
-        .animation(.snappy, value: alreadyThere)
-        .animation(.snappy, value: reach.inReach)
-    }
-    var card: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Color.white.opacity(0.08)
-                if let art { art.resizable().scaledToFill() } else { Image(systemName: "iphone").font(.title2).foregroundStyle(.secondary) }
-            }
-            .frame(width: 60, height: 60).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title.isEmpty ? "On this iPhone" : title).font(.body.weight(.semibold)).lineLimit(1)
-                Text(title.isEmpty ? "Tap to AirPlay" : "Tap to send to the TV").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            // No arrow key beside the words: a tap anywhere on the card sends, as the line under the title says, and the
-            // key did the very same thing (Richard, 2026-11-02: "the arrow button is unnecessary"; the 2026-11-10 logic pass).
-            #if os(iOS)
-            if reach.inReach { RoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay").transition(.opacity) }
-            #endif
-        }
-        .padding(12)
-        .tvCard()
-        .contentShape(Rectangle())
-        .onTapGesture(perform: flick)
-        // The card is the key now: said so to VoiceOver, which the arrow used to say.
-        .accessibilityAddTraits(.isButton).accessibilityHint("Sends it to the TV")
-    }
-}
-// A song's keys on one row, as Apple Music's player has them: previous, play, next together in the middle, shuffle and
-// repeat small at the row's two ends. No ten-second jumps on a song (2026-11-20). Richard, 2026-11-21, open upright:
-// "terrible" (the three keys 72-80 pt wide against the rail, shuffle and repeat on a row of their own cut off at the foot).
-struct MusicTransport: View {
-    let playing: Bool?
-    // Shuffle and repeat at the ends: Mint's alone, so the phone's own song has the three keys only.
-    var modes = true
-    // Shuffle and repeat as big as previous and next: at 44 pt they were small targets beside them (audit of 5b7b503).
-    static let key: CGFloat = 58, play: CGFloat = 68, mode: CGFloat = 58
-    var body: some View {
-        HStack(spacing: 0) {
-            if modes { PlayModes(keys: [.shuffle], size: Self.mode) }
-            Spacer(minLength: 6)
-            HStack(spacing: 16) {
-                GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: Self.key)
-                PlayKey(playing: playing, size: Self.play)
-                GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: Self.key)
-            }
-            Spacer(minLength: 6)
-            if modes { PlayModes(keys: [.repeatMode], size: Self.mode) }
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-struct NowControls: View {
-    @Environment(TVModel.self) var model
-    let music: TVStatus.Music
-    static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
-    var body: some View {
-        VStack(spacing: 10) {
-            // The bar keeps its place before there's anything true to show on it.
-            if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
-            // The one transport, the same five as for a film: one way to play anything in this app (r17).
-            // At the song's end with the TV still saying playing: an old word, shown stopped there, as a film's is (r18).
-            // Shuffle and repeat, as Mint has them, at its two ends.
-            MusicTransport(playing: model.songEnded(music) ? false : model.songPlaying(music))
-        }
-    }
-}
-// The song this phone is AirPlaying to the TV, driven through the phone's own player: it answers at once, and can be
-// moved, which Mint's report of it can't.
-struct PhoneControls: View {
-    @ObservedObject private var phone = PhonePlayer.shared
-    @State private var scrub: Double?
-    let song: PhonePlayer.Song
-    var body: some View {
-        VStack(spacing: 10) {
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                let now = min(max(scrub ?? phone.position, 0), song.duration)
-                VStack(spacing: 0) {
-                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10, label: { NowControls.clock($0 * 1000) }) { phone.seek(to: $0); MusicDetailStore.shared.moved() }
-                    HStack {
-                        Text(NowControls.clock(now * 1000))
-                        Spacer()
-                        Text("-" + NowControls.clock((song.duration - now) * 1000))
-                    }
-                    .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
-                    .padding(.top, -5)
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Position")
-                .accessibilityValue("\(NowControls.clock(now * 1000)) of \(NowControls.clock(song.duration * 1000))")
-                .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))); MusicDetailStore.shared.moved() }
-            }
-            // The same three keys, at the same sizes and gaps, as Mint's song has.
-            HStack(spacing: 16) {
-                GlassButton(icon: "backward.end.fill", label: "Previous", size: MusicTransport.key) { phone.previous() }
-                PlayKey(playing: phone.playing, size: MusicTransport.play) { phone.toggle() }
-                GlassButton(icon: "forward.end.fill", label: "Next", size: MusicTransport.key) { phone.next() }
-            }
-        }
-    }
-}
-// Where a song is, drawn as a film's is, so the two read as one thing. Mint can't be moved from here, so it only shows.
-struct MusicProgress: View {
-    let music: TVStatus.Music
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
-            let now = min(max(raw, 0), max(music.duration, 0))
-            // The same 28 pt band as a film's bar, and its times tucked 6 pt under the track itself, as a film's are.
-            VStack(spacing: 0) {
-                ProgressTrack(fraction: music.duration > 0 ? now / music.duration : 0).frame(height: 28)
-                HStack {
-                    Text(NowControls.clock(now))
-                    Spacer()
-                    Text("-" + NowControls.clock(music.duration - now))
-                }
-                .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
-                .padding(.top, -5)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Position")
-        .accessibilityValue("\(NowControls.clock(music.position)) of \(NowControls.clock(music.duration))")
-    }
-}
 // The bar itself, for songs and films alike. With nothing to show yet, just the empty track. When jumps are on their
 // way, the part the TV hasn't confirmed is drawn at half strength, from where it is to where it's going, and once
 // that's taken a while a small spinner sits at the head.
@@ -3071,340 +2766,6 @@ struct ProgressTrack: View {
         }
     }
 }
-struct PlayingTab: View {
-    @Environment(TVModel.self) var model
-    @Environment(\.paneLayout) private var panes
-    // Folded and turned on its side the display is short: the cover goes beside the names and keys, as the Remote's
-    // picture goes beside its pad, or the play key was cut off at the foot (audit of 5b7b503).
-    @Environment(\.verticalSizeClass) private var vSize
-    var sideways: Bool { !panes && vSize == .compact }
-    // The names, bar and keys under the cover, as tall as they really are: the cover takes what they leave.
-    @State private var under: CGFloat = 0
-    @ObservedObject private var phone = PhonePlayer.shared
-    @ObservedObject private var nextUp = NextUp.shared
-    @State private var query = ""
-    @State private var kind = "song"
-    // What Mint finds as he types, the same search as the Apps page's.
-    @StateObject private var found = BrowseStore(.mint)
-    @ObservedObject private var mintHome = BrowseStore.shared(.mint)
-    @ObservedObject private var lyrics = MusicDetailStore.shared.presence
-    // A play asked for and not yet showing on the TV.
-    @State private var pending = false
-    @State private var pendingWait: Task<Void, Never>?
-    @FocusState private var playFocused: Bool
-    @State private var flickHeight: CGFloat = 0
-    // How tall the page's scroll view shows, under its heading: the cover takes what the song's names, bar and keys leave
-    // of it, so the whole player is on the first screen in every posture (2026-11-21).
-    @State private var seen: CGFloat = 0
-    // Never Mint's last song while the phone plays something else of its own.
-    var music: TVStatus.Music? { model.nowMusic }
-    var otherAppIsActive: Bool { model.videoIsCurrent }
-    // Kept from the last time the app was open, until the TV says what's on now: shown, but not as live.
-    var stale: Bool { model.staleStatus }
-    var now: some View {
-        VStack(spacing: 14) {
-            // Sound from the phone that isn't music: not Mint's, whatever Mint last played.
-            if model.otherAirPlay, let a = model.status?.airplay {
-                Image(systemName: a.handoff == "youtube" ? "play.rectangle.fill" : "iphone").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
-                Text(a.title?.isEmpty == false ? a.title! : "From this iPhone").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-                Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : a.title?.isEmpty == false ? "Playing from this iPhone" : "AirPlay").font(.subheadline).foregroundStyle(.secondary)
-            } else {
-                // A film or show on the TV is the Remote's and the lip's: Music doesn't caption it, and doesn't show Mint's
-                // last song as a full player under it as though it were playing (audit of 5b7b503).
-                if phone.drives, let song = phone.song, !otherAppIsActive {
-                    songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
-                              titles(song.title, [song.artist, song.album], upNext: false), PhoneControls(song: song))
-                } else if let m = music, !otherAppIsActive {
-                    songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
-                              titles(m.title, [m.artist, m.album]), NowControls(music: m))
-                } else {
-                    ContentUnavailableView("Nothing playing", systemImage: "music.note")
-                }
-            }
-        }
-        .frame(maxWidth: .infinity)
-        // What's on changing kind (a song ends and a film starts, AirPlay comes and goes) crossfades the stack rather than
-        // swapping it in one frame: the status is set with no animation of its own (the 2026-11-10 motion pass).
-        .settledAnimation(.easeOut(duration: 0.3), value: nowKind)
-    }
-    // Which of the stacks above is up.
-    var nowKind: Int {
-        if model.otherAirPlay, model.status?.airplay != nil { return 0 }
-        if phone.drives, phone.song != nil, !otherAppIsActive { return 1 }
-        if music != nil, !otherAppIsActive { return 2 }
-        return 4
-    }
-    static func atEnd(_ s: TVStatus.Session) -> Bool {
-        guard s.playing, let p = s.position, let d = s.duration, d > 0 else { return false }
-        let ran = s.sampledAt.map { max(0, Date().timeIntervalSince1970 * 1000 - $0) } ?? 0
-        return p + ran >= d
-    }
-    // A song as one stack on one rhythm: the cover, 20 pt, its names, 18 pt, the bar with its times tucked under it, the
-    // keys, then "Show on TV" close under them. Richard, 2026-11-07, of the open-portrait Playing tab: "spacing here is
-    // fucked" (a small cover, a wide gap over the bar, the times 27 pt under it, and the next section 60 pt away).
-    @ViewBuilder func songStack(_ art: some View, _ names: some View, _ controls: some View) -> some View {
-        if sideways {
-            HStack(alignment: .center, spacing: 20) {
-                art
-                VStack(spacing: 0) {
-                    names
-                    controls.padding(.top, 12)
-                }
-                .frame(maxWidth: .infinity)
-            }
-        } else {
-            VStack(spacing: 0) {
-                art
-                VStack(spacing: 0) {
-                    names.padding(.top, 20)
-                    controls.padding(.top, 12)
-                }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in if abs(under - h) > 1 { under = h } }
-            }
-        }
-    }
-    // Until the names, bar and keys have been measured: their usual height (the names on one line each and 20 pt, the bar
-    // and its times with 12 pt, the 10 pt and the row of keys), so the first draw is already about right.
-    static let underCover: CGFloat = 20 + 54 + 12 + 40 + 10 + MusicTransport.play
-    // The foot's air under the keys.
-    static let coverFoot: CGFloat = 16
-    func cover(_ c: some View) -> some View {
-        // As wide as the column, and as tall as the screen leaves it once the names, bar and keys have their measured room,
-        // never a stamp (r35): Richard, 2026-11-21, of a 280 pt cover inset in a 336 pt column, "terrible". Beside them,
-        // folded on its side, as tall as the page shows.
-        let below = sideways ? 0 : (under > 0 ? under : Self.underCover)
-        let room = seen > 0 ? max(120, seen - below - Self.coverFoot - (panes ? Self.paneTop : 0)) : .infinity
-        return c.aspectRatio(1, contentMode: .fit).frame(maxWidth: room, maxHeight: room)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
-            .frame(maxWidth: sideways ? nil : .infinity)
-    }
-    // The song's name and who it's by, at the column's left under the cover, as Apple Music's player sets them; Mint's
-    // Up next beside them, where his thumb finds the queue.
-    func titles(_ title: String, _ more: [String], upNext: Bool = true) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.title2.weight(.bold)).lineLimit(2)
-                Text(more.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if upNext { PlayModes(keys: [.upNext], size: MusicTransport.mode) }
-        }
-        .contentTransition(.opacity)
-        .settledAnimation(.easeInOut(duration: 0.25), value: title)
-    }
-    // Brings Mint's screen for this song (art, lyrics) to the front of the TV; it sends nothing, the song is already the
-    // TV's. So it shows whenever there is a song and Mint isn't the app on the TV's screen, playing or paused: the old
-    // test hid it exactly while the song played behind the launcher, which is when he reaches for it, because "Show on
-    // TV" had been read as sending the song (r21). Said in full, so it can't be read that way again (layout logic
-    // review, 2026-11-09).
-    @ViewBuilder var showOnTV: some View {
-        if model.status?.app != "com.codex.musicwebtv", model.nowMusic != nil || phone.drives {
-            Button { model.tick(); model.post("music-now") } label: { Label("Show the song on the TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-        }
-    }
-    // Mint's Recently played lives here, off the Apps tab (Richard's choice, 2026-11-10): first under what's on when that's
-    // music or nothing, and after what's next and what was flicked under a film. Its place is kept while Mint's home
-    // comes, and closed if Mint couldn't be asked or has no such row, so no gap is left for it.
-    static let recentTitle = "Recently played"
-    // Where both panes begin, under the page's heading: one top line for the cover and the right pane's first heading.
-    static let paneTop: CGFloat = 6
-    var showsRecent: Bool {
-        mintHome.rows.isEmpty ? !mintHome.failed : mintHome.rows.contains { $0.title == Self.recentTitle && !$0.items.isEmpty }
-    }
-    var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
-    // Shuffle only means something for these; a song or an album plays as it is.
-    var shuffles: Bool { ["artist", "playlist", "station"].contains(kind) }
-    // Songs and albums come back from the search; the kind picked leads.
-    var results: [MediaRow] {
-        guard ["song", "album"].contains(kind), trimmed.count >= 2 else { return [] }
-        return (kind == "song" ? ["Songs", "Albums"] : ["Albums", "Songs"]).compactMap { t in found.rows.first { $0.title == t } }
-    }
-    func play(shuffle: Bool = false) {
-        guard !trimmed.isEmpty else { return }
-        let before = model.nowMusic?.title
-        model.post("music", ["query": trimmed, "kind": kind, "shuffle": shuffle])
-        // The field shows it's on its way until the TV's song changes, or long enough that it isn't coming.
-        pending = true
-        pendingWait?.cancel()
-        pendingWait = Task {
-            for _ in 0..<7 {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                if Task.isCancelled { return }
-                await model.load()
-                if model.nowMusic?.title != before { query = ""; break }
-            }
-            withAnimation(.easeOut(duration: 0.2)) { pending = false }
-        }
-    }
-    // The song the words and the queue under it are for, and whether it's playing: the phone's own when it drives the
-    // TV over AirPlay, else Mint's.
-    var extras: (song: String, playing: Bool, pausedAt: Int)? {
-        if phone.drives, let s = phone.song { return (s.title, phone.playing, Int(phone.position)) }
-        if let m = music { return (m.title, model.songPlaying(m) == true, Int(m.position / 1000)) }
-        return nil
-    }
-    var send: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            // Mostly nothing but a 1 pt picker: its place in the stack would leave 19 pt above the first heading, so while
-            // it has no card it takes none (the right pane's first line is the cover's line).
-            FlickCard()
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { flickHeight = $0 }
-            // (A stack takes no negative size, so the empty picker's gap is drawn back off the top of what follows.)
-            VStack(alignment: .leading, spacing: 24) {
-            // Mint's own screen, here: the song's words, the sung line leading, and what plays after it. First under
-            // what's on (open flat, level with the cover), ahead of what he played before.
-            // On the page only when Mint has words or a queue for this song, so a song with neither leaves it as it was.
-            if extras != nil, lyrics.shows { MusicExtras(tall: panes) }
-            // What he last played, first under what's on: a cover tapped has it playing again, before any typing. The row
-            // runs to the page's edges, as rows do, out of this stack's 20 pt.
-            if showsRecent { Shelf(source: .mint, title: Self.recentTitle).padding(.horizontal, -20) }
-            VStack(alignment: .leading, spacing: 10) {
-                RowTitle("Play on TV").padding(.bottom, -4)
-                Picker("Kind", selection: $kind) {
-                    ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist"), ("Station", "station")], id: \.1) { Text($0.0).tag($0.1) }
-                }
-                .pickerStyle(.segmented).labelsHidden()
-                .haptic(.tick, trigger: kind)
-                HStack(spacing: 10) {
-                    HStack(spacing: 8) {
-                        TextField("What should play?", text: $query).autocorrectionDisabled().submitLabel(.go).onSubmit { play() }
-                            .focused($playFocused).hidesTabBar(while: playFocused, "play")
-                        if pending { ProgressView().controlSize(.small).transition(.opacity) }
-                    }
-                    .padding(.horizontal, 16).frame(height: 50).glassEffect(.regular, in: Capsule())
-                    if shuffles {
-                        Button { play(shuffle: true) } label: { Image(systemName: "shuffle").font(.system(size: 18, weight: .medium)).frame(width: 50, height: 50).contentShape(Circle()) }
-                            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).disabled(trimmed.isEmpty).opacity(trimmed.isEmpty ? 0.45 : 1).accessibilityLabel("Shuffle")
-                            .transition(.opacity)
-                    }
-                }
-                .animation(.snappy, value: shuffles)
-                .animation(.easeOut(duration: 0.2), value: pending)
-            }
-            if results.isEmpty {
-                // Mint's other rows, in the same shape as Recently played above the field: one kind of shelf on the page.
-                ForEach(Array(mintHome.rows.filter { $0.title != Self.recentTitle && !$0.items.isEmpty }.prefix(2))) { row in
-                    Shelf(source: .mint, title: row.title).padding(.horizontal, -20)
-                        .transition(.opacity)
-                }
-            }
-            ForEach(results) { row in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(row.title).font(.headline)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(alignment: .top, spacing: 10) {
-                            ForEach(row.items) { item in FlickCardButton(item: item, source: .mint, width: 112) }
-                        }
-                        .scrollTargetLayout()
-                    }
-                    .rowEdge()
-                }
-                .transition(.opacity.combined(with: .offset(y: 10)))
-            }
-            }
-            .padding(.top, flickHeight <= 2 ? -(flickHeight + 24) : 0)
-        }
-        .task { if mintHome.rows.isEmpty { await mintHome.load() } }
-        // The asking for the words and the queue, which draws nothing and takes no room.
-        .background { if let e = extras { MusicDetailWatch(song: e.song, playing: e.playing, pausedAt: e.pausedAt) } }
-        .settledAnimation(.easeOut(duration: 0.25), value: lyrics.shows)
-        .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
-        // Mint's rows arriving, and Recently played's place closing if Mint has none, fade rather than cut.
-        .settledAnimation(.easeOut(duration: 0.25), value: mintHome.rows.map(\.title))
-        .settledAnimation(.easeOut(duration: 0.25), value: showsRecent)
-        .onChange(of: query) { _, _ in
-            if pending { pendingWait?.cancel(); pending = false }
-            guard trimmed.count >= 2 else { return }
-            found.query = trimmed; found.searchSoon()
-        }
-        // The TV's song changing is the answer to a play.
-        .onChange(of: model.nowMusic?.title) { _, _ in
-            if pending { pendingWait?.cancel(); withAnimation(.easeOut(duration: 0.2)) { pending = false }; query = "" }
-        }
-    }
-    // With a film, show or video on, what's under it is what comes after it: the next episode, ready to flick, and what was
-    // flicked and played lately. Never what's already on again, and never Continue watching, which is Watch's first row
-    // (the 11-10 shelf ruling; gate 276: under a YouTube video its first card was the same video). Never the music
-    // search either, which is only for when Mint is what's on or nothing is.
-    @ObservedObject private var stremio = BrowseStore.shared(.stremio)
-    // Music is music's alone now: a film's episodes and what comes next are the Remote's.
-    var watching: Bool { false }
-    // A show on, with its episodes in the right pane.
-    var showsEpisodes: Bool { model.status?.session?.pkg == "com.stremio.one" && nextUp.series != nil }
-    // Open flat, Recently played goes under the transport on the left, so the picture's pane isn't two-thirds empty
-    // beside a packed episode list (gate 276).
-    var upNext: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            // A show: its episodes, the one on marked Playing and the next Up next, in view, rather than a lone card
-            // of the same poster again (Richard, 2026-11-05: "again looks bad").
-            if showsEpisodes {
-                ShowEpisodes(bringsIntoView: panes).padding(.horizontal, 20)
-            }
-            RecentRow()
-            // Music is still a tap away with a film on: the search isn't offered here, his last albums are. Open flat
-            // beside a show's episodes it goes under the transport on the left; under a film or video it stays here, so
-            // neither pane is left empty (gate 276, second pass).
-            if showsRecent && !(panes && showsEpisodes) { Shelf(source: .mint, title: Self.recentTitle) }
-            // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri. Last, so its
-            // empty place never pushes the episodes down below the picture's top line (r21).
-            FlickCard().padding(.horizontal, 20)
-        }
-        .padding(.bottom, panes ? 20 : 0)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    // The left pane open flat: what's on, and under a film, show or video, what he last played in Mint.
-    var nowPane: some View {
-        VStack(alignment: .leading, spacing: 32) {
-            now.padding(.horizontal, 20)
-            if watching && showsEpisodes && showsRecent { Shelf(source: .mint, title: Self.recentTitle).transition(.opacity) }
-        }
-        .padding(.top, Self.paneTop).padding(.bottom, 20)
-        .settledAnimation(.easeOut(duration: 0.3), value: watching)
-    }
-    var body: some View {
-        let _ = SwipeLog.mark("body playing")
-        Group {
-            if panes {
-                FoldSplit { ScrollView { nowPane }.modifier(SeenHeight(seen: $seen)).backToTop() } right: {
-                    // The same 20 pt from the top as the picture beside it, so the picture's top and "Season" sit level
-                    // (r21; gate 276: the right pane was 40 pt down, the picture's top 20 above the season chips).
-                    QueueOr(content: ScrollView { Group { if watching { upNext.padding(.top, Self.paneTop) } else { send.padding(.horizontal, 20).padding(.top, Self.paneTop).padding(.bottom, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop().modifier(PaneFoot()))
-                }
-            } else {
-                // The rows under a film run to the screen's edges, as rows do everywhere else.
-                ScrollView {
-                    // One section break between what's on and what's under it, a little more than the stack's own steps.
-                    VStack(spacing: 32) {
-                        // 20 pt in, the page title's own inset, so everything starts on the title's line (review of
-                        // dfd490e: the content sat 3 pt left of "Playing").
-                        now.padding(.horizontal, 20)
-                        // What's under it follows what's on, with the same fade.
-                        Group { if watching { upNext } else { send.padding(.horizontal, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching)
-                    }
-                    .padding(.bottom, 16)
-                }
-                .modifier(SeenHeight(seen: $seen))
-                .backToTop()
-            }
-        }
-        .environment(\.keysInScroll, true)
-        .modifier(QueueSheetHost(panes: panes))
-        // Where he is in Stremio, for what's under a show while it's on.
-        .task { await stremio.load() }
-    }
-}
-
-// How tall a scroll view shows between its insets (the heading above, the foot below), for a page that fits itself to it.
-// The keyboard's inset is left out (capped at a home bar's room), so the cover doesn't shrink while he types under it.
-private struct SeenHeight: ViewModifier {
-    @Binding var seen: CGFloat
-    func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height - $0.contentInsets.top - min($0.contentInsets.bottom, 40) } action: { _, h in
-            if abs(seen - h) > 1 { seen = h }
-        }
-    }
-}
-
 // MARK: - Films
 struct FilmCard: View {
     @Environment(TVModel.self) var model
