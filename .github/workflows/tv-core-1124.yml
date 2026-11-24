@@ -95,12 +95,12 @@ jobs:
             $D "$DEVICE" drag 0.4 0.8 0.4 0.45 0.35 || true; sleep 1.5; $D "$DEVICE" drag 0.4 0.8 0.4 0.3 0.12 || true; sleep 2; $D "$DEVICE" drag 0.4 0.3 0.4 0.9 0.15 || true; }
           throwShelf() {
             sleep 10
-            local at x y; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            local at x y; at=$(grep -o 'what=card&x=0\.[0-9]*&y=0\.[0-9]*' /tmp/tv-home-applied.log 2>/dev/null | grep -v 'x=0\.000' | tail -1)
             if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.25" | bc -l) 0.12 0 || echo "path failed"; else echo "no card position"; fi
           }
           throwTitle() {
             sleep 10
-            local at x y; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            local at x y; at=$(grep -o 'what=card&x=0\.[0-9]*&y=0\.[0-9]*' /tmp/tv-home-applied.log 2>/dev/null | grep -v 'x=0\.000' | tail -1)
             # A real fast throw: a still hold, then up a third of the screen in 0.12 s, let go moving.
             if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.33" | bc -l) 0.12 0 || echo "path failed"; else echo "no card position"; fi
           }
