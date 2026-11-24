@@ -416,10 +416,10 @@ final class TVModel {
     // shots, the tab he last left it on), it's Status with Settings pushed.
     // Four tabs (2026-11-20, "never a more thing ever"): Watch 3, Remote 0, Music 2, Search 6. Apps (1, once 4) is a row on
     // the Remote; Status (5) and Settings (9) are pages behind the lip's gear, pushed on the tab he is on.
-    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return [0, 2, 3, 6].contains(t) ? t : t == 1 || t == 4 ? 0 : 3 }() {
+    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return [0, 3, 6].contains(t) ? t : t == 1 || t == 2 || t == 4 ? 0 : 3 }() {
         didSet {
-            if tab == 9 || tab == 5 { let box = tab == 5; tab = [0, 2, 3, 6].contains(oldValue) ? oldValue : 3; settingsBox = box; settingsAsked += 1; return }
-            if tab == 1 || tab == 4 { tab = 0; return }
+            if tab == 9 || tab == 5 { let box = tab == 5; tab = [0, 3, 6].contains(oldValue) ? oldValue : 3; settingsBox = box; settingsAsked += 1; return }
+            if tab == 1 || tab == 2 || tab == 4 { tab = 0; return }
             if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() }
         }
     }
