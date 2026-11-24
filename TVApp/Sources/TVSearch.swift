@@ -273,15 +273,8 @@ final class SearchStore: ObservableObject {
             answers[q] = a
             arrived(q)
         }
-        Task {
-            let d = await TVBridge.data(TVBridge.url("/api/tv/mint?q=\(enc)"), timeout: 12)
-            var a = answers[q] ?? Answer()
-            let m = await items(d)
-            a = answers[q] ?? a
-            a.music = m ?? a.music ?? []
-            answers[q] = a
-            arrived(q)
-        }
+        // Titles only (2026-11-24: flicking, the remote and streams): Mint's songs are no longer asked for.
+        do { var a = answers[q] ?? Answer(); if a.music == nil { a.music = [] }; answers[q] = a }
         Task {
             // YouTube's own results, from a Mac that has them; one that doesn't simply has none to give.
             let d = await TVBridge.data(TVBridge.url("/api/tv/youtube-search?q=\(enc)"), timeout: 8)
@@ -514,9 +507,6 @@ enum Mine {
             for (n, i) in r.items.enumerated() { put(i.stremioRef?.imdb ?? i.id, base - min(n, 10)) }
         }
         for (n, f) in RecentFlicks.shared.list.enumerated() { put(f.imdb, 30 - n) }
-        for r in BrowseStore.shared(.mint).rows where r.title == "Recently played" {
-            for (n, i) in r.items.enumerated() { put(i.id, 20 - min(n, 10)); put(SearchMatch.fold(i.title) + "|music", 20 - min(n, 10)) }
-        }
         return w
     }
     // Everything already on the phone, his own first.
@@ -525,7 +515,6 @@ enum Mine {
         out += RecentFlicks.shared.list.map { ($0.item, $0.type == "series" ? .show : .film) }
         for r in BrowseStore.shared(.stremio).rows { out += r.items.map { ($0, nil) } }
         for t in ["series", "movie"] { for r in BrowseStore.discover(t).rows { out += r.items.map { ($0, nil) } } }
-        for r in BrowseStore.shared(.mint).rows { out += r.items.map { ($0, .music) } }
         return out
     }
 }
@@ -607,7 +596,7 @@ struct SearchPage: View {
         HStack(spacing: 8) {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
-            TextField("Shows, films, music, apps", text: $draft.text)
+            TextField("Shows, films, apps", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().textInputAutocapitalization(.never)
                 .submitLabel(link ? .send : .search)
                 // The bar follows the keyboard only once it has settled: a focus that flickers on and off as the page lays
@@ -677,7 +666,7 @@ struct SearchPage: View {
 // Every other search field in the app: it looks the same and opens the one search.
 struct OpensSearchField: View {
     @Environment(TVModel.self) var model
-    var prompt = "Shows, films, music, apps"
+    var prompt = "Shows, films, apps"
     var body: some View {
         Button { SearchStore.show(model, text: "") } label: {
             HStack(spacing: 8) {

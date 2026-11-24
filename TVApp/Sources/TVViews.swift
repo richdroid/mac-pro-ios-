@@ -1559,11 +1559,14 @@ struct RemoteTab: View {
     // Open upright, not typing: the picture beside the pad, then the bar, the transport, the episode line, the keys'
     // row, volume, and the apps at the foot. Every place is kept whatever is on, so nothing moves as a show starts.
     func uprightColumn(width: CGFloat, height: CGFloat, margin: CGFloat = 20) -> some View {
-        var grid = RemoteGrid.keys(width - 2 * margin, maxKey: 72)
         // The page's own width and edges: the title, the picture, the keys and the apps start on one line (the column
         // was 520 pt in the middle of a 669 pt screen: three left edges, gate on b97a5e7).
-        grid.width = max(grid.width, width - 2 * margin)
-        grid.play = min(grid.key + 8, 80)
+        func gridFor(_ k: CGFloat) -> RemoteGrid {
+            var g = RemoteGrid.keys(width - 2 * margin, maxKey: k)
+            g.width = max(g.width, width - 2 * margin)
+            g.play = min(g.key + 8, 104)
+            return g
+        }
         // Folded there is less height: the same rows, 10 pt apart rather than 14.
         let gap: CGFloat = height < 600 ? 10 : 14
         let strip = AppStrip.tile * TVLook.bannerSize.height / TVLook.bannerSize.width + 8
@@ -1571,8 +1574,16 @@ struct RemoteTab: View {
         // episode line. It was two (the picture over the pad when nothing was on), and the first reading, about 1.5 s after
         // opening, moved everything from one to the other in a spring (audit of 5b7b503). What's on only fills the places.
         let rows: CGFloat = 4
-        let fixed = grid.key + Self.barSlot + grid.play + 46 + strip + 8
-        let room = max(0, height - fixed - gap * rows)
+        func roomFor(_ g: RemoteGrid) -> CGFloat { max(0, height - (g.key + Self.barSlot + g.play + 46 + strip + 8) - gap * rows) }
+        // The spare height goes to the controls, not to gaps (ruling b): the keys from 72 down only until the pad has
+        // 110 pt, then up (to 96) into whatever the pad, capped by the row's width beside the picture, can't use. With
+        // volume gone (11-24) that room was an empty band folded.
+        let dMax = ((gridFor(72).width - 16) * 9 / 25).rounded(.down)
+        var k: CGFloat = 72
+        while k > 52, roomFor(gridFor(k)) < 110 { k -= 2 }
+        while k < 96, roomFor(gridFor(k + 2)) >= dMax { k += 2 }
+        let grid = gridFor(k)
+        let room = roomFor(grid)
         let w = grid.width
         let d = max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
         let pw = min(w - 16 - d, d * 16 / 9)
@@ -1862,7 +1873,7 @@ struct RemoteGrid: Equatable {
     // The keys' own room with the transport under them: the two rows (the keys, a gap, the transport with ⏯ bigger).
     var rows: CGFloat { key + 12 + play }
     static let sideGap: CGFloat = 14, volGap: CGFloat = 8, barH: CGFloat = 6
-    static var volRoom: CGFloat { volGap + barH }
+    static var volRoom: CGFloat { 0 }  // volume went (11-24); its room goes to the pad
     // The widest the column ever is, so a wide screen never spreads the keys; the least a key is where five fit.
     static let most: CGFloat = 520, least: CGFloat = 64
     var padWidth: CGFloat { volBelow ? min(pad, width) : max(60, min(pad, width - 2 * key - 2 * Self.sideGap)) }
@@ -1878,11 +1889,10 @@ struct RemoteGrid: Equatable {
     }
     // Given the height left for the pad and the volume, choose where the volume goes and how big the pad is: the ring
     // as large as fits (100 pt at least, the column's width at most).
+    // No volume any more (11-24): the pad takes the whole room, up to the column's width.
     mutating func place(room: CGFloat) {
-        let side = min(width - 2 * key - 2 * Self.sideGap, room - Self.volRoom)
-        let below = min(width, room - 14 - key)
-        if below > side * 1.2, below >= 100 { volBelow = true; padSet = below.rounded(.down) }
-        else { volBelow = false; padSet = max(100, side.rounded(.down)) }
+        volBelow = true
+        padSet = max(100, min(width, room).rounded(.down))
     }
     // A column with a height to fill: the keys take what the width gives but leave the pad room (about two and a half
     // keys of it; never under 64 pt for that where the width gives 64), and the pad takes all the rest. The gaps are
