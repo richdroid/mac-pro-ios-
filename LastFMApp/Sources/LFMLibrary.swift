@@ -175,7 +175,7 @@ struct LibraryTab: View {
                 .autocorrectionDisabled()
                 .foregroundStyle(.white)
             if !m.query.isEmpty {
-                Button { m.query = "" } label: { Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(S.soft).frame(width: 44, height: 44) }
+                Button { m.query = "" } label: { Image(systemName: "xmark.circle.fill").font(.zune(.body)).foregroundStyle(S.soft).frame(width: 44, height: 44) }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Clear")
             }
@@ -191,7 +191,7 @@ struct LibraryTab: View {
         let limit = self.shown[sh, default: 200]
         let list = isLoved ? [] : m.sorted(kind)
         HStack(alignment: .firstTextBaseline) {
-            Text(isLoved ? "\(number(m.loved.count)) loved" : "\(number(list.count)) \(kind.noun)").font(.system(.title2, weight: .bold)).foregroundStyle(.white)
+            Text(isLoved ? "\(number(m.loved.count)) loved" : "\(number(list.count)) \(kind.noun)").font(.zune(.title2, .bold)).foregroundStyle(.white)
             Spacer(minLength: 8)
             if !isLoved {
                 Menu {
@@ -199,7 +199,7 @@ struct LibraryTab: View {
                         ForEach(LibSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                 } label: {
-                    Label(m.sort.rawValue, systemImage: "arrow.up.arrow.down").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                    Label(m.sort.rawValue, systemImage: "arrow.up.arrow.down").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 14).frame(height: 36)
                         .glassEffect(.regular, in: Capsule())
                 }
@@ -208,7 +208,7 @@ struct LibraryTab: View {
         .padding(.horizontal, S.margin).padding(.bottom, S.head)
         if isLoved {
             ForEach(m.loved) { l in lovedRow(l).padding(.horizontal, S.margin) }
-            if m.loved.isEmpty { Text("Songs you love on Last.fm show here.").font(.body).foregroundStyle(S.soft).padding(.horizontal, S.margin).padding(.top, S.head) }
+            if m.loved.isEmpty { Text("Songs you love on Last.fm show here.").font(.zune(.body)).foregroundStyle(S.soft).padding(.horizontal, S.margin).padding(.top, S.head) }
         } else {
             // His plays as a bar on every row against the shelf's most played, so a wide row isn't a name, a gulf and a
             // number (review 2026-11-14, item 17).
@@ -220,7 +220,7 @@ struct LibraryTab: View {
             }
             if m.lists[kind] == nil { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
             // Nothing yet (the first read hasn't reached any plays): said, not a blank shelf.
-            else if list.isEmpty { Text(HistorySync.shared.complete ? "Nothing here yet." : "Your \(kind.noun) show here as your history is read.").font(.body).foregroundStyle(S.soft).padding(.horizontal, S.margin).padding(.top, S.head) }
+            else if list.isEmpty { Text(HistorySync.shared.complete ? "Nothing here yet." : "Your \(kind.noun) show here as your history is read.").font(.zune(.body)).foregroundStyle(S.soft).padding(.horizontal, S.margin).padding(.top, S.head) }
         }
     }
     private func trailing(_ e: Entry) -> String? {
@@ -237,17 +237,17 @@ struct LibraryTab: View {
             HStack(spacing: S.gap) {
                 ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("loved|\(s.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(l.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
-                    Text(l.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
+                    Text(l.title).font(.zune(.title3)).foregroundStyle(.white).lineLimit(2)
+                    Text(l.artist).font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: S.pair / 2) {
-                    Text(n.map(number) ?? "–").font(.body.weight(.medium)).monospacedDigit().foregroundStyle(.white)
+                    Text(n.map(number) ?? "–").font(.zune(.body, .medium)).monospacedDigit().foregroundStyle(.white)
                     HStack(spacing: 4) {
-                        Image(systemName: "heart.fill").font(.system(size: 9)).foregroundStyle(S.accent)
+                        Image(systemName: "heart.fill").font(.zune(size: 9)).foregroundStyle(S.accent)
                         if let w = l.when { Text(ago(Int(w.timeIntervalSince1970))) }
                     }
-                    .font(.caption).foregroundStyle(S.soft)
+                    .font(.zune(.caption)).foregroundStyle(S.soft)
                 }
                 .fixedSize()
                 .accessibilityElement(children: .combine)
@@ -263,8 +263,8 @@ struct LibraryTab: View {
         let groups = Kind.allCases.map { ($0, m.search($0)) }.filter { !$0.1.isEmpty }
         if groups.isEmpty {
             VStack(spacing: S.pair) {
-                Image(systemName: "magnifyingglass").font(.largeTitle.weight(.light)).foregroundStyle(S.soft)
-                Text("Nothing you've played matches").font(.body).foregroundStyle(.white)
+                Image(systemName: "magnifyingglass").font(.zune(.largeTitle, .light)).foregroundStyle(S.soft)
+                Text("Nothing you've played matches").font(.zune(.body)).foregroundStyle(.white)
             }
             .frame(maxWidth: .infinity).padding(.top, S.section)
         }
@@ -277,7 +277,7 @@ struct LibraryTab: View {
                 }
                 if list.count > (k == .tracks ? 8 : 4) {
                     Button { withAnimation(.smooth) { if open { grown.remove(k) } else { grown.insert(k) } } } label: {
-                        Text(open ? "Show fewer" : "Show all \(number(min(list.count, 200)))").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        Text(open ? "Show fewer" : "Show all \(number(min(list.count, 200)))").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 44)
                             .glassEffect(.regular, in: Capsule())
                     }

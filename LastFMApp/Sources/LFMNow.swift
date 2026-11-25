@@ -10,8 +10,8 @@ struct TodayFigures: View {
         let today = store.today
         VStack(alignment: .leading, spacing: S.inner) {
             VStack(alignment: .leading, spacing: S.pair) {
-                Counting(today.count, key: "today").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
-                Text(today.count == 1 ? "play" : "plays").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                Counting(today.count, key: "today").font(.zune(size: 64, .thin)).monospacedDigit().foregroundStyle(.white)
+                Text(today.count == 1 ? "play" : "plays").font(.zune(.title3, .light)).foregroundStyle(S.soft)
             }
             .accessibilityElement(children: .combine)
             FigureGrid(items: [
@@ -41,12 +41,12 @@ ArtView(s.art, px: 300, corner: 10).frame(width: 80).zoomSource("last|\(s.id)")
                         Text(when(s.date))
                     }
                     .lineLimit(1)
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
-                    Text(s.title).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(2)
-                    Text(s.artist).font(.body).foregroundStyle(S.soft).lineLimit(2)
+                    .font(.zune(.subheadline, .semibold)).foregroundStyle(.white.opacity(0.85))
+                    Text(s.title).font(.zune(.title3, .bold)).foregroundStyle(.white).lineLimit(2)
+                    Text(s.artist).font(.zune(.body)).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
+                Image(systemName: "chevron.right").font(.zune(.subheadline, .semibold)).foregroundStyle(S.soft)
             }
             .card()
         }
@@ -69,11 +69,11 @@ struct WeekGlance: View {
                         let up = p.delta >= 0
                         VStack(alignment: .leading, spacing: S.pair) {
                             HStack(spacing: 4) {
-                                Image(systemName: up ? "arrow.up.right" : "arrow.down.right").font(.body.weight(.semibold))
-                                Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit()
+                                Image(systemName: up ? "arrow.up.right" : "arrow.down.right").font(.zune(.body, .semibold))
+                                Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.zune(size: 30, .light)).monospacedDigit()
                             }
                             .foregroundStyle(.white)
-                            Text(up ? "more than usual" : "less than usual").font(.subheadline).foregroundStyle(S.soft)
+                            Text(up ? "more than usual" : "less than usual").font(.zune(.subheadline)).foregroundStyle(S.soft)
                         }
                         .accessibilityElement(children: .combine)
                         Spacer(minLength: 0)
@@ -104,7 +104,7 @@ struct TroubleNote: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "wifi.exclamationmark").foregroundStyle(S.soft)
-            Text("Last.fm isn't answering. Showing what it last said.").font(.subheadline).foregroundStyle(.white)
+            Text("Last.fm isn't answering. Showing what it last said.").font(.zune(.subheadline)).foregroundStyle(.white)
         }
         .padding(.horizontal, S.inner).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -271,15 +271,15 @@ struct NowHero: View {
                 }
             }
             // Zune's label: small bold capitals. Then the song large and light, the artist under it in weight.
-            .font(.caption.weight(.bold)).textCase(.uppercase).tracking(0.8)
+            .font(.zune(.caption, .bold)).textCase(.uppercase).tracking(0.8)
             .foregroundStyle(.white.opacity(0.85))
             .padding(.bottom, S.pair)
-            Text(s.title).font(.system(.largeTitle, weight: .light)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.8)
-            Text(s.artist).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-            if !s.album.isEmpty { Text(s.album).font(.body).foregroundStyle(S.soft).lineLimit(2) }
+            Text(s.title).font(.zune(.largeTitle, .light)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.8)
+            Text(s.artist).font(.zune(.title3, .semibold)).foregroundStyle(.white).lineLimit(2)
+            if !s.album.isEmpty { Text(s.album).font(.zune(.body)).foregroundStyle(S.soft).lineLimit(2) }
             // A line of its own, its place held so the page doesn't jump when it's known.
             if line {
-                Text(depthLine(s, playing) ?? " ").font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                Text(depthLine(s, playing) ?? " ").font(.zune(.subheadline, .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1).padding(.top, S.pair)
             }
         }
@@ -328,7 +328,7 @@ struct DaySection: View {
                         }
                         .frame(height: h, alignment: .bottom)
                         ForEach([0, 6, 12, 18], id: \.self) { k in
-                            Text(Self.hourLabel((start + k) % 24)).font(.caption2.weight(.medium)).foregroundStyle(S.soft)
+                            Text(Self.hourLabel((start + k) % 24)).font(.zune(.caption2, .medium)).foregroundStyle(S.soft)
                                 .fixedSize()
                                 .offset(x: CGFloat(k) * (w + gap), y: h + 6)
                         }
@@ -420,11 +420,11 @@ struct DaySection: View {
                 }
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(list.isEmpty ? "Nothing played" : "\(list.count) \(list.count == 1 ? "play" : "plays")").font(.subheadline.weight(.semibold))
-                Text(list.last.map { "\($0.artist)" } ?? Self.hourLabel(hour)).font(.footnote).foregroundStyle(S.soft).lineLimit(1)
+                Text(list.isEmpty ? "Nothing played" : "\(list.count) \(list.count == 1 ? "play" : "plays")").font(.zune(.subheadline, .semibold))
+                Text(list.last.map { "\($0.artist)" } ?? Self.hourLabel(hour)).font(.zune(.footnote)).foregroundStyle(S.soft).lineLimit(1)
             }
             Spacer(minLength: 0)
-            Text(Self.hourLabel(hour)).font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(S.soft)
+            Text(Self.hourLabel(hour)).font(.zune(.subheadline, .medium)).monospacedDigit().foregroundStyle(S.soft)
         }
         .padding(10)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -465,7 +465,7 @@ struct RecentSection: View {
         LazyVStack(alignment: .leading, spacing: 0) {
             SectionHead(text: skipFirst ? "earlier" : "recent").padding(.bottom, S.head)
             ForEach(days, id: \.self) { day in
-                Text(dayName(day)).font(.headline).foregroundStyle(S.soft)
+                Text(dayName(day)).font(.zune(.headline)).foregroundStyle(S.soft)
                     .padding(.top, day == days.first ? 0 : S.inner).padding(.bottom, S.pair)
                 ForEach(items(groups[day] ?? [])) { item in
                     switch item {
@@ -501,21 +501,21 @@ struct RunRow: View {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: S.gap) {
                             VStack(alignment: .leading, spacing: S.pair / 2) {
-                                Text(newest.album).font(.system(.title3)).foregroundStyle(.white).lineLimit(1)
-                                Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
+                                Text(newest.album).font(.zune(.title3)).foregroundStyle(.white).lineLimit(1)
+                                Text("\(run.count) songs · \(newest.artist)").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
                             }
                             .fixedSize()
                             Spacer(minLength: 8)
-                            Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).fixedSize()
+                            Text(Self.span(oldest.date, newest.date)).font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).fixedSize()
                         }
                         VStack(alignment: .leading, spacing: S.pair / 2) {
-                            Text(newest.album).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
-                            Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(2)
-                            Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.85)
+                            Text(newest.album).font(.zune(.title3)).foregroundStyle(.white).lineLimit(2)
+                            Text("\(run.count) songs · \(newest.artist)").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).lineLimit(2)
+                            Text(Self.span(oldest.date, newest.date)).font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.85)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Image(systemName: "chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                    Image(systemName: "chevron.down").font(.zune(.footnote, .semibold)).foregroundStyle(.white.opacity(0.85))
                         .rotationEffect(.degrees(open ? 180 : 0))
                 }
                 .padding(.vertical, S.row / 2)
@@ -544,12 +544,12 @@ struct TrackRow: View {
             HStack(spacing: S.gap) {
                 ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("recent|\(s.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(s.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
-                    Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
+                    Text(s.title).font(.zune(.title3)).foregroundStyle(.white).lineLimit(2)
+                    Text(s.artist).font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(2)
                 }
                 Spacer(minLength: 8)
-                if s.loved { Image(systemName: "heart.fill").font(.footnote).foregroundStyle(S.accent).accessibilityLabel("Loved") }
-                Text(s.date?.formatted(date: .omitted, time: .shortened) ?? "").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                if s.loved { Image(systemName: "heart.fill").font(.zune(.footnote)).foregroundStyle(S.accent).accessibilityLabel("Loved") }
+                Text(s.date?.formatted(date: .omitted, time: .shortened) ?? "").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft)
             }
             .padding(.vertical, S.row / 2)
             .contentShape(Rectangle())

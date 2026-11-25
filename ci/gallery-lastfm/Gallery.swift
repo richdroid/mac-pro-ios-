@@ -36,6 +36,8 @@ enum LFMSample {
         if long { song.title = "An Extraordinarily Long Song Title (Extended Version)"; song.artist = "The Artist With A Very Long Name Indeed" }
         e.song = song
         e.playing = playing
+        // Last.fm's numbers for the song, as the widget shows them (everyone's listeners, his plays).
+        e.listeners = 1_240_000; e.everyone = 9_800_000; e.yours = 48
         e.songAt = playing ? nil : now.addingTimeInterval(-14 * 60)
         e.artists = [(0, 86), (4, 51), (7, 33)].compactMap { i, n in
             guard i < albums.count else { return nil }

@@ -27,7 +27,8 @@ enum S {
     static let mosaic: CGFloat = 4       // between the covers of a mosaic
     static let ground = Color(red: 0.035, green: 0.035, blue: 0.045)
     static let soft = Color.white.opacity(0.66)   // second lines (an artist under a title), never a footnote
-    static let accent = Color(red: 1.0, green: 0.36, blue: 0.36)
+    // Zune's magenta (the gradient's start, Z.accent): love, the streak, the history bars. Marks only.
+    static let accent = Color(red: 0.85, green: 0.0, blue: 0.45)
 }
 
 // The hub's title, Zune's way: huge and thin, lowercase, starting a little left of the content. It fits the page when
@@ -52,13 +53,16 @@ struct HubTitle: View {
         // Both bounds, so the frame is the page's width however long the name: with only a maximum it took the text's
         // own width, and a long album's title pushed the whole page off the left edge (run 11).
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        // Zune's parallax: as the page goes up, the huge title slides off to the left at a quarter of the scroll, a layer
+        // of its own (drawn, never laid out again).
+        .visualEffect { c, p in c.offset(x: min(0, p.frame(in: .scrollView).minY) * 0.25) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text)
         .accessibilityAddTraits(.isHeader)
     }
     private func line(_ base: CGFloat, _ scale: CGFloat) -> some View {
         Text(text.lowercased())
-            .font(.system(size: base * scale, weight: .thin))
+            .font(.zune(size: base * scale, .thin))
             .tracking(-1.5 * scale)
             .lineLimit(1)
             .fixedSize()
@@ -79,7 +83,7 @@ struct HubTitle: View {
 // A line's width in the thin system face, worked out before it's drawn, so a title is the right size in its first frame.
 func textWidth(_ s: String, size: CGFloat, tracking: CGFloat = 0, weight: CGFloat? = nil) -> CGFloat {
     #if canImport(UIKit)
-    let f = UIFont.systemFont(ofSize: size, weight: weight.map { UIFont.Weight(rawValue: $0) } ?? .thin)
+    let f = Z.uiFont(size, weight: weight ?? -0.4)
     #else
     let f = NSFont.systemFont(ofSize: size, weight: weight.map { NSFont.Weight(rawValue: $0) } ?? .thin)
     #endif
@@ -118,9 +122,9 @@ struct SectionHead: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             // Zune's section name: large, light, lowercase, hung from the page's left edge.
-            Text(text.lowercased()).font(.system(.title, weight: .light)).foregroundStyle(.white.opacity(0.96)).lineLimit(1).minimumScaleFactor(0.8)
+            Text(text.lowercased()).font(.zune(.title, .light)).foregroundStyle(.white.opacity(0.96)).lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 8)
-            if let trailing { Text(trailing).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
+            if let trailing { Text(trailing).font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
@@ -134,11 +138,11 @@ struct Figure: View {
     var size: CGFloat = 30
     var body: some View {
         VStack(alignment: .leading, spacing: S.pair) {
-            Text(value).font(.system(size: size, weight: .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+            Text(value).font(.zune(size: size, .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
                 // One height whatever the shrink, so labels in a row of figures share a line.
                 .frame(height: ceil(size * 1.2), alignment: .bottom)
             // What it counts, as Zune labels a figure: small bold capitals.
-            Text(label).textCase(.uppercase).font(.caption.weight(.bold)).tracking(0.6).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.75)
+            Text(label).textCase(.uppercase).font(.zune(.caption, .semibold)).tracking(0.8).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.75)
         }
         .accessibilityElement(children: .combine)
     }
@@ -306,14 +310,10 @@ extension View {
 // overshoot when let go. The answer to a press is the tilt, never a change of colour; the weight is in the press, none
 // in the drag.
 struct Press: ButtonStyle {
-    var depth: CGFloat = 0.965
-    @Environment(\.accessibilityReduceMotion) private var still
+    var depth: CGFloat = 0.955
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? depth : 1)
-            .rotation3DEffect(.degrees(configuration.isPressed && !still ? 5 : 0), axis: (x: 1, y: -0.5, z: 0), perspective: 0.4)
-            .opacity(configuration.isPressed && still ? 0.8 : 1)
-            .animation(configuration.isPressed ? .easeOut(duration: 0.1) : .spring(response: 0.34, dampingFraction: 0.52), value: configuration.isPressed)
+        // WP7's TiltEffect [S4]: the sink and a thumb's tip, no colour change; back 200 ms after release, over 100 ms.
+        Tilt(depth: depth).makeBody(configuration: configuration)
     }
 }
 

@@ -44,6 +44,12 @@ struct LFMEntry: TimelineEntry {
     var pace: WPace?
     var days: [Int?] = []             // plays on each of the last 28 days, oldest first; nil where Last.fm's page doesn't reach
     var images: [String: Data] = [:]  // covers, by address
+    // Now playing, Marvis-style: the song Apple Music has on (handed over by the app), its numbers on Last.fm.
+    var fromMusic = false
+    var listeners: Int?
+    var everyone: Int?                // everyone's scrobbles of it
+    var yours: Int?                   // his plays of it
+    var ends: Date?                   // when the song on now should end (Apple Music's length)
     var stale: Bool { seen.map { date.timeIntervalSince($0) > 30 * 60 } ?? false }
     func image(_ c: WCover?) -> Data? { c?.url.flatMap { images[$0] } }
 }
@@ -87,6 +93,7 @@ struct WJ {
 
 enum WClient {
     private static func baked(_ k: String) -> String? { (Bundle.main.object(forInfoDictionaryKey: k) as? String).flatMap { $0.isEmpty ? nil : $0 } }
+    static var user: String { baked("LastFMUser") ?? "" }
     static var ready: Bool { baked("LastFMKey") != nil && baked("LastFMUser") != nil }
     static let dir: URL = {
         let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("lastfm-widget", isDirectory: true)
@@ -147,7 +154,16 @@ enum WClient {
         var seen: [Date] = []
         let facts = WidgetFacts.read()
         let ws = Calendar.current.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
-        if kind == "now" || kind == "streak" || kind == "week" {
+        // What Apple Music has on now, as the app last saw it: newer and truer than Last.fm's word.
+        if kind == "now", let f = PlayingFacts.read(), f.current() {
+            e.fromMusic = true
+            e.playing = true
+            e.song = WCover(artist: f.artist, album: f.album, title: f.title, url: f.cover == nil ? nil : "music:local")
+            if let c = f.cover { e.images["music:local"] = c }
+            e.listeners = f.listeners; e.everyone = f.scrobbles; e.yours = f.yours
+            if f.duration > 0 { e.ends = Date(timeIntervalSince1970: f.started + f.duration) }
+            seen.append(Date(timeIntervalSince1970: f.at) > Date().addingTimeInterval(-1800) ? Date() : Date(timeIntervalSince1970: f.at))
+        } else if kind == "now" || kind == "streak" || kind == "week" {
             if let (j, at) = await call("user.getrecenttracks", ["limit": "200"], fresh: kind == "now" ? 60 : 600) {
                 seen.append(at)
                 let tracks = j["recenttracks"]["track"].array
@@ -168,6 +184,14 @@ enum WClient {
                 e.streak = facts?.streakNow(played: Set(days), covered: covered)
                 e.best = facts.flatMap { f in f.best.map { max($0, e.streak ?? 0) } }
             }
+        }
+        // The song's numbers on Last.fm, when the app didn't hand them over.
+        if kind == "now", let s = e.song, !s.title.isEmpty, e.listeners == nil,
+           let (j, _) = await call("track.getinfo", ["artist": s.artist, "track": s.title, "username": user, "autocorrect": "1"], fresh: 3600) {
+            e.listeners = j["track"]["listeners"].int
+            e.everyone = j["track"]["playcount"].int
+            e.yours = j["track"]["userplaycount"].int
+            if e.song?.url == nil { e.song?.url = j["track"]["album"]["image"].image }
         }
         if kind == "streak", let (j, at) = await call("user.getinfo", [:], fresh: 1800) {
             seen.append(at)
@@ -200,7 +224,7 @@ enum WClient {
         e.seen = seen.min()
         // The covers this widget draws.
         var want: [(String, Int)] = []
-        if let u = e.song?.url { want.append((u, 600)) }
+        if let u = e.song?.url, u != "music:local" { want.append((u, 600)) }
         if kind == "collage" { want += e.week.prefix(9).compactMap { $0.url.map { ($0, 360) } } }
         if kind == "artist" { want += e.artists.prefix(1).compactMap { $0.url.map { ($0, 600) } } }
         if kind != "now", kind != "collage", kind != "artist" { want = [] }
@@ -243,7 +267,9 @@ struct LFMProvider: TimelineProvider {
             let e = WClient.ready ? await WClient.load(kind) : LFMEntry(date: Date())
             // Sooner while a song plays (it changes), else every half hour; the app also asks for a redraw when it sees a
             // new song or a changed streak.
-            let next = Date().addingTimeInterval(e.playing && kind == "now" ? 15 * 60 : 30 * 60)
+            // A song from Apple Music with its length known: redrawn just after it should end.
+            var next = Date().addingTimeInterval(e.playing && kind == "now" ? 15 * 60 : 30 * 60)
+            if kind == "now", let end = e.ends, end > Date() { next = min(next, end.addingTimeInterval(5)) }
             completion(Timeline(entries: [e], policy: .after(next)))
         }
     }

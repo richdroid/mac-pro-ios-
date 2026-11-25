@@ -54,7 +54,7 @@ struct MixName: View {
         .accessibilityHidden(true)
     }
     private func still(_ name: String, _ fit: CGFloat) -> some View {
-        Text(name).font(.system(size: fit, weight: .thin)).tracking(-2 * fit / size).lineLimit(1).fixedSize()
+        Text(name).font(.zune(size: fit, .thin)).tracking(-2 * fit / size).lineLimit(1).fixedSize()
             .foregroundStyle(.white.opacity(0.13))
             .offset(x: S.margin - 4)
     }
@@ -81,7 +81,7 @@ private struct DriftName: UIViewRepresentable {
         }
         required init?(coder: NSCoder) { fatalError() }
         func set(_ text: String, _ size: CGFloat, _ tracking: CGFloat, _ lead: CGFloat, _ slack: CGFloat) {
-            label.attributedText = NSAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: size, weight: .thin), .kern: tracking])
+            label.attributedText = NSAttributedString(string: text, attributes: [.font: Z.uiFont(size, weight: -0.4), .kern: tracking])
             label.sizeToFit()
             let moved = abs(slack - self.slack) > 0.5 || lead != self.lead
             self.lead = lead; self.slack = slack
@@ -175,9 +175,9 @@ struct RotationMosaic: View {
                 LinearGradient(stops: [.init(color: .clear, location: 0.35), .init(color: .black.opacity(0.72), location: 1)], startPoint: .top, endPoint: .bottom)
                     .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(number(e.plays)).font(.system(size: 34, weight: .thin)).monospacedDigit().foregroundStyle(.white)
-                    Text(e.album).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-                    Text(e.artist).font(.footnote).foregroundStyle(.white.opacity(0.8)).lineLimit(2)
+                    Text(number(e.plays)).font(.zune(size: 34, .thin)).monospacedDigit().foregroundStyle(.white)
+                    Text(e.album).font(.zune(.subheadline, .semibold)).foregroundStyle(.white).lineLimit(2)
+                    Text(e.artist).font(.zune(.footnote)).foregroundStyle(.white.opacity(0.8)).lineLimit(2)
                 }
                 .padding(10)
             }
@@ -191,7 +191,7 @@ struct RotationMosaic: View {
             ZStack(alignment: .bottomLeading) {
                 ArtView(e.art, px: 300, corner: 8).zoomSource("rotation|\(e.id)")
                 RankShade(corner: 8)
-                Text(number(e.plays)).font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+                Text(number(e.plays)).font(.zune(.caption, .semibold)).monospacedDigit().foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.6), radius: 3).padding(6)
             }
         }
@@ -307,9 +307,9 @@ struct MixView: View {
     // In the grid every name keeps two lines, so the plays under them sit on one line across a row (run 33).
     private func words(_ n: Node, align: HorizontalAlignment, reserve: Bool = false) -> some View {
         VStack(alignment: align, spacing: 0) {
-            Text(n.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: reserve)
+            Text(n.name).font(.zune(.caption, .semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: reserve)
                 .multilineTextAlignment(align == .leading ? .leading : .center)
-            Text(n.plays > 0 ? plays(n.plays) : "new to you").font(.caption2).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
+            Text(n.plays > 0 ? plays(n.plays) : "new to you").font(.zune(.caption2)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
         }
         .fixedSize(horizontal: false, vertical: true)
     }

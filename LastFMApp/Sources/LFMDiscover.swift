@@ -87,99 +87,90 @@ struct Rec: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-struct DiscoverTab: View {
-    let top: Int
-    @Environment(\.paneLayout) private var pane
-    // Artists he loved and left: from his own history, no asking Last.fm.
-    @State private var back: [Entry] = []
-    private var m: DiscoverModel { DiscoverModel.shared }
+// Discover's pages, laid out by DiscoverHub (LFMRediscover.swift): who to hear next, and songs to try.
+enum DiscoverParts {
+    struct ForYou: View {
+        private var m: DiscoverModel { DiscoverModel.shared }
     var body: some View {
-        Group {
-            if pane {
-                FoldSplit {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists }.padding(.top, S.head) }
-                } right: {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { comebacks; tracks }.padding(.top, S.section) }
-                }
-            } else {
-                Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists; comebacks; tracks }.padding(.top, S.head)
-                }
-            }
-        }
-        .onAppear { m.appear() }
-        .task(id: HistorySync.shared.complete) {
-            // Only from the whole of his history: part of it would call an artist quiet who isn't.
-            guard HistorySync.shared.complete else { return }
-            let quiet = Int(Clock.now.timeIntervalSince1970) - 182 * 86400
-            let list = await HistoryDB.reader.comebacks(quietSince: quiet)
-            withAnimation(.smooth) { back = list }
-        }
-    }
-
-    // "Comebacks": artists he played a lot and hasn't for six months or more, his most played first.
-    @ViewBuilder private var comebacks: some View {
-        if back.count >= 3 {
-            Panorama(title: "comebacks", items: back) { e in
-                let y = e.last.map { Calendar.current.component(.year, from: Date(timeIntervalSince1970: TimeInterval($0))) }
-                return "\(number(e.plays)) plays" + (y.map { " · last \(String($0))" } ?? "")
-            }
-        }
-    }
-
-    @ViewBuilder private var artists: some View {
-        // Claude's picks, when there are any, are the list: each with its cover and how it sounds beside his artist (one
-        // list for one question, not a text list over the covered one; run 48 gate, blocker 6).
-        if let picks = Taste.shared.on ? Taste.shared.kept.discovery?.data : nil, !picks.isEmpty {
-            VStack(alignment: .leading, spacing: S.head) {
-                SectionHead(text: "artists for you")
-                VStack(spacing: S.figures) {
-                    ForEach(picks, id: \.self) { p in
-                        let r = m.recs.first { $0.id == p.artist.lowercased() }
-                        ArtistRec(r: Rec(name: p.artist, because: [p.like], score: 0, plays: 0, album: r?.album ?? "", image: r?.image), say: false, why: p.why)
+            // Claude's picks, when there are any, are the list: each with its cover and how it sounds beside his artist (one
+            // list for one question, not a text list over the covered one; run 48 gate, blocker 6).
+            if let picks = Taste.shared.on ? Taste.shared.kept.discovery?.data : nil, !picks.isEmpty {
+                VStack(alignment: .leading, spacing: S.head) {
+                    SectionHead(text: "artists for you")
+                    VStack(spacing: S.figures) {
+                        ForEach(picks, id: \.self) { p in
+                            let r = m.recs.first { $0.id == p.artist.lowercased() }
+                            ArtistRec(r: Rec(name: p.artist, because: [p.like], score: 0, plays: 0, album: r?.album ?? "", image: r?.image), say: false, why: p.why)
+                        }
                     }
                 }
+                .padding(.horizontal, S.margin)
+            } else if m.recs.isEmpty && m.failed {
+                VStack(spacing: S.inner) {
+                    Text("Last.fm isn't answering, so there's nothing to suggest yet.").font(.zune(.body)).foregroundStyle(.white).multilineTextAlignment(.center)
+                    Button("Try again") { m.appear() }
+                        .font(.zune(.body, .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 18).frame(minHeight: 44)
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, S.section).padding(.horizontal, S.inner)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: S.square, style: .continuous))
+                .padding(.horizontal, S.margin)
+            } else if m.recs.isEmpty {
+                // The first time only: a record turning on glass while the first list is found.
+                VStack(spacing: S.inner) {
+                    Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.4))
+                        .frame(width: 72).symbolEffect(.rotate, options: .repeating)
+                    Text(HistorySync.shared.complete || m.working ? "Finding artists like yours" : "Ready once your history is read")
+                        .font(.zune(.body)).foregroundStyle(.white)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, S.section)
+                .padding(.horizontal, S.margin)
+            } else {
+                VStack(alignment: .leading, spacing: S.head) {
+                    SectionHead(text: "artists for you")
+                    let mixed = m.recs.contains { $0.plays > 0 }
+                    VStack(spacing: S.figures) { ForEach(m.recs) { r in ArtistRec(r: r, say: mixed) } }
+                }
+                .padding(.horizontal, S.margin)
             }
-            .padding(.horizontal, S.margin)
-        } else if m.recs.isEmpty && m.failed {
-            VStack(spacing: S.inner) {
-                Text("Last.fm isn't answering, so there's nothing to suggest yet.").font(.body).foregroundStyle(.white).multilineTextAlignment(.center)
-                Button("Try again") { m.appear() }
-                    .font(.body.weight(.semibold)).foregroundStyle(.white)
-                    .padding(.horizontal, 18).frame(minHeight: 44)
-                    .glassEffect(.regular.interactive(), in: Capsule())
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, S.section).padding(.horizontal, S.inner)
-            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: S.square, style: .continuous))
-            .padding(.horizontal, S.margin)
-        } else if m.recs.isEmpty {
-            // The first time only: a record turning on glass while the first list is found.
-            VStack(spacing: S.inner) {
-                Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.4))
-                    .frame(width: 72).symbolEffect(.rotate, options: .repeating)
-                Text(HistorySync.shared.complete || m.working ? "Finding artists like yours" : "Ready once your history is read")
-                    .font(.body).foregroundStyle(.white)
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, S.section)
-            .padding(.horizontal, S.margin)
-        } else {
-            VStack(alignment: .leading, spacing: S.head) {
-                SectionHead(text: "artists for you")
-                let mixed = m.recs.contains { $0.plays > 0 }
-                VStack(spacing: S.figures) { ForEach(m.recs) { r in ArtistRec(r: r, say: mixed) } }
-            }
-            .padding(.horizontal, S.margin)
         }
     }
 
-    @ViewBuilder private var tracks: some View {
-        let list = m.recs.filter { $0.track != nil }
-        if !list.isEmpty {
-            VStack(alignment: .leading, spacing: S.head) {
-                SectionHead(text: "songs to try")
-                VStack(spacing: 0) { ForEach(list) { r in TrackRec(r: r) } }
+    struct Songs: View {
+        private var m: DiscoverModel { DiscoverModel.shared }
+        private var re: RediscoverModel { RediscoverModel.shared }
+        var body: some View {
+            VStack(alignment: .leading, spacing: S.section) {
+                Tries()
+                if !re.likeFavourites.isEmpty {
+                    VStack(alignment: .leading, spacing: S.head) {
+                        SectionHead(text: "like your favourites")
+                        VStack(spacing: 0) {
+                            ForEach(re.likeFavourites) { e in
+                                VStack(alignment: .leading, spacing: 0) {
+                                    EntryRow(e: e, showRank: false, context: "likefav", trailing: "new")
+                                    if let b = e.because { Text("Because you play \(b)").font(.zune(.footnote)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).padding(.leading, S.art + S.gap).padding(.bottom, 6) }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, S.margin)
+                }
             }
-            .padding(.horizontal, S.margin)
+        }
+    }
+    private struct Tries: View {
+        private var m: DiscoverModel { DiscoverModel.shared }
+    var body: some View {
+            let list = m.recs.filter { $0.track != nil }
+            if !list.isEmpty {
+                VStack(alignment: .leading, spacing: S.head) {
+                    SectionHead(text: "songs to try")
+                    VStack(spacing: 0) { ForEach(list) { r in TrackRec(r: r) } }
+                }
+                .padding(.horizontal, S.margin)
+            }
         }
     }
 }
@@ -197,10 +188,10 @@ struct ArtistRec: View {
                 HStack(spacing: S.inner) {
                     ArtView(ArtRef(artist: r.name, album: r.album, url: r.image), px: 300, corner: 10).frame(width: 84).zoomSource("rec|\(r.id)")
                     VStack(alignment: .leading, spacing: S.pair) {
-                        Text(r.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-                        Text("Because you play \(r.because.joined(separator: " and "))").font(.subheadline).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
-                        if let why, !why.isEmpty { Text(why).font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85)).fixedSize(horizontal: false, vertical: true) }
-                        if say { Text(r.plays == 0 ? "New to you" : "You: \(plays(r.plays))").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85)) }
+                        Text(r.name).font(.zune(.title3, .semibold)).foregroundStyle(.white).lineLimit(2)
+                        Text("Because you play \(r.because.joined(separator: " and "))").font(.zune(.subheadline)).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
+                        if let why, !why.isEmpty { Text(why).font(.zune(.subheadline, .medium)).foregroundStyle(.white.opacity(0.85)).fixedSize(horizontal: false, vertical: true) }
+                        if say { Text(r.plays == 0 ? "New to you" : "You: \(plays(r.plays))").font(.zune(.subheadline, .medium)).foregroundStyle(.white.opacity(0.85)) }
                     }
                     Spacer(minLength: 0)
                 }
@@ -221,8 +212,8 @@ struct TrackRec: View {
                 HStack(spacing: S.gap) {
                     ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("try|\(s.id)")
                     VStack(alignment: .leading, spacing: S.pair / 2) {
-                        Text(s.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
-                        Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
+                        Text(s.title).font(.zune(.title3)).foregroundStyle(.white).lineLimit(2)
+                        Text(s.artist).font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(2)
                     }
                     Spacer(minLength: 0)
                 }
@@ -243,7 +234,7 @@ struct AppleMusicButton: View {
         Button { Task { openURL(await AppleMusic.shared.link(what, artist: artist, title: title)) } } label: {
             // Says where it goes: Apple's mark and "Music", not a bare note in a circle (review 2026-11-14, item 18).
             HStack(spacing: 3) { Image(systemName: "apple.logo"); Text("Music") }
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.white).fixedSize()
+                .font(.zune(.subheadline, .semibold)).foregroundStyle(.white).fixedSize()
                 .padding(.horizontal, 14).frame(height: 44)
                 .glassEffect(.regular.interactive(), in: Capsule())
         }

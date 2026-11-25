@@ -210,6 +210,8 @@ targets:
         type: folder
       - path: Shared/Duo.swift
       - path: LastFMWidget/LFMShared.swift
+      # Selawik, Zune's face (SIL OFL 1.1, its licence beside it).
+      - path: LastFMApp/Fonts
     dependencies:
       - target: LastFMWidget
     settings:
@@ -223,6 +225,13 @@ targets:
         CFBundleDisplayName: Rotation
         LastFMKey: ""
         LastFMUser: ""
+        # Last.fm's shared secret for scrobbling, set at signing from lastfm-secret when that file exists; empty, the
+        # scrobbling hub says it is waiting for it.
+        LastFMSecret: ""
+        NSAppleMusicUsageDescription: Rotation reads what Apple Music is playing and your library's play counts to scrobble them to Last.fm.
+        # The scrobbler's catch-up runs on background refresh (BGTaskScheduler).
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [local.macpro.LastFM.scrobble]
         # Claude's key for the taste writing (portrait, week note, picks, ask), set at signing; empty, those hide.
         AnthropicKey: ""
         # The widgets' links into the app (rotation://you, /now, /artist?name=…; LinkScheme).
@@ -235,7 +244,7 @@ targets:
   LastFMWidget:
     type: app-extension
     platform: iOS
-    sources: [LastFMWidget]
+    sources: [LastFMWidget, LastFMApp/Fonts]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.LastFM.Widget
@@ -255,6 +264,7 @@ targets:
         excludes: [Info.plist]
       - ci/gallery-lastfm
       - ci/widget-sheet
+      - LastFMApp/Fonts
       - path: LastFMApp/Mock
         type: folder
     settings:

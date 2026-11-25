@@ -18,11 +18,11 @@ struct ProfileHead: View {
             .overlay { Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1) }
             VStack(alignment: .leading, spacing: S.pair) {
                 if let p {
-                    Text("Scrobbling since \(p.registered.formatted(.dateTime.month(.wide).year()))").font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    Text("Scrobbling since \(p.registered.formatted(.dateTime.month(.wide).year()))").font(.zune(.title3, .semibold)).foregroundStyle(.white)
                         .lineLimit(2).minimumScaleFactor(0.85)
-                    if let pace = Self.pace(p) { Text(pace).font(.subheadline).monospacedDigit().foregroundStyle(S.soft) }
+                    if let pace = Self.pace(p) { Text(pace).font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft) }
                 } else {
-                    Text(" ").font(.title3.weight(.semibold))
+                    Text(" ").font(.zune(.title3, .semibold))
                 }
             }
             Spacer(minLength: 0)
@@ -58,9 +58,9 @@ struct Totals: View {
                 Group {
                     if let p { Counting(p.playcount, key: "scrobbles") } else { Text(" ") }
                 }
-                .font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                .font(.zune(size: 64, .thin)).monospacedDigit().foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.6)
-                Text("scrobbles").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                Text("scrobbles").font(.zune(.title3, .light)).foregroundStyle(S.soft)
             }
             .accessibilityElement(children: .combine)
             if let p {
@@ -89,12 +89,12 @@ struct StreakCard: View {
         let peak = max(days.max() ?? 1, 1)
         VStack(alignment: .leading, spacing: S.inner) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: "flame.fill").font(.title2).foregroundStyle(LinearGradient(colors: [.yellow, .orange, S.accent], startPoint: .top, endPoint: .bottom))
+                Image(systemName: "flame.fill").font(.zune(.title2)).foregroundStyle(LinearGradient(colors: [.yellow, .orange, S.accent], startPoint: .top, endPoint: .bottom))
                     .symbolEffect(.bounce, value: i.streak)
                 Group { if let n = i.streak { Counting(n, key: "streak") { "\($0)" } } else { Text("–") } }
-                    .font(.system(size: 44, weight: .light)).monospacedDigit().foregroundStyle(.white)
+                    .font(.zune(size: 44, .light)).monospacedDigit().foregroundStyle(.white)
                 // One line, shrinking a little where the card is narrow, never "days in / a row".
-                Text(i.streak == 1 ? "day in a row" : "days in a row").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                Text(i.streak == 1 ? "day in a row" : "days in a row").font(.zune(.title3, .light)).foregroundStyle(S.soft)
                     .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(-1)
                 Spacer(minLength: 0)
                 if let best = i.best { Figure(value: "\(best)", label: "best", size: 22).fixedSize() }
@@ -135,22 +135,22 @@ struct PaceCard: View {
                 HStack(alignment: .top, spacing: S.figures) {
                     VStack(alignment: .leading, spacing: S.pair) {
                         Counting(held.map { p.thisWeek[min($0, p.thisWeek.count - 1)] } ?? p.now, key: "week")
-                            .font(.system(size: 40, weight: .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+                            .font(.zune(size: 40, .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
                             .frame(height: 48, alignment: .bottom)
-                        Text(held.map { "by \(Self.dayName($0))" } ?? "plays so far").font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                        Text(held.map { "by \(Self.dayName($0))" } ?? "plays so far").font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(1)
                     }
                     .accessibilityElement(children: .combine)
                     let up = p.delta >= 0
                     VStack(alignment: .leading, spacing: S.pair) {
                         HStack(spacing: 4) {
-                            Image(systemName: up ? "arrow.up.right" : "arrow.down.right").font(.title3.weight(.semibold))
-                            Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.system(size: 40, weight: .light)).monospacedDigit()
+                            Image(systemName: up ? "arrow.up.right" : "arrow.down.right").font(.zune(.title3, .semibold))
+                            Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.zune(size: 40, .light)).monospacedDigit()
                         }
                         .foregroundStyle(.white)
-                        Text(up ? "more than usual by now" : "less than usual by now").font(.subheadline).foregroundStyle(S.soft)
+                        Text(up ? "more than usual by now" : "less than usual by now").font(.zune(.subheadline)).foregroundStyle(S.soft)
                             .opacity(held == nil ? 1 : 0)
                             .overlay(alignment: .leading) {
-                                if let d = held { Text("usual \(number(p.usualBand[d].mid))").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).fixedSize() }
+                                if let d = held { Text("usual \(number(p.usualBand[d].mid))").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).fixedSize() }
                             }
                     }
                     .accessibilityElement(children: .combine)
@@ -192,13 +192,13 @@ struct PaceCard: View {
                 .chartXScale(domain: -0.25...6.25)
                 .chartXAxis {
                     AxisMarks(values: Array(0..<7)) { v in
-                        AxisValueLabel { Text(Self.weekday(v.as(Int.self) ?? 0)).font(.caption2.weight(.medium)).foregroundStyle(S.soft) }
+                        AxisValueLabel { Text(Self.weekday(v.as(Int.self) ?? 0)).font(.zune(.caption2, .medium)).foregroundStyle(S.soft) }
                     }
                 }
                 .chartYAxis {
                     AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
                         AxisGridLine().foregroundStyle(.white.opacity(0.08))
-                        AxisValueLabel().foregroundStyle(S.soft).font(.caption2)
+                        AxisValueLabel().foregroundStyle(S.soft).font(.zune(.caption2))
                     }
                 }
                 .frame(height: 150)
@@ -207,7 +207,7 @@ struct PaceCard: View {
                     legend(Capsule().fill(hero).frame(width: 16, height: 4), "this week")
                     legend(RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.2)).frame(width: 16, height: 10), "usual, \(p.weeks) weeks")
                 }
-                .font(.caption).foregroundStyle(S.soft)
+                .font(.zune(.caption)).foregroundStyle(S.soft)
                 }
                 .card()
             }
@@ -247,7 +247,7 @@ struct RisingCard: View {
                     }
                     LinearGradient(colors: [.clear, .black.opacity(0.35), .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
                     VStack(alignment: .leading, spacing: S.gap) {
-                        Text(r.artist).font(.system(size: 38, weight: .bold)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7)
+                        Text(r.artist).font(.zune(size: 38, .bold)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7)
                         share(r.weekShare, "of your week", strong: true)
                         share(r.yearShare, "of your year before", strong: false)
                     }
@@ -264,7 +264,7 @@ struct RisingCard: View {
     }
     private func share(_ v: Double, _ label: String, strong: Bool) -> some View {
         HStack(spacing: 10) {
-            Text(v < 0.01 && v > 0 ? "<1%" : "\(Int((v * 100).rounded()))%").font(.system(size: strong ? 28 : 20, weight: strong ? .semibold : .regular)).monospacedDigit().foregroundStyle(.white)
+            Text(v < 0.01 && v > 0 ? "<1%" : "\(Int((v * 100).rounded()))%").font(.zune(size: strong ? 28 : 20, strong ? .semibold : .regular)).monospacedDigit().foregroundStyle(.white)
                 .frame(width: 70, alignment: .leading)
             GeometryReader { g in
                 ZStack(alignment: .leading) {
@@ -273,7 +273,7 @@ struct RisingCard: View {
                 }
             }
             .frame(height: strong ? 8 : 6)
-            Text(label).font(.subheadline).foregroundStyle(.white.opacity(0.85)).fixedSize()
+            Text(label).font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.85)).fixedSize()
         }
     }
 }
@@ -314,7 +314,7 @@ struct WeekHub: View {
                 ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(a.name)")
                 if title != "new to you" {
                     RankShade().frame(width: S.tile, height: S.tile)
-                    Text("\(k + 1)").font(.system(size: 64, weight: .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
+                    Text("\(k + 1)").font(.zune(size: 64, .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
                         .offset(x: -2, y: 18)
                 }
                 if a.isNew && title != "new to you" {
@@ -322,8 +322,8 @@ struct WeekHub: View {
                 }
             }
             .padding(.bottom, title == "new to you" ? S.pair : S.gap)
-            Text(a.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
-            Text("\(a.plays) \(a.plays == 1 ? "play" : "plays")").font(.footnote).monospacedDigit().foregroundStyle(S.soft)
+            Text(a.name).font(.zune(.subheadline, .semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
+            Text("\(a.plays) \(a.plays == 1 ? "play" : "plays")").font(.zune(.footnote)).monospacedDigit().foregroundStyle(S.soft)
         }
         .frame(width: S.tile, alignment: .leading)
         }
@@ -370,9 +370,9 @@ struct YearsSection: View {
                     // 2026-11-18: "i hate the running total scrobble thing how the number goes up"). How far back it
                     // has reached, in words, and the percentage in the head.
                     Text(verbatim: reached <= last ? "Read back to \(String(reached)) so far, newest first." : "Starting with your newest plays.")
-                        .font(.subheadline).foregroundStyle(S.soft)
+                        .font(.zune(.subheadline)).foregroundStyle(S.soft)
                     if let since = sync.stuckSince, Date().timeIntervalSince(since) > 25 {
-                        Text("Waiting for Last.fm to answer. It carries on by itself.").font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                        Text("Waiting for Last.fm to answer. It carries on by itself.").font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.85))
                     }
                 }
                 GeometryReader { g in
@@ -384,7 +384,7 @@ struct YearsSection: View {
                             let waiting = y < reached
                             let dim = held != nil && held != y
                             VStack(spacing: 6) {
-                                Text(waiting ? "" : held == y ? number(v) : v > 0 ? compact(v) : "").font(.caption2.weight(held == y ? .bold : .medium)).monospacedDigit()
+                                Text(waiting ? "" : held == y ? number(v) : v > 0 ? compact(v) : "").font(.zune(.caption2, held == y ? .bold : .medium)).monospacedDigit()
                                     .foregroundStyle(held == y ? .white : S.soft).lineLimit(1).minimumScaleFactor(0.5).fixedSize(horizontal: held == y, vertical: false)
                                 if waiting {
                                     WaitingBar().frame(width: w, height: (g.size.height - 40) * 0.42)
@@ -394,7 +394,7 @@ struct YearsSection: View {
                                         .frame(width: w, height: max(3, (g.size.height - 40) * CGFloat(v) / CGFloat(peak)))
                                         .opacity(v == 0 ? 0.25 : 1)
                                 }
-                                Text("\u{2019}" + String(String(y).suffix(2))).font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(held == y ? .white : S.soft)
+                                Text("\u{2019}" + String(String(y).suffix(2))).font(.zune(.caption, .medium)).monospacedDigit().foregroundStyle(held == y ? .white : S.soft)
                                     .opacity(waiting ? 0.5 : 1)
                             }
                             .frame(width: w)
@@ -526,14 +526,14 @@ struct ClockCard: View {
                             ctx.fill(Path(ellipseIn: CGRect(x: c.x - inner + 6, y: c.y - inner + 6, width: (inner - 6) * 2, height: (inner - 6) * 2)), with: .color(.black.opacity(0.35)))
                         }
                         VStack(spacing: 0) {
-                            Text("\(Int((late * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit().foregroundStyle(.white)
-                            Text("after midnight").font(.caption).foregroundStyle(S.soft)
+                            Text("\(Int((late * 100).rounded()))%").font(.zune(size: 30, .light)).monospacedDigit().foregroundStyle(.white)
+                            Text("after midnight").font(.zune(.caption)).foregroundStyle(S.soft)
                         }
                         ForEach([0, 6, 12, 18], id: \.self) { h in
                             GeometryReader { g in
                                 let r = min(g.size.width, g.size.height) / 2 - 6
                                 let a = Double(h) / 24 * 2 * .pi - .pi / 2
-                                Text(DaySection.hourLabel(h)).font(.caption2.weight(.medium)).foregroundStyle(S.soft).fixedSize()
+                                Text(DaySection.hourLabel(h)).font(.zune(.caption2, .medium)).foregroundStyle(S.soft).fixedSize()
                                     .position(x: g.size.width / 2 + CGFloat(cos(a)) * r, y: g.size.height / 2 + CGFloat(sin(a)) * r)
                             }
                         }
@@ -546,7 +546,7 @@ struct ClockCard: View {
                         HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.25)).frame(width: 14, height: 10); Text("all your years") }
                         Spacer(minLength: 0)
                     }
-                    .font(.caption).foregroundStyle(S.soft)
+                    .font(.zune(.caption)).foregroundStyle(S.soft)
                 }
                 .card()
             }
@@ -570,11 +570,11 @@ struct NewCard: View {
                     HStack(spacing: S.gap) {
                         ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 260, corner: 10).frame(width: 84).zoomSource("new|\(a.name)")
                         VStack(alignment: .leading, spacing: S.pair) {
-                            Text(a.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                            Text(a.name).font(.zune(.title3, .semibold)).foregroundStyle(.white).lineLimit(2)
                             if let f = a.first {
-                                Text("First played \(Self.day(f))").font(.subheadline).foregroundStyle(S.soft)
+                                Text("First played \(Self.day(f))").font(.zune(.subheadline)).foregroundStyle(S.soft)
                             }
-                            Text("\(a.plays) \(a.plays == 1 ? "play" : "plays") since").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                            Text("\(a.plays) \(a.plays == 1 ? "play" : "plays") since").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft)
                         }
                         Spacer(minLength: 0)
                     }
@@ -594,8 +594,8 @@ struct TodayGlance: View {
         let n = store.today.filter { !$0.nowPlaying }.count
         VStack(alignment: .leading, spacing: S.inner) {
             VStack(alignment: .leading, spacing: S.pair) {
-                Counting(n, key: "glance").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white).lineLimit(1)
-                Text(n == 1 ? "play today" : "plays today").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                Counting(n, key: "glance").font(.zune(size: 64, .thin)).monospacedDigit().foregroundStyle(.white).lineLimit(1)
+                Text(n == 1 ? "play today" : "plays today").font(.zune(.title3, .light)).foregroundStyle(S.soft)
             }
             .accessibilityElement(children: .combine)
             if !store.insights.week.isEmpty {

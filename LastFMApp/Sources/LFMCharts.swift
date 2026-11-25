@@ -261,7 +261,7 @@ struct ChartsTab: View {
                                     ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section * 2)
                                 } else if !Store.shared.trouble {
                                     // (Last.fm gone: the left pane's card says so; this one doesn't call it empty.)
-                                    Text("Nothing in the top \(m.kind.noun) for this stretch.").font(.body).foregroundStyle(S.soft)
+                                    Text("Nothing in the top \(m.kind.noun) for this stretch.").font(.zune(.body)).foregroundStyle(S.soft)
                                         .padding(.horizontal, S.margin)
                                 }
                             }
@@ -317,7 +317,7 @@ struct ChartsTab: View {
                 TroubleNote().padding(.horizontal, S.margin).padding(.vertical, S.head)
             } else {
                 Text("Nothing played in this stretch.")
-                    .font(.body).foregroundStyle(S.soft).frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.zune(.body)).foregroundStyle(S.soft).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, S.margin).padding(.vertical, S.section)
             }
         }
@@ -344,7 +344,7 @@ struct ChartsTab: View {
                 if words { Label("Any week", systemImage: "calendar").padding(.horizontal, 16) }
                 else { Image(systemName: "calendar").frame(width: 44) }
             }
-            .font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1).fixedSize()
+            .font(.zune(.subheadline, .semibold)).foregroundStyle(.white).lineLimit(1).fixedSize()
             .frame(height: 44)
             .glassEffect(.regular, in: Capsule())
         }
@@ -374,21 +374,21 @@ struct ChartsTab: View {
                     VStack(alignment: .leading, spacing: S.pair) {
                         // A slot of one height whatever the count: a shrunk figure was shorter and everything under it
                         // rose, about 21 pt between week and 6 months folded (run 33).
-                        Text(number(s.plays)).font(.system(size: size, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                        Text(number(s.plays)).font(.zune(size: size, .thin)).monospacedDigit().foregroundStyle(.white)
                             .lineLimit(1).minimumScaleFactor(0.6)
                             .frame(height: ceil(size * 1.2), alignment: .bottom)
-                        Text("plays").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                        Text("plays").font(.zune(.title3, .light)).foregroundStyle(S.soft)
                     }
                     if let c = s.change {
                         VStack(alignment: .leading, spacing: S.pair) {
                             HStack(spacing: 4) {
-                                Image(systemName: c >= 0 ? "arrow.up.right" : "arrow.down.right").font(.title3.weight(.semibold))
-                                Text("\(Int((abs(c) * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit()
+                                Image(systemName: c >= 0 ? "arrow.up.right" : "arrow.down.right").font(.zune(.title3, .semibold))
+                                Text("\(Int((abs(c) * 100).rounded()))%").font(.zune(size: 30, .light)).monospacedDigit()
                             }
                             .foregroundStyle(.white)
                             // One line on every page, so what follows sits at the same height on each ("against the
                             // 3 months before" wrapped and moved "top albums", run 32).
-                            Text("vs \(p.before)").font(.subheadline).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.8)
+                            Text("vs \(p.before)").font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.8)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -448,7 +448,7 @@ struct ChartsTab: View {
                 }
                 if entries.count > 10 {
                     Button { withAnimation(.smooth) { all.toggle() } } label: {
-                        Text(all ? "Show the top 10" : "Show all \(entries.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        Text(all ? "Show the top 10" : "Show all \(entries.count)").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 44)
                             .glassEffect(.regular, in: Capsule())
                     }
@@ -469,13 +469,13 @@ private struct CollageShare: View {
     var body: some View {
         if current, let img = m.shareImage {
             ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
-                Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                Label("Share", systemImage: "square.and.arrow.up").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(height: 44)
                     .glassEffect(.regular.interactive(), in: Capsule())
             }
             .buttonStyle(Press())
         } else {
-            Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold))
+            Label("Share", systemImage: "square.and.arrow.up").font(.zune(.subheadline, .semibold))
                 .padding(.horizontal, 16).frame(height: 44).foregroundStyle(S.soft)
                 .glassEffect(.regular, in: Capsule())
                 .accessibilityLabel("Share, getting the picture ready")
@@ -514,7 +514,7 @@ struct BumpSection: View {
                 func x(_ i: Int) -> CGFloat { left + CGFloat(i) / CGFloat(weeks - 1) * w }
                 func y(_ r: Int) -> CGFloat { 4 + CGFloat(r - 1) / CGFloat(depth - 1) * h }
                 for r in [1, 5, 10, 15] {
-                    ctx.draw(Text("\(r)").font(.caption2.weight(.medium)).foregroundStyle(S.soft), at: CGPoint(x: 8, y: y(r)))
+                    ctx.draw(Text("\(r)").font(.zune(.caption2, .medium)).foregroundStyle(S.soft), at: CGPoint(x: 8, y: y(r)))
                     ctx.stroke(Path { $0.move(to: CGPoint(x: left, y: y(r))); $0.addLine(to: CGPoint(x: size.width - right, y: y(r))) }, with: .color(.white.opacity(0.05)), lineWidth: 1)
                 }
                 // The line followed is drawn last, bright and thick; the rest stay as a faint weave behind it.
@@ -545,7 +545,7 @@ struct BumpSection: View {
                 Spacer()
                 Text("This week")
             }
-            .font(.caption2.weight(.medium)).foregroundStyle(S.soft)
+            .font(.zune(.caption2, .medium)).foregroundStyle(S.soft)
             .padding(.leading, 22)
         }
         .accessibilityElement(children: .ignore)
@@ -563,9 +563,9 @@ struct BumpSection: View {
                         // Every name at full strength with its line's colour (dimmed read as switched off; review
                         // 2026-11-14, item 13); the one followed is bold with a heavier mark. Its rank now says what it is.
                         Capsule().fill(colour(e)).frame(width: on ? 18 : 14, height: on ? 6 : 4).frame(width: 18)
-                        Text(e.title).font(.subheadline.weight(on ? .bold : .medium)).foregroundStyle(.white).lineLimit(1)
+                        Text(e.title).font(.zune(.subheadline, on ? .bold : .medium)).foregroundStyle(.white).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text(m.bumpRanks.last?[e.rankKey].map { "#\($0)" } ?? "off").font(.subheadline.weight(on ? .semibold : .regular)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                        Text(m.bumpRanks.last?[e.rankKey].map { "#\($0)" } ?? "off").font(.zune(.subheadline, on ? .semibold : .regular)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
                             .accessibilityLabel(m.bumpRanks.last?[e.rankKey].map { "number \($0) this week" } ?? "off the chart this week")
                     }
                     .frame(minHeight: 36)
@@ -647,10 +647,10 @@ struct WeekPicker: View {
     private func yearRow(_ y: Int, weeks: Int, on: Bool) -> some View {
         Button { withAnimation(.smooth(duration: 0.3)) { year = y } } label: {
             HStack(alignment: .firstTextBaseline, spacing: S.gap) {
-                Text(String(y)).font(.system(size: 44, weight: .thin)).monospacedDigit().foregroundStyle(.white.opacity(on ? 1 : 0.55))
-                Text(weeks == 1 ? "1 week" : "\(weeks) weeks").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                Text(String(y)).font(.zune(size: 44, .thin)).monospacedDigit().foregroundStyle(.white.opacity(on ? 1 : 0.55))
+                Text(weeks == 1 ? "1 week" : "\(weeks) weeks").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft)
                 Spacer(minLength: 0)
-                if on { Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85)) }
+                if on { Image(systemName: "chevron.right").font(.zune(.subheadline, .semibold)).foregroundStyle(.white.opacity(0.85)) }
             }
             .padding(.vertical, S.pair)
             .contentShape(Rectangle())
@@ -673,8 +673,8 @@ struct WeekRow: View {
                 }
                 .frame(width: S.art, height: S.art)
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(w.label).font(.body.weight(.semibold)).foregroundStyle(.white)
-                    Text(top.map { $0.artist.isEmpty ? " " : $0.artist } ?? " ").font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                    Text(w.label).font(.zune(.body, .semibold)).foregroundStyle(.white)
+                    Text(top.map { $0.artist.isEmpty ? " " : $0.artist } ?? " ").font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(1)
                     // The week's plays against twice his usual week: a long bar was a big week (review 2026-11-14, item 16).
                     if let usual = Store.shared.insights.pace?.usualBand.last?.mid, usual > 0 {
                         GeometryReader { g in
@@ -686,7 +686,7 @@ struct WeekRow: View {
                 }
                 .layoutPriority(1)
                 Spacer(minLength: 8)
-                Text(top.map { number($0.plays) } ?? "").font(.body.weight(.medium)).monospacedDigit().foregroundStyle(.white)
+                Text(top.map { number($0.plays) } ?? "").font(.zune(.body, .medium)).monospacedDigit().foregroundStyle(.white)
             }
             .padding(.vertical, S.row / 2)
             .contentShape(Rectangle())

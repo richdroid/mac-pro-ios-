@@ -1,5 +1,7 @@
 import Foundation
 import Security
+import SwiftUI
+import CoreText
 
 // Shared by the app and its widgets (and the CI gallery): the links a widget opens, and the few figures only his whole
 // history can give (the streak, his usual week), which the app hands the widgets.
@@ -100,3 +102,109 @@ struct WidgetFacts: Codable, Equatable {
         return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
     }
 }
+
+// The song Apple Music has on, as the app last saw it (the scrobbler's live watch), for the now-playing widget: what it
+// is, its cover small, when it began and how long it runs, and Last.fm's figures for it once known. Through the same
+// Keychain group as the facts above, so only on a signed build; the widget falls back to Last.fm's own now playing.
+struct PlayingFacts: Codable, Equatable {
+    var at: Double
+    var title: String
+    var artist: String
+    var album: String
+    var started: Double
+    var duration: Double
+    var playing: Bool
+    var cover: Data? = nil
+    var listeners: Int? = nil
+    var scrobbles: Int? = nil
+    var yours: Int? = nil
+
+    // Still on: playing, and not past its end (with a minute's grace for a pause the app didn't see).
+    func current(now: Date = Date()) -> Bool {
+        playing && (duration <= 0 || now.timeIntervalSince1970 < started + duration + 60) && now.timeIntervalSince1970 - at < 6 * 3600
+    }
+
+    private static var base: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.LastFM.widgets", kSecAttrAccount as String: "playing"]
+    }
+    private static var group: String? {
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) else { return nil }
+        return "\(team).local.macpro.LastFM.shared"
+    }
+    static func read() -> PlayingFacts? {
+        guard let g = group else { return nil }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return try? JSONDecoder().decode(PlayingFacts.self, from: d)
+    }
+    @discardableResult func write() -> Bool {
+        guard let g = Self.group, let d = try? JSONEncoder().encode(self) else { return false }
+        if var old = Self.read() { old.at = at; if old == self { return false } }
+        var q = Self.base
+        q[kSecAttrAccessGroup as String] = g
+        SecItemDelete(q as CFDictionary)
+        q[kSecValueData as String] = d
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+    }
+    static func clear() {
+        guard let g = group else { return }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        SecItemDelete(q as CFDictionary)
+    }
+}
+
+// Zune's face for the app, its widgets and the gallery: Selawik (Microsoft, SIL OFL 1.1; LastFMApp/Fonts), registered from
+// the bundle on first use, so no target needs a plist entry. Weights onto Zune's four: Light, Semilight, Regular, Semibold.
+enum Z {
+    static let registered: Bool = {
+        for n in ["Selawik-Light", "Selawik-Semilight", "Selawik-Regular", "Selawik-Semibold", "Selawik-Bold"] {
+            if let u = Bundle.main.url(forResource: n, withExtension: "ttf") { CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil) }
+        }
+        return true
+    }()
+    static func name(_ w: Font.Weight) -> String {
+        _ = registered
+        switch w {
+        case .ultraLight, .thin, .light: return "Selawik-Light"
+        case .regular: return "Selawik-Regular"
+        case .medium: return "Selawik-Semilight"
+        case .semibold: return "Selawik-Semibold"
+        default: return "Selawik-Bold"
+        }
+    }
+    static func size(_ s: Font.TextStyle) -> CGFloat {
+        switch s {
+        case .largeTitle: return 34
+        case .title: return 28
+        case .title2: return 22
+        case .title3: return 20
+        case .headline, .body: return 17
+        case .callout: return 16
+        case .subheadline: return 15
+        case .footnote: return 13
+        case .caption: return 12
+        case .caption2: return 11
+        default: return 17
+        }
+    }
+}
+
+extension Font {
+    static func zune(_ style: Font.TextStyle, _ weight: Font.Weight = .regular) -> Font {
+        .custom(Z.name(weight), size: Z.size(style), relativeTo: style)
+    }
+    static func zune(size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .custom(Z.name(weight), fixedSize: size)
+    }
+    static func zune(scaled size: CGFloat, _ weight: Font.Weight = .regular, relativeTo style: Font.TextStyle = .largeTitle) -> Font {
+        .custom(Z.name(weight), size: size, relativeTo: style)
+    }
+}
+

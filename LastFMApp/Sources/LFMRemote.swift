@@ -21,6 +21,7 @@ struct Similar: Identifiable, Hashable, Sendable {
 struct ArtistInfo: Sendable {
     var listeners: Int?
     var plays: Int?
+    var userPlays: Int?
     var tags: [String] = []
     var bio: String?
     var url: String?
@@ -34,6 +35,7 @@ struct ArtistInfo: Sendable {
             let a = j["artist"]
             i.listeners = a["stats"]["listeners"].int
             i.plays = a["stats"]["playcount"].int
+            i.userPlays = a["stats"]["userplaycount"].int
             i.tags = a["tags"]["tag"].array.map { $0["name"].text.lowercased() }.filter { !$0.isEmpty }.prefix(6).map { $0 }
             i.bio = Words.clean(a["bio"]["summary"].string)
             i.url = a["url"].string
@@ -56,6 +58,7 @@ struct ArtistInfo: Sendable {
 struct AlbumInfo: Sendable {
     var listeners: Int?
     var plays: Int?
+    var userPlays: Int?
     var tags: [String] = []
     var wiki: String?
     var url: String?
@@ -68,6 +71,7 @@ struct AlbumInfo: Sendable {
         let a = j["album"]
         i.listeners = a["listeners"].int
         i.plays = a["playcount"].int
+        i.userPlays = a["userplaycount"].int
         i.tags = a["tags"]["tag"].array.map { $0["name"].text.lowercased() }.filter { !$0.isEmpty }.prefix(6).map { $0 }
         i.wiki = Words.clean(a["wiki"]["summary"].string)
         i.url = a["url"].string

@@ -9,6 +9,8 @@ import Charts
 // that reads it was built again on every push and every Back, inside the transition (run 49 gate: 380-1600 ms gaps).
 final class OpenRoute: Equatable, @unchecked Sendable {
     var go: (Go) -> Void = { _ in }
+    // A hub (now playing, a section of the menu), from anywhere: pushed on the one stack, with Zune's turnstile.
+    var hub: (Hub, Int?) -> Void = { _, _ in }
     func callAsFunction(_ g: Go) { go(g) }
     static func == (a: OpenRoute, b: OpenRoute) -> Bool { a === b }
 }
@@ -64,21 +66,21 @@ struct MoveMark: View {
     var body: some View {
         Group {
             switch move {
-            case .up(let n): HStack(spacing: 2) { Image(systemName: "arrowtriangle.up.fill").font(.system(size: 10)); Text("\(n)") }.accessibilityLabel("Up \(n)")
-            case .down(let n): HStack(spacing: 2) { Image(systemName: "arrowtriangle.down.fill").font(.system(size: 10)); Text("\(n)") }.foregroundStyle(S.soft).accessibilityLabel("Down \(n)")
+            case .up(let n): HStack(spacing: 2) { Image(systemName: "arrowtriangle.up.fill").font(.zune(size: 10)); Text("\(n)") }.accessibilityLabel("Up \(n)")
+            case .down(let n): HStack(spacing: 2) { Image(systemName: "arrowtriangle.down.fill").font(.zune(size: 10)); Text("\(n)") }.foregroundStyle(S.soft).accessibilityLabel("Down \(n)")
             case .new: NewMark()
-            case .same: Image(systemName: "minus").font(.system(size: 10, weight: .bold)).foregroundStyle(S.soft.opacity(0.7)).accessibilityLabel("Same place")
+            case .same: Image(systemName: "minus").font(.zune(size: 10, .bold)).foregroundStyle(S.soft.opacity(0.7)).accessibilityLabel("Same place")
             case nil: EmptyView()
             }
         }
-        .font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+        .font(.zune(.footnote, .semibold)).monospacedDigit().foregroundStyle(.white)
     }
 }
 
 // New to a chart or to him: small bold capitals in white, as Zune marks a thing (never a solid white block).
 struct NewMark: View {
     var body: some View {
-        Text("New").textCase(.uppercase).font(.caption2.weight(.heavy)).tracking(0.8).foregroundStyle(.white).fixedSize()
+        Text("New").textCase(.uppercase).font(.zune(.caption2, .heavy)).tracking(0.8).foregroundStyle(.white).fixedSize()
             .accessibilityLabel("New")
     }
 }
@@ -105,7 +107,7 @@ struct EntryRow: View {
             HStack(spacing: S.gap) {
                 if showRank {
                     VStack(spacing: S.pair) {
-                        Text("\(e.rank)").font(.system(size: e.rank < 100 ? 28 : 19, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                        Text("\(e.rank)").font(.zune(size: e.rank < 100 ? 28 : 19, .thin)).monospacedDigit().foregroundStyle(.white)
                             .lineLimit(1).minimumScaleFactor(0.6)
                         MoveMark(move: e.move)
                     }
@@ -114,9 +116,9 @@ struct EntryRow: View {
                 ArtView(e.art, px: 156, corner: 6).frame(width: S.art).zoomSource("\(context)|\(e.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
                     // Two lines before a name is ever cut short (review 2026-11-14, item 6).
-                    Text(e.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2).multilineTextAlignment(.leading)
-                    if e.kind != .artists { Text(e.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(2) }
-                    else if let s = e.secs { Text(duration(s)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
+                    Text(e.title).font(.zune(.title3)).foregroundStyle(.white).lineLimit(2).multilineTextAlignment(.leading)
+                    if e.kind != .artists { Text(e.artist).font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(2) }
+                    else if let s = e.secs { Text(duration(s)).font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
                     if let peak, peak > 0, e.plays > 0 {
                         // His plays as a bar in the cover's colour against the list's most played: the row's width shows
                         // something (review 2026-11-14, item 17).
@@ -132,8 +134,8 @@ struct EntryRow: View {
                 Spacer(minLength: 8)
                 // His plays, the number alone (the list says what it counts); sorted by a date, the date leads.
                 VStack(alignment: .trailing, spacing: S.pair / 2) {
-                    Text(trailing ?? number(e.plays)).font(.system(.title3, weight: .light)).monospacedDigit().foregroundStyle(.white)
-                    if trailing != nil, e.plays > 0 { Text(plays(e.plays)).font(.caption).monospacedDigit().foregroundStyle(S.soft) }
+                    Text(trailing ?? number(e.plays)).font(.zune(.title3, .light)).monospacedDigit().foregroundStyle(.white)
+                    if trailing != nil, e.plays > 0 { Text(plays(e.plays)).font(.zune(.caption)).monospacedDigit().foregroundStyle(S.soft) }
                 }
                 .fixedSize()
                 .accessibilityLabel(trailing.map { "\($0), \(plays(e.plays))" } ?? plays(e.plays))
@@ -189,13 +191,13 @@ struct Panorama: View {
                     ArtView(e.art, px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(e.id)")
                     if ranks {
                         RankShade().frame(width: S.tile, height: S.tile)
-                        Text("\(k + 1)").font(.system(size: 72, weight: .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
+                        Text("\(k + 1)").font(.zune(size: 72, .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
                             .offset(x: -2, y: 18)
                     }
                 }
                 .padding(.bottom, ranks ? S.gap : S.pair)
-                Text(e.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
-                Text(caption(e)).font(.footnote).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
+                Text(e.title).font(.zune(.subheadline, .semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
+                Text(caption(e)).font(.zune(.footnote)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
             }
             .frame(width: S.tile, alignment: .leading)
         }
@@ -229,7 +231,7 @@ struct Segments<T: Hashable>: View {
             ForEach(items, id: \.self) { t in
                 let on = t == selection
                 Button { withAnimation(.snappy(duration: 0.25)) { selection = t } } label: {
-                    Text(label(t)).font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(on ? 1 : 0.7))
+                    Text(label(t)).font(.zune(.subheadline, .semibold)).foregroundStyle(.white.opacity(on ? 1 : 0.7))
                         .lineLimit(1).fixedSize()
                         .padding(.horizontal, 14).frame(height: 36).frame(maxWidth: fill ? .infinity : nil)
                         .background { if on { Capsule().fill(.white.opacity(0.24)).matchedGeometryEffect(id: "lit", in: lit) } }

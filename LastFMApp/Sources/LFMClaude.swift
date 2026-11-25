@@ -523,7 +523,7 @@ struct TastePortrait: View {
             VStack(alignment: .leading, spacing: S.section) {
                 VStack(alignment: .leading, spacing: S.inner) {
                     ForEach(lines, id: \.self) { l in
-                        Text(l).font(.system(size: 24, weight: .light)).foregroundStyle(.white.opacity(0.94)).fixedSize(horizontal: false, vertical: true)
+                        Text(l).font(.zune(size: 24, .light)).foregroundStyle(.white.opacity(0.94)).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.horizontal, S.margin)
@@ -534,7 +534,7 @@ struct TastePortrait: View {
                             let r = t.art[a]
                             return Entry(kind: .artists, artist: a, album: r?.album ?? "", track: "", plays: t.plays[a] ?? 0, image: r?.url)
                         }, tiles: true) { e in e.plays > 0 ? "\(number(e.plays)) \(e.plays == 1 ? "play" : "plays")" : " " }
-                        Text(th.note).font(.subheadline).foregroundStyle(S.soft).padding(.horizontal, S.margin).fixedSize(horizontal: false, vertical: true)
+                        Text(th.note).font(.zune(.subheadline)).foregroundStyle(S.soft).padding(.horizontal, S.margin).fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -548,7 +548,7 @@ struct TasteWeekNote: View {
     private var t: Taste { Taste.shared }
     var body: some View {
         if t.on, let note = t.kept.week?.data {
-            Text(note).font(.system(size: 22, weight: .light)).foregroundStyle(.white.opacity(0.94))
+            Text(note).font(.zune(size: 22, .light)).foregroundStyle(.white.opacity(0.94))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, S.margin)
                 .transition(.opacity)
@@ -582,7 +582,7 @@ struct TasteAsk: View {
                 HStack(spacing: S.gap) {
                     TextField("", text: $q, prompt: Text("How much did I play this year?").foregroundStyle(S.soft), axis: .vertical)
                         .lineLimit(1...3)
-                        .font(.body).foregroundStyle(.white)
+                        .font(.zune(.body)).foregroundStyle(.white)
                         .focused($focused)
                         .submitLabel(.send)
                         .onChange(of: q) { _, v in
@@ -596,17 +596,17 @@ struct TasteAsk: View {
                     if t.asking { ProgressView().tint(.white).frame(width: 44, height: 44) }
                     else {
                         // Dimmed until there's a question to send.
-                        Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)).foregroundStyle(.white.opacity(ready ? 1 : 0.3)) }
+                        Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.zune(size: 32)).foregroundStyle(.white.opacity(ready ? 1 : 0.3)) }
                             .frame(width: 44, height: 44)
                             .disabled(!ready)
                             .accessibilityLabel("Ask")
                     }
                 }
-                if let e = t.askError { Text(e).font(.subheadline).foregroundStyle(S.soft) }
+                if let e = t.askError { Text(e).font(.zune(.subheadline)).foregroundStyle(S.soft) }
                 ForEach(t.kept.asked.prefix(3), id: \.self) { a in
                     VStack(alignment: .leading, spacing: S.pair) {
-                        Text(a.q).font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
-                        Text(a.answer).font(.system(size: 20, weight: .light)).foregroundStyle(.white.opacity(0.94)).fixedSize(horizontal: false, vertical: true)
+                        Text(a.q).font(.zune(.subheadline, .semibold)).foregroundStyle(S.soft)
+                        Text(a.answer).font(.zune(size: 20, .light)).foregroundStyle(.white.opacity(0.94)).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.top, S.pair)
                 }

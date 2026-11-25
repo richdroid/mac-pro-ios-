@@ -408,7 +408,9 @@ final class MockLastFM: @unchecked Sendable {
             guard let a = artists.first(where: { $0.name.lowercased() == name }), let al = a.albums.first(where: { $0.name.lowercased() == title }) else {
                 return ["error": 6, "message": "Album not found"]
             }
-            return ["album": ["name": al.name, "artist": a.name, "image": image(al.art), "listeners": "\(a.listeners / 2)", "playcount": "\(a.listeners * 9)",
+            let ai = artists.firstIndex { $0.name == a.name } ?? 0
+            let mineAlbum = plays.filter { $0.artist == ai && a.albums[$0.album].name == al.name }.count
+            return ["album": ["name": al.name, "artist": a.name, "image": image(al.art), "listeners": "\(a.listeners / 2)", "playcount": "\(a.listeners * 9)", "userplaycount": "\(mineAlbum)",
                               "url": "https://www.last.fm/music/\(a.name.replacingOccurrences(of: " ", with: "+"))/\(al.name.replacingOccurrences(of: " ", with: "+"))",
                               "tags": ["tag": a.tags.map { ["name": $0] }],
                               "tracks": ["track": al.tracks.enumerated().map { k, t in ["name": t, "duration": "\(Self.length(t))", "@attr": ["rank": "\(k + 1)"]] }],
@@ -442,6 +444,11 @@ final class MockLastFM: @unchecked Sendable {
                               "toptags": ["tag": a.tags.map { ["name": $0] }],
                               "wiki": ["summary": "\"\(title)\" is a song by \(a.name), first released in \(al.year). It became a quiet favourite on late-night radio, the song the band closes every show with, and the one most of their listeners found them through. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"],
                               "url": "https://www.last.fm/music/\(a.name.replacingOccurrences(of: " ", with: "+"))"]]
+        case "tag.getinfo":
+            let name = params["tag"] ?? ""
+            let h = Self.hash(name)
+            return ["tag": ["name": name, "reach": "\(120_000 + h % 2_400_000)", "total": "\(900_000 + h % 9_000_000)",
+                            "wiki": ["summary": "\(name.capitalized) is music of patient builds and warm production."]]]
         default:
             return ["error": 3, "message": "Invalid Method"]
         }

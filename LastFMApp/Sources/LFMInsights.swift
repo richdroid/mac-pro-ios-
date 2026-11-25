@@ -40,9 +40,9 @@ struct RiverCard: View {
                             Opens(route: .artist(l.artist), zoom: nil) {
                                 HStack(spacing: 8) {
                                     Circle().fill(vivid(ArtRef(artist: l.artist, album: l.album, url: l.image))).frame(width: 10, height: 10)
-                                    Text(l.artist).font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(2)
+                                    Text(l.artist).font(.zune(.subheadline, .medium)).foregroundStyle(.white).lineLimit(2)
                                     Spacer(minLength: 0)
-                                    Text(compact(l.total)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                                    Text(compact(l.total)).font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft)
                                 }
                                 .frame(minHeight: 32)
                             }
@@ -86,8 +86,8 @@ struct RiverCard: View {
                     let thick = (0..<n).map { CGFloat(l.values[$0]) * k }
                     // White on a dark edge, readable on any band's colour, and only where the band is tall enough for
                     // it (dark words on bright bands ran together; review 2026-11-14, item 12).
-                    let label = ctx.resolve(Text(l.artist).font(.caption.weight(.semibold)).foregroundStyle(.white))
-                    let edge = ctx.resolve(Text(l.artist).font(.caption.weight(.semibold)).foregroundStyle(.black.opacity(0.55)))
+                    let label = ctx.resolve(Text(l.artist).font(.zune(.caption, .semibold)).foregroundStyle(.white))
+                    let edge = ctx.resolve(Text(l.artist).font(.zune(.caption, .semibold)).foregroundStyle(.black.opacity(0.55)))
                     let sz = label.measure(in: CGSize(width: 300, height: 40))
                     let order = thick.indices.sorted { thick[$0] > thick[$1] }.prefix(12)
                     let halfW: CGFloat = sz.width / 2, halfH: CGFloat = sz.height / 2
@@ -149,7 +149,7 @@ struct YearAxis: View {
     var body: some View {
         GeometryReader { g in
             ForEach(Self.marks(from: from, months: months, width: g.size.width), id: \.year) { m in
-                Text(m.label).font(.caption2.weight(.medium)).monospacedDigit().foregroundStyle(S.soft).fixedSize().position(x: m.x, y: 7)
+                Text(m.label).font(.zune(.caption2, .medium)).monospacedDigit().foregroundStyle(S.soft).fixedSize().position(x: m.x, y: 7)
             }
         }
         .frame(height: 14)
@@ -184,7 +184,7 @@ struct ErasSection: View {
                     }
                     if chapters.count > 5 {
                         Button { withAnimation(.smooth) { all.toggle() } } label: {
-                            Text(all ? "Show fewer" : "Show all \(chapters.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                            Text(all ? "Show fewer" : "Show all \(chapters.count)").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                                 .frame(maxWidth: .infinity).frame(height: 44).glassEffect(.regular, in: Capsule())
                         }
                         .buttonStyle(Press())
@@ -225,13 +225,13 @@ struct ErasSection: View {
             HStack(spacing: S.gap) {
                 ArtView(ref, px: 156, corner: 6).frame(width: S.art).zoomSource("era|\(e.from)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(e.artist).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
-                    Text("\(monthShort(e.from)) – \(monthShort(e.to))").font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                    Text(e.artist).font(.zune(.title3)).foregroundStyle(.white).lineLimit(2)
+                    Text("\(monthShort(e.from)) – \(monthShort(e.to))").font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: S.pair / 2) {
-                    Text("\(e.months)").font(.body.weight(.medium)).monospacedDigit().foregroundStyle(.white)
-                    Text("months").font(.caption).foregroundStyle(S.soft)
+                    Text("\(e.months)").font(.zune(.body, .medium)).monospacedDigit().foregroundStyle(.white)
+                    Text("months").font(.zune(.caption)).foregroundStyle(S.soft)
                 }
             }
         }
@@ -246,11 +246,11 @@ struct ErasSection: View {
                     .zoomSource("takeover|\(t.month)")
                 LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.4), .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: S.pair) {
-                    Text(monthName(t.month)).font(.system(size: 44, weight: .thin)).tracking(-1).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
-                    Text(t.artist).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(2)
+                    Text(monthName(t.month)).font(.zune(size: 44, .thin)).tracking(-1).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+                    Text(t.artist).font(.zune(.title3, .bold)).foregroundStyle(.white).lineLimit(2)
                     HStack(spacing: S.gap) {
-                        Text("\(Int((t.share * 100).rounded()))%").font(.system(size: 24, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
-                        Text("of the month, \(plays(t.plays))").font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                        Text("\(Int((t.share * 100).rounded()))%").font(.zune(size: 24, .semibold)).monospacedDigit().foregroundStyle(.white)
+                        Text("of the month, \(plays(t.plays))").font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.85))
                     }
                 }
                 .padding(S.inner)
@@ -272,8 +272,8 @@ struct TimeCard: View {
                 SectionHead(text: "listening time")
                 VStack(alignment: .leading, spacing: S.inner) {
                     VStack(alignment: .leading, spacing: S.pair) {
-                        Text(number(t.all / 3600)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
-                        Text("hours, about \(number(t.all / 86400)) days").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                        Text(number(t.all / 3600)).font(.zune(size: 64, .thin)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+                        Text("hours, about \(number(t.all / 86400)) days").font(.zune(.title3, .light)).foregroundStyle(S.soft)
                     }
                     .accessibilityElement(children: .combine)
                     FigureGrid(items: [
@@ -322,11 +322,11 @@ struct RecordsSection: View {
                 // thin "155" on a dotted cover was hard to read (runs 33, 34).
                 LinearGradient(stops: [.init(color: .black.opacity(0.2), location: 0), .init(color: .black.opacity(0.75), location: 0.25), .init(color: .black.opacity(0.92), location: 1)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: S.pair) {
-                    Text(number(r.plays)).font(.system(size: 64, weight: .light)).monospacedDigit().foregroundStyle(.white)
+                    Text(number(r.plays)).font(.zune(size: 64, .light)).monospacedDigit().foregroundStyle(.white)
                         .shadow(color: .black.opacity(0.8), radius: 10)
-                    Text(what).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                    Text(name).font(.subheadline).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
-                    Text(LocalDay.date(r.day).formatted(.dateTime.month(.wide).day().year())).font(.subheadline).foregroundStyle(.white.opacity(0.7))
+                    Text(what).font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
+                    Text(name).font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
+                    Text(LocalDay.date(r.day).formatted(.dateTime.month(.wide).day().year())).font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.7))
                 }
                 .padding(S.inner)
             }
@@ -356,15 +356,15 @@ struct DiscoveriesSection: View {
                                 .foregroundStyle(S.accent).cornerRadius(3)
                         }
                     }
-                    .chartXAxis { AxisMarks { v in AxisValueLabel { Text("’" + String((v.as(String.self) ?? "").suffix(2))).font(.caption2.weight(.medium)).foregroundStyle(S.soft) } } }
-                    .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(.white.opacity(0.08)); AxisValueLabel().foregroundStyle(S.soft).font(.caption2) } }
+                    .chartXAxis { AxisMarks { v in AxisValueLabel { Text("’" + String((v.as(String.self) ?? "").suffix(2))).font(.zune(.caption2, .medium)).foregroundStyle(S.soft) } } }
+                    .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in AxisGridLine().foregroundStyle(.white.opacity(0.08)); AxisValueLabel().foregroundStyle(S.soft).font(.zune(.caption2)) } }
                     .frame(height: 130)
                     .accessibilityLabel("New artists each year, and how many stuck")
                     HStack(spacing: 16) {
                         HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.25)).frame(width: 12, height: 10); Text("new artists") }
                         HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(S.accent).frame(width: 12, height: 10); Text("still played a year on") }
                     }
-                    .font(.caption).foregroundStyle(S.soft)
+                    .font(.zune(.caption)).foregroundStyle(S.soft)
                     ForEach(years.reversed().filter { !$0.top.isEmpty }) { y in row(y) }
                 }
                 .card()
@@ -375,9 +375,9 @@ struct DiscoveriesSection: View {
     private func row(_ y: DiscoveryYear) -> some View {
         VStack(alignment: .leading, spacing: S.pair * 2) {
             HStack(alignment: .firstTextBaseline) {
-                Text(String(y.year)).font(.title3.weight(.bold)).foregroundStyle(.white)
+                Text(String(y.year)).font(.zune(.title3, .bold)).foregroundStyle(.white)
                 Spacer()
-                Text("\(y.stuck) of \(number(y.found)) stuck").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                Text("\(y.stuck) of \(number(y.found)) stuck").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft)
             }
             ScrollView(.horizontal) {
                 HStack(spacing: S.gap) {
@@ -385,8 +385,8 @@ struct DiscoveriesSection: View {
                         Opens(route: .artist(a.name), zoom: "found|\(y.year)|\(a.name)") {
                             VStack(alignment: .leading, spacing: S.pair) {
                                 ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 220, corner: 8).frame(width: 76).zoomSource("found|\(y.year)|\(a.name)")
-                                Text(a.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
-                                Text(compact(a.plays)).font(.caption2).monospacedDigit().foregroundStyle(S.soft)
+                                Text(a.name).font(.zune(.caption, .semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
+                                Text(compact(a.plays)).font(.zune(.caption2)).monospacedDigit().foregroundStyle(S.soft)
                             }
                             .frame(width: 76, alignment: .leading)
                         }
@@ -434,13 +434,13 @@ private struct MonthBars: View {
         .chartScrollPosition(initialX: start)
         .chartXAxis {
             AxisMarks(values: years) { v in
-                AxisValueLabel { Text(yearLabel(v.as(Double.self))).font(.caption2.weight(.medium)).foregroundStyle(S.soft) }
+                AxisValueLabel { Text(yearLabel(v.as(Double.self))).font(.zune(.caption2, .medium)).foregroundStyle(S.soft) }
             }
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
                 AxisGridLine().foregroundStyle(.white.opacity(0.08))
-                AxisValueLabel().foregroundStyle(S.soft).font(.caption2)
+                AxisValueLabel().foregroundStyle(S.soft).font(.zune(.caption2))
             }
         }
     }
@@ -470,7 +470,7 @@ struct VolumeCard: View {
                         HStack(spacing: 6) { Rectangle().fill(.white.opacity(0.7)).frame(width: 14, height: 1.5); Text("your usual month") }
                         HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(S.accent).frame(width: 10, height: 10); Text("above it") }
                     }
-                    .font(.caption).foregroundStyle(S.soft)
+                    .font(.zune(.caption)).foregroundStyle(S.soft)
                 }
                 .card()
             }
@@ -502,20 +502,20 @@ struct CarryCard: View {
                             BarMark(x: .value("Year", String(c.year)), y: .value("New", c.of - c.carried)).foregroundStyle(.white.opacity(0.14)).cornerRadius(3)
                                 .annotation(position: .top, spacing: 4) {
                                     Text(c.id == shift?.id ? "biggest change" : "\(Int((Double(c.carried) / Double(c.of) * 100).rounded()))%")
-                                        .font(.caption2.weight(c.id == shift?.id ? .bold : .medium)).foregroundStyle(c.id == shift?.id ? .white : S.soft).fixedSize()
+                                        .font(.zune(.caption2, c.id == shift?.id ? .bold : .medium)).foregroundStyle(c.id == shift?.id ? .white : S.soft).fixedSize()
                                 }
                         }
                     }
                     .chartYScale(domain: 0...62)
                     .chartYAxis(.hidden)
-                    .chartXAxis { AxisMarks { v in AxisValueLabel { Text("’" + String((v.as(String.self) ?? "").suffix(2))).font(.caption2.weight(.medium)).foregroundStyle(S.soft) } } }
+                    .chartXAxis { AxisMarks { v in AxisValueLabel { Text("’" + String((v.as(String.self) ?? "").suffix(2))).font(.zune(.caption2, .medium)).foregroundStyle(S.soft) } } }
                     .frame(height: 150)
                     .accessibilityLabel("How much of each year's top 50 artists was in the year before's")
                     HStack(spacing: 16) {
                         HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(S.accent).frame(width: 12, height: 10); Text("from the year before") }
                         HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.25)).frame(width: 12, height: 10); Text("new to the top 50") }
                     }
-                    .font(.caption).foregroundStyle(S.soft)
+                    .font(.zune(.caption)).foregroundStyle(S.soft)
                 }
                 .card()
             }

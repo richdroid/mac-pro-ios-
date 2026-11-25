@@ -324,6 +324,7 @@ struct TrackInfo: Sendable {
     var userPlays: Int?
     var loved = false
     var listeners: Int?
+    var plays: Int?                    // everyone's scrobbles of it
     var duration: Int?
     var tags: [String] = []
     var summary: String?
@@ -337,6 +338,7 @@ struct TrackInfo: Sendable {
         info.userPlays = t["userplaycount"].int
         info.loved = t["userloved"].bool
         info.listeners = t["listeners"].int
+        info.plays = t["playcount"].int
         info.duration = t["duration"].int.flatMap { $0 > 0 ? $0 / 1000 : nil }
         info.tags = t["toptags"]["tag"].array.map { $0["name"].text }.filter { !$0.isEmpty }.prefix(5).map { $0.lowercased() }
         // Last.fm ends each summary with a link back to itself; the words are kept, the link isn't.

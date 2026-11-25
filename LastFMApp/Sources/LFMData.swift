@@ -28,6 +28,7 @@ struct Entry: Identifiable, Hashable, Sendable {
     var move: Move? = nil
     var first: Int? = nil
     var last: Int? = nil
+    var because: String? = nil         // a recommendation's reason, said quietly
     var id: String { kind == .artists ? "a|\(artist)" : kind == .albums ? "l|\(artist)|\(album)" : "t|\(artist)|\(track)" }
     var title: String { kind == .artists ? artist : kind == .albums ? album : track }
     var art: ArtRef { ArtRef(artist: artist, album: album, url: image) }

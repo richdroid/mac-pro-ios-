@@ -72,6 +72,21 @@ jobs:
           # 3 story), 1 charts, 2 library, 3 discover.
           everything() {
             local x=$1 d=$2
+            # The Zune pass (11-24): home, now playing's pivot (playing, song, artist, album), history, discover's pages,
+            # scrobbling waiting for the secret and as it will be connected.
+            shot home$x $d 10 -hub home
+            shot home-idle$x $d 9 -hub home -playing NO
+            shot now-song$x $d 13 -hub nowPlaying -panel 1
+            shot now-artist$x $d 14 -hub nowPlaying -panel 2
+            shot now-album$x $d 13 -hub nowPlaying -panel 3
+            shot history$x $d 9 -hub history
+            shot history-recent$x $d 9 -hub history -panel 1
+            shot discover-songs$x $d 16 -hub discover -panel 1
+            shot rediscover$x $d 16 -hub discover -panel 2
+            shot scrobble-wait$x $d 8 -hub scrobbling
+            shot scrobble$x $d 9 -hub scrobbling -scrobbleState connected
+            shot scrobble-settings$x $d 8 -hub scrobbling -panel 1 -scrobbleState connected
+            shot scrobble-connect$x $d 8 -hub scrobbling -scrobbleState signedout
             shot start$x $d 9 -tab 0
             shot now$x $d 12 -tab 0 -panel 1
             shot now-idle$x $d 8 -tab 0 -panel 1 -playing NO
@@ -212,6 +227,13 @@ jobs:
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-charts 1 28 -tab 1
           STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll 1 26 -tab 0 -pose artist
           STEPS="shot:12 shot:12" film live 1 30 -tab 0 -panel 1 -mockAdvance 11
+          # The Zune pass (11-24): home's menu turnstiles out and the hub turns in; Back by its button, then by a slow drag
+          # from the edge; now playing's pivot swiped through; Back by the edge from a pivot hub (never the pivot turning).
+          STEPS="shot:4 tap=0.3,0.52:2 shot:1 shot:2 tap=0.895,0.29:2 shot:1 shot:2" film home-tap 1 18 -hub home
+          STEPS="tap=0.3,0.62:6 shot:2 edgeslow:1 shot:1 shot:3" film home-swipe 1 18 -hub home
+          STEPS="tap=0.3,0.3:6 shot:2 tap=0.895,0.29:2 shot:2" film home-now 1 16 -hub home
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-now 1 26 -hub nowPlaying
+          Y=0.6 STEPS="side:6 shot:2 edgeslow:2 shot:1 shot:3" film edge-back-pivot 1 18 -hub discover
           # The films the run 39 review found missing. Opened a second time: whole in its first frame, nothing arriving.
           STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm 1 20 -tab 0
           # Two swipes a fifth of a second apart, there and back: the second is never thrown back.
@@ -246,6 +268,8 @@ jobs:
           Y=0.6 STEPS="side2:6 shot:2 sideback2:2 shot:2" film pivot-quick-portrait 3 16 -tab 1
           STEPS="tap=0.4,0.62:7 shot:1 shot:2 edgeslow:1 shot:1 shot:3" film tap-artist-portrait 3 20 -tab 1 -kind 0
           STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm-portrait 3 20 -tab 0
+          STEPS="shot:4 edgeslow:4 shot:1 shot:3" film edge-back-portrait 3 16 -hub charts
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-now-portrait 3 18 -hub nowPlaying
           early films-upright
           # Open flat, two panes.
           flat
@@ -254,6 +278,7 @@ jobs:
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
           X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
           STEPS="tap=0.72,0.62:7 shot:1 shot:2 edgeslow:1 shot:1 shot:3" film tap-artist-open 3 20 -tab 1 -kind 0
+          STEPS="shot:4 edgeslow:4 shot:1 shot:3" film edge-back-open 3 16 -hub discover
           date
           # The simulator stopped before any film is shrunk: shrinking beside it failed with "Cannot Decode" (runs 34, 35).
           xcrun simctl shutdown "$DEVICE"

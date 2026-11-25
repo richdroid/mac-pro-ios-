@@ -13,6 +13,7 @@ enum WS {
     static let ground = Color(red: 0.035, green: 0.035, blue: 0.045)
     static let accent = Color(red: 1.0, green: 0.36, blue: 0.36)
     static let soft = Color.white.opacity(0.7)
+    static func compact(_ n: Int) -> String { n >= 10_000 ? n.formatted(.number.notation(.compactName).precision(.fractionLength(0...1))) : n.formatted() }
 }
 
 // A cover, or its stand-in: the album's own colour (stable per name) with a faint record, never a blank.
@@ -97,7 +98,7 @@ struct WStatus: View {
 struct WWait: View {
     var body: some View {
         HStack(spacing: 4) { Image(systemName: "opticaldisc"); Text("Waiting for Last.fm") }
-            .font(.system(size: 11, weight: .semibold)).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
+            .font(.zune(size: 11, .semibold)).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
     }
 }
 
@@ -111,11 +112,11 @@ struct WTitle: View {
         Group {
             if Self.width(text, size) <= width * 2 * 0.9 { Text(text).lineLimit(2) } else { WLine(text: text) }
         }
-        .font(.system(size: size, weight: .bold))
+        .font(.zune(size: size, .bold))
     }
     static func width(_ s: String, _ size: CGFloat) -> CGFloat {
         #if canImport(UIKit)
-        return (s as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: size, weight: .bold)]).width
+        return (s as NSString).size(withAttributes: [.font: (UIFont(name: "Selawik-Bold", size: size) ?? UIFont.systemFont(ofSize: size, weight: .bold))]).width
         #else
         return CGFloat(s.count) * size * 0.55
         #endif
@@ -134,26 +135,34 @@ struct NowBody: View {
             HStack(spacing: 6) {
                 WArt(cover: s, data: entry.image(s), corner: 4).frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 0) {
-                    WStatus(entry: entry).font(.system(size: 11, weight: .semibold)).opacity(0.8)
+                    WStatus(entry: entry).font(.zune(size: 11, .semibold)).opacity(0.8)
                     if entry.seen != nil {
-                        WLine(text: s?.title ?? "").font(.system(size: 14, weight: .bold)).widgetAccentable()
-                        WLine(text: s?.artist ?? "").font(.system(size: 12))
+                        WLine(text: s?.title ?? "").font(.zune(size: 14, .bold)).widgetAccentable()
+                        WLine(text: s?.artist ?? "").font(.zune(size: 12))
                     }
                 }
                 Spacer(minLength: 0)
             }
         case .systemMedium:
+            // Marvis's shape in Zune's type: the cover, the song light and large, then the numbers as figures with
+            // small capitals under them (everyone's listeners, his plays).
             HStack(spacing: 14) {
-                WArt(cover: s, data: entry.image(s), corner: 10).frame(width: 126, height: 126)
+                WArt(cover: s, data: entry.image(s), corner: 3).frame(width: 126, height: 126)
                     .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
-                VStack(alignment: .leading, spacing: 3) {
-                    WStatus(entry: entry).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85)).padding(.bottom, 3)
+                VStack(alignment: .leading, spacing: 2) {
+                    WStatus(entry: entry).font(.zune(.caption, .semibold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.85)).padding(.bottom, 2)
                     if entry.seen != nil {
                         WTitle(text: s?.title ?? "", size: 19, width: 166).widgetAccentable()
-                        WLine(text: s?.artist ?? "").font(.subheadline).foregroundStyle(.white.opacity(0.85))
-                        if let a = s?.album, !a.isEmpty { WLine(text: a).font(.footnote).foregroundStyle(WS.soft) }
+                        WLine(text: s?.artist ?? "").font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.85))
+                        Spacer(minLength: 4)
+                        HStack(alignment: .bottom, spacing: 16) {
+                            if let l = entry.listeners { WFigure(value: WS.compact(l), label: "listeners") }
+                            if let y = entry.yours { WFigure(value: y.formatted(), label: y == 1 ? "your play" : "your plays") }
+                            else if let a = s?.album, !a.isEmpty { WLine(text: a).font(.zune(.footnote)).foregroundStyle(WS.soft) }
+                        }
                     }
                 }
+                .frame(maxHeight: 126, alignment: .topLeading)
                 Spacer(minLength: 0)
             }
         default:
@@ -162,10 +171,11 @@ struct NowBody: View {
                 WArt(cover: s, data: entry.image(s))
                 LinearGradient(stops: [.init(color: .clear, location: 0.35), .init(color: .black.opacity(0.78), location: 1)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 1) {
-                    WStatus(entry: entry).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85)).padding(.bottom, 2)
+                    WStatus(entry: entry).font(.zune(size: 11, .semibold)).foregroundStyle(.white.opacity(0.85)).padding(.bottom, 2)
                     if entry.seen != nil {
-                        WLine(text: s?.title ?? "").font(.system(size: 15, weight: .bold)).widgetAccentable()
-                        WLine(text: s?.artist ?? "").font(.system(size: 13)).foregroundStyle(.white.opacity(0.85))
+                        WLine(text: s?.title ?? "").font(.zune(size: 15, .bold)).widgetAccentable()
+                        WLine(text: s?.artist ?? "").font(.zune(size: 13)).foregroundStyle(.white.opacity(0.85))
+                        if let l = entry.listeners { WLine(text: "\(WS.compact(l)) listeners").font(.zune(size: 11, .semibold)).textCase(.uppercase).foregroundStyle(.white.opacity(0.7)) }
                     }
                 }
                 .padding(12)
@@ -175,6 +185,18 @@ struct NowBody: View {
 }
 
 // The cover blurred to colour behind a widget, darker toward the foot.
+// A figure and its label, Zune's way, small enough for a widget.
+struct WFigure: View {
+    let value: String
+    let label: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(value).font(.zune(size: 24, .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            Text(label).font(.zune(size: 10, .semibold)).textCase(.uppercase).tracking(0.6).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+        }
+    }
+}
+
 struct WBlur: View {
     let data: Data?
     var body: some View {
@@ -205,9 +227,9 @@ struct CollageBody: View {
         case .systemMedium:
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("this week").font(.system(size: 17, weight: .bold)).lineLimit(1).fixedSize().widgetAccentable()
+                    Text("this week").font(.zune(size: 17, .bold)).lineLimit(1).fixedSize().widgetAccentable()
                     Spacer(minLength: 6)
-                    if entry.stale, let s = entry.seen { Text(lastSeen(s, now: entry.date)).font(.caption2).foregroundStyle(WS.soft).lineLimit(1) }
+                    if entry.stale, let s = entry.seen { Text(lastSeen(s, now: entry.date)).font(.zune(.caption2)).foregroundStyle(WS.soft).lineLimit(1) }
                     else if entry.seen == nil { WWait() }
                 }
                 HStack(spacing: 6) {
@@ -219,8 +241,8 @@ struct CollageBody: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 WArt(cover: c, data: entry.image(c), corner: 6).aspectRatio(1, contentMode: .fit)
                                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                                    Text("\(i + 1)").font(.system(size: 17, weight: .semibold)).monospacedDigit().foregroundStyle(.white).widgetAccentable()
-                                    Text(c.map { "\($0.plays)" } ?? " ").font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(WS.soft)
+                                    Text("\(i + 1)").font(.zune(size: 17, .semibold)).monospacedDigit().foregroundStyle(.white).widgetAccentable()
+                                    Text(c.map { "\($0.plays)" } ?? " ").font(.zune(size: 12, .medium)).monospacedDigit().foregroundStyle(WS.soft)
                                 }
                                 .lineLimit(1)
                             }
@@ -257,7 +279,7 @@ struct CollageBody: View {
 struct StaleChip: View {
     let text: String
     var body: some View {
-        Text(text).font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
+        Text(text).font(.zune(size: 10, .semibold)).foregroundStyle(.white)
             .padding(.horizontal, 7).padding(.vertical, 3).background(.black.opacity(0.55), in: Capsule()).padding(8)
     }
 }
@@ -282,8 +304,8 @@ struct StreakBody: View {
             ZStack {
                 AccessoryWidgetBackground()
                 VStack(spacing: -2) {
-                    Image(systemName: "flame.fill").font(.system(size: 13, weight: .semibold))
-                    Text(n).font(.system(size: 20, weight: .semibold)).monospacedDigit().minimumScaleFactor(0.5).lineLimit(1).padding(.horizontal, 6)
+                    Image(systemName: "flame.fill").font(.zune(size: 13, .semibold))
+                    Text(n).font(.zune(size: 20, .semibold)).monospacedDigit().minimumScaleFactor(0.5).lineLimit(1).padding(.horizontal, 6)
                 }
             }
             .widgetAccentable()
@@ -293,28 +315,28 @@ struct StreakBody: View {
             if entry.streak == nil {
                 // Nothing to count yet (Last.fm hasn't answered, or the app hasn't handed over the streak): the flame and one calm line.
                 VStack(alignment: .leading, spacing: 0) {
-                    Flame().font(.system(size: 34)).opacity(0.5)
+                    Flame().font(.zune(size: 34)).opacity(0.5)
                     Spacer(minLength: 4)
                     if entry.seen == nil { WWait() }
-                    else { Text("Open Rotation to start your streak").font(.caption).foregroundStyle(WS.soft).lineLimit(2) }
+                    else { Text("Open Rotation to start your streak").font(.zune(.caption)).foregroundStyle(WS.soft).lineLimit(2) }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Flame().font(.system(size: 22))
-                        Text(n).font(.system(size: 42, weight: .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5).widgetAccentable()
+                        Flame().font(.zune(size: 22))
+                        Text(n).font(.zune(size: 42, .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5).widgetAccentable()
                     }
-                    Text(entry.streak == 1 ? "day in a row" : "days in a row").font(.subheadline).foregroundStyle(WS.soft).lineLimit(1)
+                    Text(entry.streak == 1 ? "day in a row" : "days in a row").font(.zune(.subheadline)).foregroundStyle(WS.soft).lineLimit(1)
                     Spacer(minLength: 4)
                     if let sc = entry.scrobbles {
-                        Text(sc.formatted()).font(.system(size: 22, weight: .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                        Text(sc.formatted()).font(.zune(size: 22, .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
                             .widgetAccentable()
                     }
                     if entry.stale, let s = entry.seen {
-                        Text(lastSeen(s, now: entry.date)).font(.caption2).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(lastSeen(s, now: entry.date)).font(.zune(.caption2)).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
                     } else {
-                        Text(entry.today.map { "scrobbles · \($0) today" } ?? "scrobbles").font(.caption).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(entry.today.map { "scrobbles · \($0) today" } ?? "scrobbles").font(.zune(.caption)).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
                     }
                     DaysRow(days: entry.days, streak: entry.streak ?? 0).frame(height: 8).padding(.top, 6)
                 }
@@ -393,23 +415,23 @@ struct PaceBody: View {
         case .accessoryRectangular:
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("this week").font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Text("this week").font(.zune(size: 12, .semibold)).lineLimit(1)
                     if entry.seen == nil { WWait() }
-                    else { Text(plays.map { $0.formatted() } ?? " ").font(.system(size: 22, weight: .medium)).monospacedDigit().widgetAccentable() }
-                    if let p { Text(change(p)).font(.system(size: 12, weight: .semibold)).monospacedDigit() }
+                    else { Text(plays.map { $0.formatted() } ?? " ").font(.zune(size: 22, .medium)).monospacedDigit().widgetAccentable() }
+                    if let p { Text(change(p)).font(.zune(size: 12, .semibold)).monospacedDigit() }
                 }
                 if let p { PaceChart(pace: p, line: .white).frame(maxWidth: .infinity) }
             }
         default:
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("this week").font(.system(size: 17, weight: .bold)).lineLimit(1).fixedSize().widgetAccentable()
+                    Text("this week").font(.zune(size: 17, .bold)).lineLimit(1).fixedSize().widgetAccentable()
                     Spacer(minLength: 6)
-                    if family == .systemMedium, entry.stale, let s = entry.seen { Text(lastSeen(s, now: entry.date)).font(.caption2).foregroundStyle(WS.soft).lineLimit(1) }
+                    if family == .systemMedium, entry.stale, let s = entry.seen { Text(lastSeen(s, now: entry.date)).font(.zune(.caption2)).foregroundStyle(WS.soft).lineLimit(1) }
                 }
                 if entry.seen == nil {
                     Spacer(minLength: 0)
-                    Image(systemName: "opticaldisc").font(.system(size: 34, weight: .ultraLight)).foregroundStyle(.white.opacity(0.3))
+                    Image(systemName: "opticaldisc").font(.zune(size: 34, .ultraLight)).foregroundStyle(.white.opacity(0.3))
                     WWait()
                 } else {
                     HStack(alignment: .bottom, spacing: 16) {
@@ -431,19 +453,19 @@ struct PaceBody: View {
     }
     private func figures(plays: Int?, p: WPace?, caption: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(plays.map { $0.formatted() } ?? " ").font(.system(size: 36, weight: .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+            Text(plays.map { $0.formatted() } ?? " ").font(.zune(size: 36, .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
                 .widgetAccentable()
-            Text("plays so far").font(.caption).foregroundStyle(WS.soft).lineLimit(1)
+            Text("plays so far").font(.zune(.caption)).foregroundStyle(WS.soft).lineLimit(1)
             if let p {
                 HStack(spacing: 3) {
-                    Image(systemName: p.delta >= 0 ? "arrow.up.right" : "arrow.down.right").font(.system(size: 12, weight: .bold))
-                    Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.system(size: 17, weight: .medium)).monospacedDigit()
+                    Image(systemName: p.delta >= 0 ? "arrow.up.right" : "arrow.down.right").font(.zune(size: 12, .bold))
+                    Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.zune(size: 17, .medium)).monospacedDigit()
                 }
                 .padding(.top, 4)
-                if caption { Text(p.delta >= 0 ? "more than usual" : "less than usual").font(.caption).foregroundStyle(WS.soft).lineLimit(1) }
+                if caption { Text(p.delta >= 0 ? "more than usual" : "less than usual").font(.zune(.caption)).foregroundStyle(WS.soft).lineLimit(1) }
             }
             if family != .systemMedium, entry.stale, let s = entry.seen {
-                Text(lastSeen(s, now: entry.date)).font(.caption2).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
+                Text(lastSeen(s, now: entry.date)).font(.zune(.caption2)).foregroundStyle(WS.soft).lineLimit(1).minimumScaleFactor(0.8)
             }
         }
     }
@@ -464,26 +486,26 @@ struct ArtistBody: View {
                     WArt(cover: a, data: entry.image(a), corner: 10).frame(width: 126, height: 126).shadow(color: .black.opacity(0.4), radius: 10, y: 4)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("top artist this week").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                    Text("top artist this week").font(.zune(.caption, .semibold)).foregroundStyle(.white.opacity(0.85))
                     if entry.seen == nil { WWait() }
                     if let a {
                         WTitle(text: a.artist, size: 20, width: 166).widgetAccentable()
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("\(a.plays)").font(.system(size: 26, weight: .light)).monospacedDigit().widgetAccentable()
-                            Text("plays").font(.caption).foregroundStyle(WS.soft)
+                            Text("\(a.plays)").font(.zune(size: 26, .light)).monospacedDigit().widgetAccentable()
+                            Text("plays").font(.zune(.caption)).foregroundStyle(WS.soft)
                         }
                     }
                     Spacer(minLength: 2)
                     ForEach(Array(entry.artists.dropFirst().prefix(2).enumerated()), id: \.offset) { i, r in
                         Link(destination: LinkScheme.artist(r.artist)) {
                             HStack(spacing: 6) {
-                                Text("\(i + 2)").font(.system(size: 13, weight: .light)).monospacedDigit().foregroundStyle(WS.soft).frame(width: 12, alignment: .leading)
-                                WLine(text: r.artist).font(.system(size: 13, weight: .semibold))
-                                Text("\(r.plays)").font(.system(size: 12)).monospacedDigit().foregroundStyle(WS.soft)
+                                Text("\(i + 2)").font(.zune(size: 13, .light)).monospacedDigit().foregroundStyle(WS.soft).frame(width: 12, alignment: .leading)
+                                WLine(text: r.artist).font(.zune(size: 13, .semibold))
+                                Text("\(r.plays)").font(.zune(size: 12)).monospacedDigit().foregroundStyle(WS.soft)
                             }
                         }
                     }
-                    if entry.stale, let s = entry.seen { Text(lastSeen(s, now: entry.date)).font(.caption2).foregroundStyle(WS.soft) }
+                    if entry.stale, let s = entry.seen { Text(lastSeen(s, now: entry.date)).font(.zune(.caption2)).foregroundStyle(WS.soft) }
                 }
                 Spacer(minLength: 0)
             }
@@ -495,10 +517,10 @@ struct ArtistBody: View {
                 VStack(alignment: .leading, spacing: 1) {
                     if entry.seen == nil { WWait() }
                     else {
-                        Text(entry.stale ? entry.seen.map { lastSeen($0, now: entry.date) } ?? "" : "top artist this week").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                        Text(entry.stale ? entry.seen.map { lastSeen($0, now: entry.date) } ?? "" : "top artist this week").font(.zune(size: 11, .semibold)).foregroundStyle(.white.opacity(0.85))
                             .lineLimit(1).minimumScaleFactor(0.8)
-                        WLine(text: a?.artist ?? "").font(.system(size: 16, weight: .bold)).widgetAccentable()
-                        Text(a.map { "\($0.plays) plays" } ?? " ").font(.system(size: 12)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                        WLine(text: a?.artist ?? "").font(.zune(size: 16, .bold)).widgetAccentable()
+                        Text(a.map { "\($0.plays) plays" } ?? " ").font(.zune(size: 12)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
                     }
                 }
                 .padding(12)

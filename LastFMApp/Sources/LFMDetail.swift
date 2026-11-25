@@ -93,9 +93,9 @@ struct StoryFigures: View {
     @ViewBuilder private func hero(_ st: Story?) -> some View {
             VStack(alignment: .leading, spacing: S.pair) {
                 // Its place held until known, never a big dash (review 2026-11-14, item 4); none yet is a first listen.
-                Text(st.map { $0.plays > 0 ? number($0.plays) : "first listen" } ?? "0").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                Text(st.map { $0.plays > 0 ? number($0.plays) : "first listen" } ?? "0").font(.zune(size: 64, .thin)).monospacedDigit().foregroundStyle(.white)
                     .lineLimit(1).minimumScaleFactor(0.6)
-                Text(st?.plays == 1 ? "your play" : "your plays").font(.title3.weight(.light)).foregroundStyle(S.soft).opacity(st?.plays == 0 ? 0 : 1)
+                Text(st?.plays == 1 ? "your play" : "your plays").font(.zune(.title3, .light)).foregroundStyle(S.soft).opacity(st?.plays == 0 ? 0 : 1)
             }
             .opacity(st == nil ? 0 : 1).animation(.easeOut(duration: 0.2), value: st == nil)
             .accessibilityElement(children: .combine)
@@ -127,7 +127,11 @@ struct PageHead<Byline: View>: View {
     @Environment(\.paneLayout) private var pane
     var body: some View {
         VStack(alignment: .leading, spacing: S.head) {
-            HubTitle(text: title, size: 72)
+            // WP7's application title over the page's name: what kind of page it is.
+            VStack(alignment: .leading, spacing: 0) {
+                AppTitle(text: noun == "artists" ? "artist" : noun == "albums" ? "album" : "song")
+                HubTitle(text: title, size: 72)
+            }
             Group {
                 if wide && !pane {
                     // Beside the cover: what it is and his plays; under it, the rest across the page's width (one
@@ -207,7 +211,7 @@ struct SparseTide: View {
 // The tags as one quiet line: they open nothing, so they don't look like they do.
 struct TagLine: View {
     let tags: [String]
-    var body: some View { Text(tags.joined(separator: " · ")).font(.subheadline).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true) }
+    var body: some View { Text(tags.joined(separator: " · ")).font(.zune(.subheadline)).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true) }
 }
 
 // MARK: - Artist
@@ -356,8 +360,8 @@ struct AlbumPage: View {
     private var by: some View {
         Opens(route: .artist(artist)) {
             HStack(spacing: 6) {
-                Text(artist).font(.title2.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-                Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
+                Text(artist).font(.zune(.title2, .semibold)).foregroundStyle(.white).lineLimit(2)
+                Image(systemName: "chevron.right").font(.zune(.subheadline, .semibold)).foregroundStyle(S.soft)
             }
         }
         .accessibilityHint("Opens the artist")
@@ -377,9 +381,9 @@ struct AlbumPage: View {
                         let n = mine[t.title.lowercased()] ?? 0
                         Opens(route: .track(Scrobble.song(artist: artist, title: t.title, album: album, image: image))) {
                             HStack(spacing: S.gap) {
-                                Text("\(k + 1)").font(.body.weight(.light)).monospacedDigit().foregroundStyle(S.soft).frame(width: 26, alignment: .trailing)
+                                Text("\(k + 1)").font(.zune(.body, .light)).monospacedDigit().foregroundStyle(S.soft).frame(width: 26, alignment: .trailing)
                                 VStack(alignment: .leading, spacing: S.pair) {
-                                    Text(t.title).font(.system(.title3)).foregroundStyle(.white).lineLimit(2)
+                                    Text(t.title).font(.zune(.title3)).foregroundStyle(.white).lineLimit(2)
                                     GeometryReader { g in
                                         Capsule().fill(n > 0 ? tint : .white.opacity(0.12)).frame(width: n > 0 ? max(4, g.size.width * CGFloat(n) / CGFloat(peak)) : 4, height: 4)
                                     }
@@ -387,8 +391,8 @@ struct AlbumPage: View {
                                 }
                                 Spacer(minLength: 8)
                                 VStack(alignment: .trailing, spacing: S.pair / 2) {
-                                    Text(n > 0 ? number(n) : "–").font(.body.weight(.medium)).monospacedDigit().foregroundStyle(.white)
-                                    if let s = t.secs { Text(String(format: "%d:%02d", s / 60, s % 60)).font(.caption).monospacedDigit().foregroundStyle(S.soft) }
+                                    Text(n > 0 ? number(n) : "–").font(.zune(.body, .medium)).monospacedDigit().foregroundStyle(.white)
+                                    if let s = t.secs { Text(String(format: "%d:%02d", s / 60, s % 60)).font(.zune(.caption)).monospacedDigit().foregroundStyle(S.soft) }
                                 }
                             }
                             .padding(.vertical, S.row / 2 + 2)
@@ -461,18 +465,18 @@ struct TrackPage: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Opens(route: .artist(s.artist)) {
                     HStack(spacing: 6) {
-                        Text(s.artist).font(.title2.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-                        Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
+                        Text(s.artist).font(.zune(.title2, .semibold)).foregroundStyle(.white).lineLimit(2)
+                        Image(systemName: "chevron.right").font(.zune(.subheadline, .semibold)).foregroundStyle(S.soft)
                     }
                 }
-                if info?.loved ?? s.loved { Image(systemName: "heart.fill").font(.title3).foregroundStyle(S.accent).accessibilityLabel("Loved") }
+                if info?.loved ?? s.loved { Image(systemName: "heart.fill").font(.zune(.title3)).foregroundStyle(S.accent).accessibilityLabel("Loved") }
             }
             .accessibilityHint("Opens the artist")
             if !s.album.isEmpty {
                 Opens(route: .album(s.artist, s.album)) {
                     HStack(spacing: 6) {
-                        Text(s.album).font(.body).foregroundStyle(S.soft)
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(S.soft)
+                        Text(s.album).font(.zune(.body)).foregroundStyle(S.soft)
+                        Image(systemName: "chevron.right").font(.zune(.caption, .semibold)).foregroundStyle(S.soft)
                     }
                 }
                 .accessibilityHint("Opens the album")
@@ -490,7 +494,7 @@ struct TrackPage: View {
                         Text("Played \(dayName(d) == "today" ? "today" : dayName(d) == "yesterday" ? "yesterday" : dayName(d).capitalizedFirst) at \(d.formatted(date: .omitted, time: .shortened))")
                     }
                 }
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85)).padding(.top, S.pair)
+                .font(.zune(.subheadline, .semibold)).foregroundStyle(.white.opacity(0.85)).padding(.top, S.pair)
             }
         }
     }
@@ -537,15 +541,15 @@ struct MoreText: View {
         let cut = full > short + 1
         Button { if cut || more { withAnimation(.smooth) { more.toggle() } } } label: {
             VStack(alignment: .leading, spacing: S.pair) {
-                Text(text).font(.body).foregroundStyle(.white.opacity(0.9)).lineLimit(more ? nil : 3).multilineTextAlignment(.leading)
+                Text(text).font(.zune(.body)).foregroundStyle(.white.opacity(0.9)).lineLimit(more ? nil : 3).multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !more { short = $0 } }
                     .background {
                         // The whole of it, measured unseen at the same width.
-                        Text(text).font(.body).fixedSize(horizontal: false, vertical: true).hidden()
+                        Text(text).font(.zune(.body)).fixedSize(horizontal: false, vertical: true).hidden()
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
                     }
-                if cut || more { Text(more ? "Less" : "More").font(.subheadline.weight(.semibold)).foregroundStyle(S.accent) }
+                if cut || more { Text(more ? "Less" : "More").font(.zune(.subheadline, .semibold)).foregroundStyle(S.accent) }
             }
         }
         .buttonStyle(.plain)

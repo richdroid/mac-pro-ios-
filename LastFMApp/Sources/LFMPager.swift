@@ -52,6 +52,11 @@ struct Pager: View {
     // The page the pager set itself as it landed (not asked for from outside): no correction follows that change.
     @State private var selfPage: Int?
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
+    // WP7's application title over the names: the hub's name in small capitals (or a title given).
+    @Environment(\.hubName) private var hubName
+    private var caps: String? { title ?? hubName }
+    // The application title's line and the gap under it.
+    private var capsHeight: CGFloat { caps == nil ? 0 : ceil(20 * min(max(k, 0.9), 1.3)) + 2 }
 
     init(_ look: Look, title: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, accessoryHeight: CGFloat = 44, panels: [Panel]) {
         self.look = look; self.title = title; self.panels = panels; _page = page; self.top = top
@@ -84,7 +89,7 @@ struct Pager: View {
             // which cost an off-screen pass of the whole pager every frame (run 39 review, fault 8).
             let bars = (top: max(insets.top, g.safeAreaInsets.top), bottom: max(insets.bottom, g.safeAreaInsets.bottom))
             let nameSize = PivotHeaders.size(panels.count, k)
-            let head = bars.top + S.head + ceil(nameSize * 1.25) + (accessory == nil ? 0 : S.head + accessoryHeight)
+            let head = bars.top + S.head + capsHeight + ceil(nameSize * 1.25) + (accessory == nil ? 0 : S.head + accessoryHeight)
             // Where the pages are cut: just under the names' descenders; with a pinned row under the names (Charts' kinds),
             // at that row's foot. It was cut 6 pt above the row's foot there too, and what scrolled up (the "show all"
             // capsule) sat half under the picker in the shade (run 49 gate).
@@ -177,12 +182,21 @@ struct Pager: View {
                 ], startPoint: .top, endPoint: .bottom)
                     .frame(width: W, height: H)
                     .allowsHitTesting(false)
-                VStack(alignment: .leading, spacing: S.head) {
+                // The system's Back swipe starts at the left edge of a pushed page: a strip there the pages never take, so
+                // the swipe is always Back, never the pivot turning (one navigation model, 2026-11-24).
+                Color.clear.contentShape(Rectangle())
+                    .frame(width: side.leading + 24)
+                    .frame(maxHeight: .infinity)
+                    .padding(.top, cut)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 0) {
+                    if let caps { AppTitle(text: caps).frame(height: capsHeight, alignment: .top).turnstile(0) }
                     PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw, size: nameSize,
                                  current: panels.firstIndex { $0.id == page } ?? 0) { i in
                         withAnimation(.snappy(duration: 0.4)) { pos.scrollTo(x: CGFloat(i) * W) }
                     }
-                    if let accessory { accessory.frame(height: accessoryHeight) }
+                    .turnstile(0)
+                    if let accessory { accessory.frame(height: accessoryHeight).padding(.top, S.head).turnstile(1) }
                 }
                 .padding(.top, bars.top + S.head)
                 .frame(width: pw, alignment: .leading)
@@ -205,6 +219,7 @@ struct Pager: View {
             ScrollView(.vertical) {
                 Color.clear.frame(height: 0).id("top")
                 p.content
+                    .turnstile(2)
                     .padding(.top, S.head)
                     .padding(.bottom, S.section)
                     .frame(width: pw, alignment: .topLeading)
@@ -272,7 +287,9 @@ private struct PivotHeaders: View {
     @State private var pos = ScrollPosition(edge: .leading)
     static let gap: CGFloat = 20
     // Seven stretches at full size left most of them off the screen folded; past four names they're set smaller.
-    static func size(_ count: Int, _ k: CGFloat) -> CGFloat { (count > 4 ? 34 : 46) * min(max(k, 0.9), 1.2) }
+    // Zune's pivot names: 64 px Semilight on a 480 px screen (recalled), here 54 pt for four or fewer; past four (WP7's
+    // limit) a step smaller so the next names still show.
+    static func size(_ count: Int, _ k: CGFloat) -> CGFloat { (count > 4 ? 40 : 54) * min(max(k, 0.9), 1.2) }
     var body: some View {
         let f = max(0, min(CGFloat(names.count - 1), motion.f))
         let rests = Self.rests(names, size)
@@ -281,9 +298,9 @@ private struct PivotHeaders: View {
                 ForEach(names.indices, id: \.self) { i in
                     let near = max(0, 1 - abs(CGFloat(i) - f))
                     Button { choose(i) } label: {
-                        Text(names[i]).font(.system(size: size, weight: .light)).tracking(-0.8).fixedSize()
+                        Text(names[i]).font(.zune(size: size, .light)).tracking(-1).fixedSize()
                             .foregroundStyle(.white)
-                            .opacity(0.4 + 0.6 * near)
+                            .opacity(0.38 + 0.62 * near)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -321,7 +338,7 @@ private struct PivotHeaders: View {
     }
     private static func measure(_ names: [String], _ size: CGFloat) -> [CGFloat] {
         var starts: [CGFloat] = [], x: CGFloat = 0
-        for n in names { starts.append(x); x += textWidth(n, size: size, tracking: -0.8, weight: -0.4) + gap }
+        for n in names { starts.append(x); x += textWidth(n, size: size, tracking: -1, weight: -0.4) + gap }
         return names.indices.map { $0 == 0 ? 0 : starts[$0 - 1] }
     }
     // Between two pages, between their two rests.
