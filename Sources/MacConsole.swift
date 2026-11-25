@@ -167,7 +167,8 @@ extension API {
         let (d, resp) = try await session.data(for: r)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 404 { return nil }
-        if code == 401 || code == 403 { throw APIError.signInNeeded }
+        if code == 401 { throw APIError.signInNeeded }
+        if code == 403 { throw APIError.notOwner }
         guard code == 200 else { throw APIError.badResponse }
         let v = try JSONDecoder().decode(T.self, from: d)
         // Kept, so the page (and the Dashboard's tile) opens on what the Mac last said, then quietly updates.
