@@ -150,7 +150,7 @@ struct NowPlayingHub: View {
         if store.shown != nil {
             NowHero(layout: layout, titled: false)
             NowFigures().padding(.horizontal, S.margin)
-            if let s = store.shown { MixView(artist: s.artist, center: s.art).padding(.horizontal, S.margin) }
+            if let s = store.shown { Later { MixView(artist: s.artist, center: s.art).padding(.horizontal, S.margin) } }
         } else {
             Text("Nothing played yet").font(.zune(.title3, .light)).foregroundStyle(Z.subtle).padding(.horizontal, S.margin)
         }

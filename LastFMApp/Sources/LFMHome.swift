@@ -53,7 +53,9 @@ struct HomeView: View {
         chosen = i
         let hub = i < 0 ? Hub.nowPlaying : Hub.menu[i]
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // The menu gone (0.25 s, 20 ms apart, the chosen word last), then the hub: pushed earlier, its first frame took
+            // the main thread and the words never visibly turned (gate 2b, item 2).
+            try? await Task.sleep(nanoseconds: 400_000_000)
             open.hub(hub, nil)
         }
     }
@@ -100,8 +102,8 @@ struct NowTile: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             if s.nowPlaying, !store.trouble {
+                                // Still here: home is drawn under every Back drag, and a mark that moves for ever redrew it.
                                 Image(systemName: "waveform").foregroundStyle(Z.accent)
-                                    .symbolEffect(.variableColor.iterative, options: .repeating)
                                 Text("now playing")
                             } else {
                                 Text(s.nowPlaying ? "last heard" : "last played · \(when(s.date))")

@@ -24,6 +24,8 @@ extension Z {
     static func easeOut(_ d: Double = 0.35) -> Animation { .timingCurve(0.16, 1, 0.3, 1, duration: d) }
     static func easeIn(_ d: Double = 0.25) -> Animation { .timingCurve(0.7, 0, 0.84, 0, duration: d) }
     static let feather = 0.05
+    // Leaving is quicker than arriving: 20 ms apart, so the whole menu is gone in 0.4 s before the hub is pushed.
+    static let featherOut = 0.02
 
     #if canImport(UIKit)
     static func uiFont(_ size: CGFloat, weight: CGFloat) -> UIFont {
@@ -72,6 +74,18 @@ struct HubPivot: View {
     }
 }
 
+// What the first frame of a page doesn't need (a ring of covers, cards below the first screen): drawn half a second
+// after the page has turned in, so the push's first frames stay light (gate 2b: hubs stalled 1-1.5 s as they opened).
+struct Later<C: View>: View {
+    var delay: Double = 0.5
+    @ViewBuilder let content: () -> C
+    @State private var on = false
+    var body: some View {
+        Group { if on { content() } }
+            .task { if !on { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)); on = true } }
+    }
+}
+
 // The application title that sits over every page in Windows Phone 7: small capitals, hung from the page's edge
 // (20 px caps in the theme; recalled position 12 from the top). Here it names where he is: ROTATION on home, the hub's
 // name over its pages.
@@ -97,8 +111,10 @@ struct TurnstileIn: ViewModifier {
     @Environment(\.turnstileArrived) private var arrived
     func body(content: Content) -> some View {
         let on = shown || still || arrived
+        // At rest the turn is exactly nothing (no angle, no perspective): a projection left on a resting page made
+        // every page a 3D layer, and home drew at 12-29 fps under the Back drag (gate 2b, item 3).
         content
-            .rotation3DEffect(.degrees(on ? 0 : -80), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: 0.55)
+            .rotation3DEffect(.degrees(on ? 0 : -80), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: on ? 0 : 0.55)
             .opacity(on ? 1 : 0)
             .onAppear {
                 guard !shown else { return }
@@ -127,9 +143,9 @@ struct TurnstileOut: ViewModifier {
         // The order of leaving: everything else from the top, the chosen word last.
         let order = chosen.map { index == $0 ? count : (index < $0 ? index : index - 1) } ?? 0
         content
-            .rotation3DEffect(.degrees(gone ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: 0.55)
+            .rotation3DEffect(.degrees(gone ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: gone ? 0.55 : 0)
             .opacity(gone ? 0 : 1)
-            .animation(gone ? Z.easeIn(0.25).delay(Double(order) * Z.feather) : nil, value: gone)
+            .animation(gone ? Z.easeIn(0.25).delay(Double(order) * Z.featherOut) : nil, value: gone)
     }
 }
 
@@ -142,7 +158,7 @@ struct Tilt: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? depth : 1)
-            .rotation3DEffect(.degrees(configuration.isPressed && !still ? 4 : 0), axis: (x: 0.6, y: -1, z: 0), perspective: 0.5)
+            .rotation3DEffect(.degrees(configuration.isPressed && !still ? 4 : 0), axis: (x: 0.6, y: -1, z: 0), perspective: configuration.isPressed ? 0.5 : 0)
             .animation(configuration.isPressed ? .easeOut(duration: 0.06) : .easeOut(duration: 0.1).delay(0.2), value: configuration.isPressed)
     }
 }

@@ -69,12 +69,17 @@ struct ProfileHub: View {
             StreakCard().padding(.horizontal, S.margin)
             // The first read, while it runs, under his figures rather than over them: his stats come first.
             if !sync.complete { YearsSection().id("reading") }
-            PaceCard().padding(.horizontal, S.margin)
-            MilestoneCard().padding(.horizontal, S.margin)
-            TimeCard()
-            // What his listening says, in words, and a question about it.
-            TastePortrait()
-            TasteAsk()
+            // Below the first screen: drawn once the page has turned in.
+            Later {
+                VStack(alignment: .leading, spacing: S.section) {
+                    PaceCard().padding(.horizontal, S.margin)
+                    MilestoneCard().padding(.horizontal, S.margin)
+                    TimeCard()
+                    // What his listening says, in words, and a question about it.
+                    TastePortrait()
+                    TasteAsk()
+                }
+            }
         }
     }
 

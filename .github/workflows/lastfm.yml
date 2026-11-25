@@ -110,7 +110,7 @@ jobs:
             # A long user name with no real name set: whole on the first section, small and whole over the others.
             shot name$x $d 9 -tab 0 -mockName midnightsignal
             shot name-story$x $d 9 -tab 0 -panel 3 -mockName midnightsignal
-            shot scrub$x $d 9 -tab 0 -panel 1 -pose scrub
+            shot scrub$x $d 9 -hub history -pose scrub
             # Claude's pieces at the foot of his page (mock samples): the portrait and its threads, then ask with an answer.
             shot portrait$x $d 12 -tab 0 -panel 0 -pose portrait
             shot ask$x $d 12 -tab 0 -panel 0 -pose ask
@@ -232,7 +232,7 @@ jobs:
           # from the edge; now playing's pivot swiped through; Back by the edge from a pivot hub (never the pivot turning).
           STEPS="shot:4 tap=0.3,0.52:2 shot:1 shot:2 tap=0.895,0.29:2 shot:1 shot:2" film home-tap 1 18 -hub home
           STEPS="tap=0.3,0.62:6 shot:2 edgeslow:1 shot:1 shot:3" film home-swipe 1 18 -hub home
-          STEPS="tap=0.3,0.3:6 shot:2 tap=0.895,0.29:2 shot:2" film home-now 1 16 -hub home
+          STEPS="tap=0.3,0.18:6 shot:2 tap=0.895,0.29:2 shot:2" film home-now 1 16 -hub home
           Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-now 1 26 -hub nowPlaying
           Y=0.6 STEPS="side:6 shot:2 edgeslow:2 shot:1 shot:3" film edge-back-pivot 1 18 -hub discover
           # The films the run 39 review found missing. Opened a second time: whole in its first frame, nothing arriving.

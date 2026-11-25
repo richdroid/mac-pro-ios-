@@ -51,6 +51,9 @@ struct Pager: View {
     @State private var phase: ScrollPhase = .idle
     // The page the pager set itself as it landed (not asked for from outside): no correction follows that change.
     @State private var selfPage: Int?
+    // Only the page it opens on is built in the push's first frames; the others half a second later, at rest, before
+    // any swipe can reach them (gate 2b: a hub built all its pages in the frame it was pushed).
+    @State private var all = false
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     // WP7's application title over the names: the hub's name in small capitals (or a title given).
     @Environment(\.hubName) private var hubName
@@ -100,7 +103,12 @@ struct Pager: View {
                     ScrollView(.horizontal) {
                         // Every section built at once, at rest: lazily, a section was built whole on its first reveal,
                         // mid-drag (run 39: 180 and 720 ms with no frame on the first swipe to a stretch).
-                        HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, head, cut, bars.bottom, pw, side).frame(width: W).id(p.id) } }
+                        HStack(alignment: .top, spacing: 0) {
+                            ForEach(panels) { p in
+                                Group { if all || p.id == page || panels.count == 1 { panel(p, head, cut, bars.bottom, pw, side) } else { Color.clear } }
+                                    .frame(width: W).id(p.id)
+                            }
+                        }
                             .scrollTargetLayout()
                     }
                     // The system's own paging: a light flick turns the page (Richard, 2026-11-15: "too much like weight
@@ -132,6 +140,7 @@ struct Pager: View {
                     // Opened on a section other than the first (a link, a pose): put there before anything shows it
                     // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20).
                     .task { await place() }
+                    .task { try? await Task.sleep(nanoseconds: 500_000_000); all = true }
                     // The page's width changed under it (the side bar arriving, a turn, the fold): the scroll keeps its
                     // old offset, which is no longer a page's edge, so the page before showed at the side (run 41:
                     // today sat 12 pt off with his page's chevron beside it). Put back on its page, at rest only.
