@@ -378,3 +378,83 @@ struct LiveTile<Front: View, Back: View>: View {
         }
     }
 }
+
+// WP7's application bar [S6]: a strip along the foot of a page that has actions, in the theme's chrome (#1F1F1F on the
+// dark theme), with up to four round outlined icon buttons centred in it and "•••" at its right. The dots raise the bar
+// to show each button's name under it, in lowercase; a tap anywhere else, or on a button, lowers it again. Only pages
+// with actions of their own have one (Richard, 2026-11-25: "make this work as a zune windows phone app").
+struct AppBar<Buttons: View>: View {
+    @Binding var open: Bool
+    @ViewBuilder let buttons: () -> Buttons
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            HStack(spacing: 28) { buttons() }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 10)
+            Button { withAnimation(Z.easeOut(0.25)) { open.toggle() } } label: {
+                Text("•••").font(.system(size: 13, weight: .bold)).tracking(1).foregroundStyle(.white)
+                    .frame(width: 52, height: 30).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(open ? "Hide the button names" : "Show the button names")
+        }
+        .frame(height: open ? 84 : 60, alignment: .top)
+        .frame(maxWidth: .infinity)
+        .background(Color(white: 0.122).ignoresSafeArea(edges: .bottom))
+        .environment(\.appBarOpen, open)
+    }
+}
+private struct AppBarOpenKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var appBarOpen: Bool { get { self[AppBarOpenKey.self] } set { self[AppBarOpenKey.self] = newValue } }
+}
+// One of the bar's buttons: the icon in a 2 pt white ring (48 px on WP7), its name under it when the bar is raised.
+struct AppBarIcon: View {
+    let icon: String
+    let label: String
+    var dim = false
+    @Environment(\.appBarOpen) private var open
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 17, weight: .regular))
+                .frame(width: 40, height: 40)
+                .overlay { Circle().strokeBorder(.white, lineWidth: 2) }
+            if open { Text(label.lowercased()).font(.zune(size: 13)).lineLimit(1).fixedSize() }
+        }
+        .foregroundStyle(.white.opacity(dim ? 0.4 : 1))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+}
+
+// A WP7 panorama stops at its ends: no rubber band past the first or last section. Set on the horizontal scroll the
+// view sits in (its first enclosing UIScrollView), from a zero-size view inside the scroll's content.
+struct NoBounce: View {
+    var body: some View {
+        #if canImport(UIKit)
+        NoBounceProbe().frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
+        #else
+        Color.clear.frame(width: 0, height: 0)
+        #endif
+    }
+}
+#if canImport(UIKit)
+private struct NoBounceProbe: UIViewRepresentable {
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            // Once laid in its scroll (the next turn of the run loop, when the hierarchy is whole).
+            DispatchQueue.main.async { [weak self] in
+                var v = self?.superview
+                while let s = v {
+                    if let sv = s as? UIScrollView { sv.bounces = false; sv.alwaysBounceHorizontal = false; return }
+                    v = s.superview
+                }
+            }
+        }
+    }
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ v: Probe, context: Context) {}
+}
+#endif

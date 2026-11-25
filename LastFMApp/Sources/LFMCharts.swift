@@ -227,6 +227,7 @@ struct ChartsTab: View {
     let top: Int
     @Environment(\.paneLayout) private var pane
     @State private var picking = false
+    @State private var bar = false
     @State private var all = false
     // The width the figures have: folded, the plays are set smaller so the largest count he has ("33,022") fits beside
     // the change unshrunk.
@@ -272,7 +273,7 @@ struct ChartsTab: View {
                 }
             } else {
                 Pager(.pivot, page: $page, top: top,
-                      accessory: AnyView(kindRow.padding(.horizontal, S.margin)),
+                      accessory: AnyView(kindPicker.padding(.horizontal, S.margin)),
                       panels: pages.enumerated().map { i, p in
                           Panel(i, p.name.lowercased()) {
                               VStack(alignment: .leading, spacing: S.section) {
@@ -287,6 +288,14 @@ struct ChartsTab: View {
                               .task(id: "\(m.kind.rawValue)|\(m.generation)") { m.ensure(p) }
                           }
                       })
+                // WP7's application bar for the page's own actions: any week, and the collage shared.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    AppBar(open: $bar) {
+                        Button { bar = false; picking = true } label: { AppBarIcon(icon: "calendar", label: "any week") }
+                            .buttonStyle(Tilt())
+                        CollageShare(current: true, bar: true)
+                    }
+                }
             }
         }
         .onAppear { m.appear(); if let i = pages.firstIndex(of: m.period), i != page { page = i } }
@@ -421,7 +430,7 @@ struct ChartsTab: View {
                 SectionHead(text: "collage")
                 HStack(spacing: S.gap) {
                     Segments(items: [3, 4, 5], selection: Binding(get: { m.size }, set: { m.size = $0; m.render() }), fill: true) { "\($0)×\($0)" }
-                    CollageShare(current: current)
+                    if pane { CollageShare(current: current) }
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: n), spacing: 1) {
                     ForEach(cells) { e in
@@ -465,9 +474,19 @@ struct ChartsTab: View {
 // read the picture itself, and every stretch's page was built again as it was let go and as it came).
 private struct CollageShare: View {
     let current: Bool
+    var bar = false
     private var m: ChartsModel { ChartsModel.shared }
     var body: some View {
-        if current, let img = m.shareImage {
+        if bar {
+            if let img = m.shareImage {
+                ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
+                    AppBarIcon(icon: "square.and.arrow.up", label: "share")
+                }
+                .buttonStyle(Tilt())
+            } else {
+                AppBarIcon(icon: "square.and.arrow.up", label: "share", dim: true)
+            }
+        } else if current, let img = m.shareImage {
             ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
                 Label("Share", systemImage: "square.and.arrow.up").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(height: 44)

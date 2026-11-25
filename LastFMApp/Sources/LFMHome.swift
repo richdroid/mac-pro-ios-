@@ -121,6 +121,8 @@ private struct HomePanorama: View {
                                 ArtistTiles(title: nil, list: store.insights.week, width: sec - S.margin - 12)
                             }
                         }
+                        // WP7's panorama stops hard at both ends.
+                        .background(alignment: .topLeading) { NoBounce() }
                         .padding(.leading, side.leading)
                         // Room after the last section so it, too, rests at the left margin.
                         .padding(.trailing, pw - sec + side.trailing)
