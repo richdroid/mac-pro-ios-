@@ -58,7 +58,7 @@ struct ProfileHub: View {
                 HStack(alignment: .top, spacing: S.figures) {
                     Totals()
                     Spacer(minLength: 0)
-                    TodayGlance().frame(width: 292, alignment: .leading)
+                    TodayGlance(covers: 4).frame(width: 232, alignment: .leading)
                 }
                 .padding(.horizontal, S.margin)
             } else {

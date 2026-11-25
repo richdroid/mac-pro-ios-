@@ -27,7 +27,7 @@ struct HomeView: View {
                 } right: {
                     Page {
                         VStack(alignment: .leading, spacing: S.section) {
-                            MenuWords(chosen: chosen, go: go)
+                            MenuWords(chosen: chosen, go: go).padding(.leading, S.margin)
                             AlbumTiles(title: "just played", items: Quickplay.albums(store.recent), width: nil)
                             ArtistTiles(title: "on repeat", list: store.insights.week, width: nil)
                         }

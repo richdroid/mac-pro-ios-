@@ -589,6 +589,7 @@ struct NewCard: View {
 
 // Open upright, beside his scrobbles: today so far, and this week's five most played, each opening its artist.
 struct TodayGlance: View {
+    var covers = 5
     private var store: Store { Store.shared }
     var body: some View {
         let n = store.today.filter { !$0.nowPlaying }.count
@@ -600,7 +601,7 @@ struct TodayGlance: View {
             .accessibilityElement(children: .combine)
             if !store.insights.week.isEmpty {
                 HStack(spacing: 8) {
-                    ForEach(Array(store.insights.week.prefix(5).enumerated()), id: \.element.id) { k, a in
+                    ForEach(Array(store.insights.week.prefix(covers).enumerated()), id: \.element.id) { k, a in
                         Opens(route: .artist(a.name), zoom: "glance|\(a.name)") {
                             ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 160, corner: 6).frame(width: S.art).zoomSource("glance|\(a.name)")
                         }

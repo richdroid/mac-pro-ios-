@@ -200,7 +200,9 @@ struct Backdrop: View {
     var moving: Bool = false
     var dim: Double = 0
     var body: some View {
-        GeometryReader { g in
+        // Laid out in an overlay of a colour that already covers the safe areas: inside a background the reader was given
+        // the page's safe frame and the picture stopped short of the side strip and the foot (run 60).
+        Color.black.ignoresSafeArea().overlay { GeometryReader { g in
             ZStack(alignment: .topLeading) {
                 Color.black
                 if let ref {
@@ -218,8 +220,7 @@ struct Backdrop: View {
             }
             .frame(width: g.size.width, height: g.size.height)
             .clipped()
-        }
-        .ignoresSafeArea()
+        }.ignoresSafeArea() }
         .accessibilityHidden(true)
         .allowsHitTesting(false)
     }
@@ -230,7 +231,7 @@ struct Backdrop: View {
 struct NowBackdrop: View {
     let song: Scrobble?
     var body: some View {
-        GeometryReader { g in
+        Color.black.ignoresSafeArea().overlay { GeometryReader { g in
             ZStack(alignment: .topLeading) {
                 Color.black
                 if let s = song {
@@ -255,8 +256,7 @@ struct NowBackdrop: View {
             }
             .frame(width: g.size.width, height: g.size.height)
             .clipped()
-        }
-        .ignoresSafeArea()
+        }.ignoresSafeArea() }
         .accessibilityHidden(true)
         .allowsHitTesting(false)
     }
