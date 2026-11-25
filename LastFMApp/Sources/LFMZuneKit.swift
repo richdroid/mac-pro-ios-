@@ -64,7 +64,7 @@ struct HubPivot: View {
                     }
                     .padding(.top, S.head)
                 }
-                .turnstile(1)
+                .turnstile(0)
             } right: {
                 Pager(.pivot, title: " ", page: Binding(get: { max(page, panels[1].id) }, set: { page = $0 }), top: 0, panels: Array(panels.dropFirst()))
             }
@@ -113,9 +113,10 @@ struct TurnstileIn: ViewModifier {
         let on = shown || still || arrived
         // At rest the turn is exactly nothing (no angle, no perspective): a projection left on a resting page made
         // every page a 3D layer, and home drew at 12-29 fps under the Back drag (gate 2b, item 3).
+        // No fade: WP7 cuts opacity in at 0.01 s, and a page held at 0 through a busy first frame showed as a blank page
+        // under its head (gate 3: now playing empty for a second).
         content
             .rotation3DEffect(.degrees(on ? 0 : -80), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: on ? 0 : 0.55)
-            .opacity(on ? 1 : 0)
             .onAppear {
                 guard !shown else { return }
                 withAnimation(Z.easeOut(0.35).delay(Double(index) * Z.feather)) { shown = true }

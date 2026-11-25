@@ -21,6 +21,31 @@ enum LibShelf: Int, CaseIterable, Sendable {
     private(set) var loved: [Loved] = Loved.kept()
     private(set) var lovedPlays: [String: Int] = [:]
     @ObservationIgnored private var stamp: [Kind: Int] = [:]
+    // Each shelf's count and its first rows as last worked out, kept on disk: the library's first frame shows them, never
+    // a spinner, while the shelves are worked out again behind (gate 3).
+    private(set) var preview: [Kind: [Entry]] = [:]
+    private(set) var previewCount: [Kind: Int] = [:]
+    private struct KeptRow: Codable { let artist: String; let album: String; let track: String; let plays: Int; let image: String?; let rank: Int }
+    private struct Kept: Codable { var counts: [Int: Int] = [:]; var rows: [Int: [KeptRow]] = [:] }
+    private var keptFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(LastFM.shared.mock ? "library-preview-mock.json" : "library-preview.json") }
+    init() {
+        guard !UserDefaults.standard.bool(forKey: "fresh"), let d = try? Data(contentsOf: keptFile), let k = try? JSONDecoder().decode(Kept.self, from: d) else { return }
+        for kind in Kind.allCases {
+            previewCount[kind] = k.counts[kind.rawValue]
+            preview[kind] = (k.rows[kind.rawValue] ?? []).map { Entry(kind: kind, artist: $0.artist, album: $0.album, track: $0.track, plays: $0.plays, image: $0.image, rank: $0.rank) }
+        }
+    }
+    private func keep() {
+        var k = Kept()
+        for kind in Kind.allCases {
+            guard let l = lists[kind] else { continue }
+            k.counts[kind.rawValue] = l.count
+            k.rows[kind.rawValue] = l.prefix(40).map { KeptRow(artist: $0.artist, album: $0.album, track: $0.track, plays: $0.plays, image: $0.image, rank: $0.rank) }
+        }
+        if let d = try? JSONEncoder().encode(k) { try? d.write(to: keptFile, options: .atomic) }
+    }
+    // How many are on a shelf: the worked-out list's count, else the kept one; nil only on the very first open.
+    func count(_ k: Kind) -> Int? { lists[k]?.count ?? previewCount[k] }
     @ObservationIgnored private var loading: Set<Kind> = []
     @ObservationIgnored private var lovedAsked = false
 
@@ -50,12 +75,13 @@ enum LibShelf: Int, CaseIterable, Sendable {
             lists[k] = list
             stamp[k] = read
             loading.remove(k)
+            keep()
         }
     }
     // Sorted once per list and order, not on every redraw (sixteen thousand tracks by name is a noticeable sort).
     @ObservationIgnored private var sortedCache: [String: [Entry]] = [:]
     func sorted(_ k: Kind) -> [Entry] {
-        let l = lists[k] ?? []
+        guard let l = lists[k] else { return sort == .plays ? preview[k] ?? [] : [] }
         if sort == .plays { return l }
         let key = "\(k.rawValue)|\(sort.rawValue)|\(l.count)|\(stamp[k] ?? 0)"
         if let hit = sortedCache[key] { return hit }
@@ -146,9 +172,9 @@ struct LibraryTab: View {
         VStack(alignment: .leading, spacing: S.section) {
             // Each count once it's known, never a zero while it's being worked out (gate 1, item 3).
             FigureGrid(items: [
-                m.lists[.artists].map { (number($0.count), "artists") },
-                m.lists[.albums].map { (number($0.count), "albums") },
-                m.lists[.tracks].map { (number($0.count), "tracks") },
+                m.count(.artists).map { (number($0), "artists") },
+                m.count(.albums).map { (number($0), "albums") },
+                m.count(.tracks).map { (number($0), "tracks") },
                 (number(m.loved.count), "loved"),
             ].compactMap { $0 })
             if top.count == 9 {
@@ -194,7 +220,7 @@ struct LibraryTab: View {
         let list = isLoved ? [] : m.sorted(kind)
         HStack(alignment: .firstTextBaseline) {
             // The count once it's known: never "0 artists" while the shelf is still being worked out (gate 2a, item 3).
-            Text(isLoved ? "\(number(m.loved.count)) loved" : m.lists[kind] == nil ? " " : "\(number(list.count)) \(kind.noun)").font(.zune(.title2, .bold)).foregroundStyle(.white)
+            Text(isLoved ? "\(number(m.loved.count)) loved" : m.count(kind).map { "\(number($0)) \(kind.noun)" } ?? " ").font(.zune(.title2, .bold)).foregroundStyle(.white)
             Spacer(minLength: 8)
             if !isLoved {
                 Menu {
@@ -221,7 +247,7 @@ struct LibraryTab: View {
                     .padding(.horizontal, S.margin)
                     .onAppear { if e.id == list.prefix(limit).last?.id, limit < list.count { self.shown[sh] = limit + 300 } }
             }
-            if m.lists[kind] == nil { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
+            if m.count(kind) == nil { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
             // Nothing yet (the first read hasn't reached any plays): said, not a blank shelf.
             else if list.isEmpty { Text(HistorySync.shared.complete ? "Nothing here yet." : "Your \(kind.noun) show here as your history is read.").font(.zune(.body)).foregroundStyle(S.soft).padding(.horizontal, S.margin).padding(.top, S.head) }
         }

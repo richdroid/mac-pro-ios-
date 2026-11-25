@@ -245,7 +245,8 @@ struct Pager: View {
             .scrollIndicators(.hidden)
             // The page swings in whole, outside its scroll: inside it, the 3D turn wrapped the library's lazy list, which
             // then built every row of all four shelves at once on the first open (run 53, home-tap: 8.4 s with no frame).
-            .turnstile(2)
+            // Level with the head: the page and its name arrive in the same frame (gate 3).
+            .turnstile(0)
             .environment(\.pageWidth, pw)
             .environment(\.pageBleed, EdgeInsets(top: 0, leading: side.leading, bottom: 0, trailing: side.trailing))
             .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }

@@ -159,7 +159,8 @@ struct NowPlayingHub: View {
     // Zune's Now Playing wall: his own covers behind what's on, in the playing cover's colour.
     @ViewBuilder private var wall: some View {
         if let s = store.shown, s.nowPlaying {
-            ArtWall(tint: (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.artist + s.album)).vivid.color)
+            // Half a second after the page: the cover, the song and the head are the first frame, the wall comes behind.
+            Later { ArtWall(tint: (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.artist + s.album)).vivid.color).transition(.opacity) }
         }
     }
 }
