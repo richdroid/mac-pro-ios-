@@ -9,12 +9,6 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     GENERATE_INFOPLIST_FILE: YES
     TARGETED_DEVICE_FAMILY: "1"
-# Play on iPhone's player (TV app): KSPlayer 2.3.4, the last release built from source (later ones ship iOS as a paid
-# binary only). Its FFmpeg player takes the MKV and HEVC files Stremio add-ons mostly give. GPL; his own builds only.
-packages:
-  KSPlayer:
-    url: https://github.com/kingslay/KSPlayer
-    exactVersion: 2.3.4
 targets:
   MacPro:
     type: application
@@ -153,7 +147,6 @@ targets:
     dependencies:
       - target: TVShare
       - target: TVWidget
-      - package: KSPlayer
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV
@@ -167,10 +160,9 @@ targets:
         NSSupportsLiveActivities: true
         # The Now Playing card's occasional refresh while the app is closed (TVBackground); audio: Play on iPhone carries on
         # playing in Picture in Picture and with the screen locked.
-        UIBackgroundModes: [fetch, audio]
+        UIBackgroundModes: [fetch]
         NSUserActivityTypes: [local.macpro.TV.watch]
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.TV.nowplaying]
-        NSAppleMusicUsageDescription: Sees the song playing on this iPhone, so you can flick it to the TV and play, pause or skip it from here while it plays there.
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
@@ -250,7 +242,6 @@ targets:
     sources:
       - TVWidget/TVWidgets.swift
       - TVWidget/TVIslandWidget.swift
-      - TVWidget/PhoneWidget.swift
       - TVApp/Sources/TVShared.swift
       - TVApp/Sources/TVTheme.swift
       - TVApp/Sources/TVIsland.swift

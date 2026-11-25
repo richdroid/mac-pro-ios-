@@ -20,6 +20,7 @@ struct TitleRoute: Hashable { let id: UUID }
     var streams: [StremioStream] = []
     var finding = false
     var noStreams = false
+    var streamsUnreachable = false
     var chosen: String?
     var failed: Set<String> = []
     var startOver = false
@@ -91,11 +92,12 @@ struct TitleRoute: Hashable { let id: UUID }
     func findStreams(again: Bool = false) async {
         guard let r = ref, let v = video else { return }
         if !again, let l = StreamCache.shared.inHand(type: r.type, imdb: r.imdb, video: v) { set(l); return }
-        finding = true; noStreams = false
+        finding = true; noStreams = false; streamsUnreachable = false
         let l = await StreamCache.shared.streams(type: r.type, imdb: r.imdb, video: v, again: again)
         guard v == video else { return }
         finding = false
-        if let l, !l.isEmpty { set(l) } else { noStreams = true }
+        // No answer at all (the Mac or the launcher's link out of reach) is said apart from an answer with nothing in it.
+        if let l, !l.isEmpty { set(l) } else { noStreams = true; streamsUnreachable = l == nil }
     }
     private func set(_ l: [StremioStream]) {
         // One frame, no stagger: the list is laid out whole.
@@ -168,13 +170,6 @@ struct TitlePage: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            if st.ref != nil {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { model.tick(); PhoneOpen.open(st.cardItem, model: model) } label: { Label("Play on iPhone", systemImage: "iphone") }
-                }
-            }
-        }
         .task { await st.load(model) }
         // Called off while it was still starting (the lip pulled down, or Stop held): the card comes back out of the lip.
         .onChange(of: model.starting) { was, now in
@@ -336,13 +331,35 @@ struct TitlePage: View {
         }
         let tint = ImageStore.shared.cachedBand(URL(string: art))
         let title = st.item.title
-        // The card leaves first, with his speed, in the same turn as his release; the send follows on the next turn, so
-        // nothing the send does can hold the card where he let go (gate on cbfc0b5: up to a second between the two).
+        // The card leaves first, with his speed, in the same turn as his release, and the send goes as it lands: sent at the
+        // release, the start redrew the app mid-flight (tv-pass-1122; CI f933278 logged the send 160 ms before landing).
+        // The flight is drawn by the window's own layer (HandOverlay): inside the navigation stack the card was cut off at
+        // the page's top edge, under the lip. The window's carry takes over exactly where his finger left it.
+        if !art.isEmpty, Hand.shared.lifted == nil, carry.rest.width > 4 {
+            let hand = Hand.shared.liftCarry
+            hand.adopt(carry)
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) {
+                Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest)
+                carry.hideForFlight()
+            }
+            // On the next turn, once the window's layer has drawn the card where his finger left it: flown in the same turn
+            // it had nothing on screen to move, and "landed" at once (CI 72b8e2e: gone 0 ms after the release).
+            Task { @MainActor in
+                hand.fly(v) {
+                    Hand.shared.land(title: title, art: art, tint: tint)
+                    withAnimation(.easeOut(duration: 0.3)) { Hand.shared.lifted = nil }
+                    carry.reappear()
+                    send?()
+                }
+            }
+            return
+        }
         carry.fly(v) {
             Hand.shared.land(title: title, art: st.item.art, tint: tint)
             carry.reappear()
+            send?()
         }
-        Task { @MainActor in send?() }
     }
     // MARK: the words
     var facts: String {
@@ -392,10 +409,21 @@ struct TitlePage: View {
         if st.streams.isEmpty {
             HStack(spacing: 10) {
                 if st.finding || (!st.noStreams && st.video != nil) { ProgressView().controlSize(.small) }
-                Text(st.noStreams ? "No streams found" : st.video == nil ? "Choose an episode" : "Finding streams…")
-                    .font(.system(size: 17)).foregroundStyle(.secondary)
+                else if st.noStreams { Image(systemName: st.streamsUnreachable ? "wifi.exclamationmark" : "tray").foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(st.finding ? "Finding streams…" : st.noStreams ? (st.streamsUnreachable ? "Couldn’t get streams" : "No streams found") : st.video == nil ? "Choose an episode" : "Finding streams…")
+                        .font(.system(size: 17, weight: st.noStreams && !st.finding ? .semibold : .regular)).foregroundStyle(st.noStreams && !st.finding ? .primary : .secondary)
+                    if st.noStreams && !st.finding {
+                        Text(st.streamsUnreachable ? "The Mac didn’t answer." : "None of your add-ons has this one.").font(.system(size: 15)).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if st.noStreams && !st.finding {
+                    Button("Try Again") { model.tick(); Task { await st.findStreams(again: true) } }
+                        .buttonStyle(.bordered).buttonBorderShape(.capsule).tint(.white)
+                }
             }
-            .frame(height: StreamRow.height, alignment: .leading)
+            .frame(minHeight: StreamRow.height, alignment: .leading)
         } else {
             let all = st.streams
             let shown = st.showsAllStreams ? all : Array(all.prefix(5))

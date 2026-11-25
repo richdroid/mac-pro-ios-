@@ -30,7 +30,6 @@ struct SettingsPages: ViewModifier {
                 case .box: BoxPage()
                 }
             }
-            .navigationDestination(for: StremioRoute.self) { _ in StremioAccountPage() }
             .navigationDestination(for: AppsRoute.self) { _ in AppsPage() }
             .navigationDestination(for: ManagePage.self) { page in
                 switch page {
@@ -124,10 +123,10 @@ struct TVSettingsPage: View {
                 FoldSplit {
                     page(Group { heading; BoxRow(); TVManageSections(level: true).shotSpot("tvrow", pose: "settingsnav") })
                 } right: {
-                    page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections(); StremioSettingsSection() }, follows: false)
+                    page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections() }, follows: false)
                 }
             } else {
-                page(Group { heading; BoxRow(); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections(); StremioSettingsSection() })
+                page(Group { heading; BoxRow(); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections() })
             }
         }
         .summonsBar()

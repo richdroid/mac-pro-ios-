@@ -30,8 +30,13 @@ struct TVNow: Equatable {
         // Its play key waits for a fresh reading, as the Remote's does, so the two never disagree (gate 3, folded rfilm).
         // The Mac answers and the TV doesn't: said here as the Remote's picture says it, not the app last in front.
         if !model.staleStatus, !s.online { return TVNow(kind: .away, title: "Can’t reach the TV", line: nil, art: nil, playing: nil) }
-        if s.screen == "asleep" { return TVNow(kind: .asleep, title: "Off", line: nil, art: nil, playing: nil) }
-        if !model.staleStatus, let a = s.away { return TVNow(kind: .away, title: a.line, line: nil, art: nil, playing: nil) }
+        // One black TV, one name and one glyph, whichever way it went black (the box asleep, or the television off over
+        // HDMI-CEC): "Asleep", as the Remote and Status say it (TVShared's Away.line; gate on eb040c7: "Off" here).
+        if s.screen == "asleep" { return TVNow(kind: .asleep, title: "Asleep", line: nil, art: nil, playing: nil) }
+        if !model.staleStatus, let a = s.away {
+            if a == .off { return TVNow(kind: .asleep, title: a.line, line: nil, art: nil, playing: nil) }
+            return TVNow(kind: .away, title: a.line, line: nil, art: nil, playing: nil)
+        }
         if s.comingOn { return TVNow(kind: .home, title: "Waking the TV…", line: nil, art: nil, playing: nil) }
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
             return TVNow(kind: .video, title: p.showName, line: p.seasonEpisode.map { "S\($0.season) E\($0.episode)" } ?? p.channel,
@@ -55,26 +60,42 @@ struct TVNow: Equatable {
 struct Lip: View {
     @Environment(TVModel.self) private var model
     @Environment(\.pagePush) private var pagePush
+    @Environment(\.paneLayout) private var panes
     // The tab it sits on: only the one showing says where the lip is.
     let tab: Int
     static let height: CGFloat = 56
     @State private var pull: CGFloat = 0
     @State private var place = FrameBox()
     var body: some View {
+        let _ = Timing.body("lip")
         let now = TVNow.read(model)
         let landed = Hand.shared.landed
         HStack(spacing: 12) {
             Button { if model.tab != 0 { model.tick(); model.tab = 0 } } label: {
                 HStack(spacing: 12) {
                     picture(landed?.art ?? now.art, kind: now.kind)
+                    // One set of words at a time, changed in place: crossfaded, "Heat" was drawn over "Home" and
+                    // "Starting…" over "…the stream" for 0.2 s (gate on 339958b). While a start is under way its own title
+                    // and line (the model's) are the words; the landing only gives the picture.
+                    let starting = now.kind == .starting
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(landed?.title ?? now.title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                        Text(starting ? now.title : landed?.title ?? now.title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
                             .foregroundStyle(now.kind == .asleep ? .white.opacity(0.6) : .white)
-                        if now.kind == .video, landed == nil, let s = model.status?.session { LipClock(session: s, line: now.line) }
-                        else if let l = (landed != nil && now.kind != .starting ? "Starting…" : now.line) {
-                            Text(l).font(.system(size: 14, weight: .medium)).foregroundStyle(now.kind == .starting ? TVLook.accent : .white.opacity(0.7)).lineLimit(1)
+                        // The Mac out of reach (after its 25 s grace) is said here, in the lip's own line, calmly: never a pill
+                        // over the page's title, never cut in (gate on 339958b).
+                        if !model.reachable, landed == nil, !starting {
+                            Text("Reconnecting…").font(.system(size: 14, weight: .medium)).foregroundStyle(TVLook.away).lineLimit(1)
+                                .transition(.opacity)
+                        }
+                        // On the Remote the episode and the time are under its picture: the lip says only what's on, not twice.
+                        else if now.kind == .video, tab == 0, landed == nil { EmptyView() }
+                        else if now.kind == .video, landed == nil, let s = model.status?.session { LipClock(session: s, line: now.line) }
+                        else if let l = (landed != nil && !starting ? "Starting…" : now.line) {
+                            Text(l).font(.system(size: 14, weight: .medium)).foregroundStyle(starting || landed != nil ? TVLook.accent : .white.opacity(0.7)).lineLimit(1)
                         }
                     }
+                    .transaction { if starting || landed != nil { $0.animation = nil } }
+                    .animation(.easeOut(duration: 0.3), value: model.reachable)
                     Spacer(minLength: 0)
                 }
                 .frame(maxHeight: .infinity).contentShape(Rectangle())
@@ -100,7 +121,9 @@ struct Lip: View {
         .frame(height: Self.height)
         .background { LipGlass() }
         .offset(y: pull)
-        .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 6)
+        // On the page's own left edge (20 pt, 34 open flat where the left pane's content starts), not 12 pt in (gate on
+        // 4f36e1e).
+        .padding(.leading, panes ? 34 : 20).padding(.trailing, 12).padding(.top, 2).padding(.bottom, 6)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
             place.rect = r
             guard model.tab == tab, r.width > 40 else { return }
@@ -133,8 +156,9 @@ struct Lip: View {
         .frame(width: 64, height: 40).clipShape(shape)
     }
     @ViewBuilder func trailing(_ now: TVNow) -> some View {
+        // On the Remote the big key in the pad's ring wakes it; the lip's own would be a second way on one screen.
         if now.kind == .asleep {
-            LipKey(icon: "power", label: "Turn the TV on") { model.key("wake") }
+            if tab != 0 { LipKey(icon: "power", label: "Wake the TV") { if model.status?.away == .off { model.post("tv-on") } else { model.key("wake") } } }
         } else if now.playing != nil {
             let shown = model.shownPlaying(now.playing)
             LipKey(icon: shown == true ? "pause.fill" : "play.fill", label: shown == true ? "Pause" : "Play") { model.togglePlay(shown: shown) }
@@ -165,9 +189,13 @@ private struct LipClock: View {
     let session: TVStatus.Session
     let line: String?
     var body: some View {
+        // The time whole, always: the episode's line gives way first (gate 5, item 11: folded it read "1:…").
         TimelineView(.periodic(from: .now, by: 1)) { t in
-            Text(([line] + [clock(at: t.date)]).compactMap { $0 }.joined(separator: " · "))
-                .font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            HStack(spacing: 0) {
+                if let line, !line.isEmpty { Text(line + (clock(at: t.date) == nil ? "" : " · ")).lineLimit(1).truncationMode(.tail) }
+                if let c = clock(at: t.date) { Text(c).lineLimit(1).fixedSize() }
+            }
+            .font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.7))
         }
     }
     func clock(at date: Date) -> String? {
@@ -196,6 +224,11 @@ private struct LipGlass: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(tint.opacity(0.15 + 0.85 * Double(glow)), lineWidth: 1 + 1.5 * glow)
                 .opacity(lit ? 1 : 0)
         }
-        .shadow(color: tint.opacity(0.55 * Double(glow)), radius: 6 + 18 * glow, y: 2 + 6 * glow)
+        // The glow is a soft layer behind the glass whose opacity follows the card, never a shadow whose radius changes
+        // every frame (a re-drawn shadow the width of the lip held the flight open flat, gate on 339958b).
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(tint).blur(radius: 16).padding(4).offset(y: 6)
+                .opacity(0.55 * Double(glow))
+        }
     }
 }

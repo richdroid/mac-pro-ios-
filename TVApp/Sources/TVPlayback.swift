@@ -241,7 +241,9 @@ struct RecentFlick: Codable, Identifiable, Hashable {
     var id: String { imdb }
     var item: MediaItem {
         let link = video.map { NextUp.link(imdb, $0) } ?? imdb
-        return MediaItem(title: title, subtitle: episode ?? when, art: art, id: link, kind: type)
+        // No day ("Today") as the item's subtitle: it travelled with the item into search results and onto the title's own
+        // page, where it read as something about the film (gate on 339958b).
+        return MediaItem(title: title, subtitle: episode ?? "", art: art, id: link, kind: type)
     }
     // A day rather than a count of minutes, which would go stale while the page is open.
     var when: String {
@@ -264,115 +266,7 @@ final class RecentFlicks: ObservableObject {
     }
 }
 
-// The song this phone is playing, for when it's the one AirPlaying to the TV: then its own player is the one to drive.
-@MainActor
-final class PhonePlayer: ObservableObject {
-    static let shared = PhonePlayer()
-    struct Song: Equatable { var title: String, artist: String, album: String, duration: Double, id: UInt64 }
-    @Published private(set) var song: Song?
-    @Published private(set) var art: TVImage?
-    @Published private(set) var playing = false
-    @Published private(set) var drives = false
-    private var last: TVStatus?
-    private var asked = false
-    private var watching = false
-    var position: Double {
-        #if os(iOS)
-        MPMusicPlayerController.systemMusicPlayer.currentPlaybackTime
-        #else
-        0
-        #endif
-    }
-    private static func musicAirPlay(_ s: TVStatus?) -> Bool { s?.airplay?.active == true && s?.airplay?.kind == "music" }
-    func follow(_ s: TVStatus?) {
-        last = s
-        guard Self.musicAirPlay(s) else { if drives { drives = false }; return }
-        #if os(iOS)
-        // Asked the first time it's needed: music going from a phone to the TV.
-        if MPMediaLibrary.authorizationStatus() == .notDetermined {
-            if !asked { asked = true; MPMediaLibrary.requestAuthorization { _ in Task { @MainActor in PhonePlayer.shared.follow(PhonePlayer.shared.last) } } }
-            return
-        }
-        guard MPMediaLibrary.authorizationStatus() == .authorized else { return }
-        watch()
-        #endif
-        refresh()
-    }
-    func refresh() {
-        #if os(iOS)
-        guard MPMediaLibrary.authorizationStatus() == .authorized else { return }
-        let player = MPMusicPlayerController.systemMusicPlayer, item = player.nowPlayingItem
-        let next = item.map { Song(title: $0.title ?? "", artist: $0.artist ?? "", album: $0.albumTitle ?? "", duration: $0.playbackDuration, id: $0.persistentID) }
-        if next != song { song = next; art = item?.artwork?.image(at: CGSize(width: 600, height: 600)) }
-        let p = player.playbackState == .playing
-        if p != playing { playing = p }
-        #endif
-        let tv = last?.music?.title ?? ""
-        let same = song.map { !tv.isEmpty && $0.title.caseInsensitiveCompare(tv) == .orderedSame } ?? false
-        // Once it's the phone's it stays so through a skip, which the phone shows before the TV does.
-        let now = Self.musicAirPlay(last) && song != nil && (same || drives)
-        if now != drives { drives = now }
-    }
-    #if os(iOS)
-    private func watch() {
-        guard !watching else { return }
-        watching = true
-        MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
-        for name in [Notification.Name.MPMusicPlayerControllerNowPlayingItemDidChange, .MPMusicPlayerControllerPlaybackStateDidChange] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in Task { @MainActor in PhonePlayer.shared.refresh() } }
-        }
-    }
-    #endif
-    func toggle() {
-        #if os(iOS)
-        let player = MPMusicPlayerController.systemMusicPlayer
-        if playing { player.pause() } else { player.play() }
-        // The button answers at once; the player's own word follows.
-        playing.toggle()
-        #endif
-    }
-    func next() {
-        #if os(iOS)
-        MPMusicPlayerController.systemMusicPlayer.skipToNextItem()
-        #endif
-    }
-    // Back to the start of the song first, as any player does, then to the one before.
-    func previous() {
-        #if os(iOS)
-        let player = MPMusicPlayerController.systemMusicPlayer
-        if player.currentPlaybackTime > 3 { player.skipToBeginning() } else { player.skipToPreviousItem() }
-        #endif
-    }
-    func seek(to seconds: Double) {
-        #if os(iOS)
-        MPMusicPlayerController.systemMusicPlayer.currentPlaybackTime = seconds
-        #endif
-    }
-}
 
-// Whether any AirPlay device is in reach. Away from home there's none, so nothing offers AirPlay then.
-@MainActor
-final class AirPlayReach: ObservableObject {
-    static let shared = AirPlayReach()
-    @Published private(set) var inReach = false
-    private let detector = AVRouteDetector()
-    private var users = 0
-    init() {
-        NotificationCenter.default.addObserver(forName: .AVRouteDetectorMultipleRoutesDetectedDidChange, object: detector, queue: .main) { _ in
-            Task { @MainActor in AirPlayReach.shared.update() }
-        }
-    }
-    private func update() { let r = detector.multipleRoutesDetected; if r != inReach { inReach = r } }
-    // Looking costs battery, so only while something on screen needs to know.
-    func begin() { users += 1; detector.isRouteDetectionEnabled = true; update() }
-    func end() { users = max(0, users - 1); if users == 0 { detector.isRouteDetectionEnabled = false } }
-    // The first look takes the detector a moment.
-    func check() async -> Bool {
-        begin(); defer { end() }
-        for _ in 0..<20 where !inReach { try? await Task.sleep(nanoseconds: 100_000_000); update() }
-        return inReach
-    }
-}
 
 // A cover that crossfades to the next once that has loaded, rather than swapping in a frame or flashing its placeholder.
 struct Cover<Placeholder: View>: View {
@@ -518,6 +412,7 @@ private struct BackToTop: ViewModifier {
     @Environment(\.pageScroll) private var pageScroll
     var posed = true
     @State private var position = ScrollPosition(edge: .top)
+    @State private var scrolled = false
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
@@ -530,9 +425,11 @@ private struct BackToTop: ViewModifier {
             // How far the page has scrolled, for its title to go up with it.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
                 if let pageScroll, abs(pageScroll.y - y) > 0.25 { pageScroll.y = y }
+                if (y > 1) != scrolled { scrolled = y > 1 }
             }
             // Every tab's scrolling page takes this, so it's where the page's top fade goes too, and where it says it's moving.
-            .topFade()
+            // Only once something has scrolled up under it: at rest the first heading is whole and white.
+            .modifier(TopFade(on: scrolled))
             .modifier(ScrollMoving())
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
             // Animated, like a drag, so the bar follows it and folds the title as a real scroll would.

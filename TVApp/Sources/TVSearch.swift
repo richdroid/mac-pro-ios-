@@ -251,35 +251,37 @@ final class SearchStore: ObservableObject {
         if let at = asked[q], Date().timeIntervalSince(at) < 20 { return }
         asked[q] = Date()
         let enc = q.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-        func items(_ d: Data?) -> [MediaItem]? {
-            guard let d, let a = try? JSONDecoder().decode(BrowseAnswerRows.self, from: d) else { return nil }
-            return a.rows.flatMap(\.items)
+        // Decoded off the main thread: three answers decoded on it as they came were part of the 0.9-2.2 s of stalls while
+        // results arrived (gate on 339958b).
+        func items(_ d: Data?) async -> [MediaItem]? {
+            guard let d else { return nil }
+            return await Task.detached(priority: .userInitiated) { () -> [MediaItem]? in
+                guard let a = try? JSONDecoder().decode(BrowseAnswerRows.self, from: d) else { return nil }
+                return a.rows.flatMap(\.items)
+            }.value
         }
         // Films and shows come from the same catalogue and are shown together, so one never pushes the other down.
         Task {
             async let f = TVBridge.data(TVBridge.url("/api/tv/discover?type=movie&q=\(enc)"), timeout: 12)
             async let s = TVBridge.data(TVBridge.url("/api/tv/discover?type=series&q=\(enc)"), timeout: 12)
             let (fd, sd) = await (f, s)
+            let films = await items(fd), shows = await items(sd)
             var a = answers[q] ?? Answer()
-            let films = items(fd), shows = items(sd)
             a.films = films ?? a.films ?? []; a.shows = shows ?? a.shows ?? []; a.at = Date()
             a.offline = films == nil && shows == nil ? true : nil
             if a.offline == true { asked[q] = nil }
             answers[q] = a
             arrived(q)
         }
-        Task {
-            let d = await TVBridge.data(TVBridge.url("/api/tv/mint?q=\(enc)"), timeout: 12)
-            var a = answers[q] ?? Answer()
-            a.music = items(d) ?? a.music ?? []
-            answers[q] = a
-            arrived(q)
-        }
+        // Titles only (2026-11-24: flicking, the remote and streams): Mint's songs are no longer asked for.
+        do { var a = answers[q] ?? Answer(); if a.music == nil { a.music = [] }; answers[q] = a }
         Task {
             // YouTube's own results, from a Mac that has them; one that doesn't simply has none to give.
             let d = await TVBridge.data(TVBridge.url("/api/tv/youtube-search?q=\(enc)"), timeout: 8)
             var a = answers[q] ?? Answer()
-            a.youtube = items(d) ?? a.youtube ?? []
+            let y = await items(d)
+            a = answers[q] ?? a
+            a.youtube = y ?? a.youtube ?? []
             answers[q] = a
             arrived(q)
         }
@@ -289,8 +291,21 @@ final class SearchStore: ObservableObject {
         if answers[q]?.complete == true, answers[q]?.offline != true { saveSoon() }
         // Only redrawn if it's an answer to what's typed, or to words this one grew out of.
         let now = SearchQuery.key(text)
-        if now == q || now.hasPrefix(q) || q.hasPrefix(now) { rebuild() }
+        guard now == q || now.hasPrefix(q) || q.hasPrefix(now) else { return }
+        // The three answers come close together: one rebuild for all that land within 80 ms, not one each.
+        guard rebuildSoon == nil else { return }
+        rebuildSoon = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard let self else { return }
+            self.rebuildSoon = nil
+            let t0 = Date()
+            self.rebuild()
+            #if os(iOS)
+            HitchLog.shared.note("search rebuilt in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            #endif
+        }
     }
+    private var rebuildSoon: Task<Void, Never>?
 
     // MARK: building what's shown
     private func rebuild() {
@@ -492,9 +507,6 @@ enum Mine {
             for (n, i) in r.items.enumerated() { put(i.stremioRef?.imdb ?? i.id, base - min(n, 10)) }
         }
         for (n, f) in RecentFlicks.shared.list.enumerated() { put(f.imdb, 30 - n) }
-        for r in BrowseStore.shared(.mint).rows where r.title == "Recently played" {
-            for (n, i) in r.items.enumerated() { put(i.id, 20 - min(n, 10)); put(SearchMatch.fold(i.title) + "|music", 20 - min(n, 10)) }
-        }
         return w
     }
     // Everything already on the phone, his own first.
@@ -503,7 +515,6 @@ enum Mine {
         out += RecentFlicks.shared.list.map { ($0.item, $0.type == "series" ? .show : .film) }
         for r in BrowseStore.shared(.stremio).rows { out += r.items.map { ($0, nil) } }
         for t in ["series", "movie"] { for r in BrowseStore.discover(t).rows { out += r.items.map { ($0, nil) } } }
-        for r in BrowseStore.shared(.mint).rows { out += r.items.map { ($0, .music) } }
         return out
     }
 }
@@ -518,6 +529,7 @@ struct SearchPage: View {
     @FocusState private var focused: Bool
     @State private var barAway = false
     var body: some View {
+        let _ = Timing.body("search")
         // The field stays put above what scrolls, as the system's own search does. Inside the scroll view, open upright
         // the keyboard's own lift scrolled the page, and a scroll that puts the keyboard away put it away at once
         // (tv-search-ci 829e7c4 and e40ae26: focus on, then off, in every open-upright pose; the probe's field above the
@@ -566,7 +578,7 @@ struct SearchPage: View {
                 }
             }
         }
-        .onChange(of: draft.text, initial: true) { _, t in store.typed(t, model: model) }
+        .onChange(of: draft.text, initial: true) { _, t in Timing.measure("search typed") { store.typed(t, model: model) } }
         .onScrollPhaseChange { _, p in if p == .interacting { store.touched = true } }
         // Another tab: the field lets the keyboard go, so it never rises over the page he went to.
         .onChange(of: model.tab) { _, t in if t != 6, focused { focused = false } }
@@ -584,7 +596,7 @@ struct SearchPage: View {
         HStack(spacing: 8) {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
-            TextField("Shows, films, music, apps", text: $draft.text)
+            TextField("Shows, films, apps", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().textInputAutocapitalization(.never)
                 .submitLabel(link ? .send : .search)
                 // The bar follows the keyboard only once it has settled: a focus that flickers on and off as the page lays
@@ -654,7 +666,7 @@ struct SearchPage: View {
 // Every other search field in the app: it looks the same and opens the one search.
 struct OpensSearchField: View {
     @Environment(TVModel.self) var model
-    var prompt = "Shows, films, music, apps"
+    var prompt = "Shows, films, apps"
     var body: some View {
         Button { SearchStore.show(model, text: "") } label: {
             HStack(spacing: 8) {
@@ -680,6 +692,7 @@ private struct ResultList: View {
     // Open flat: the top result under the field on the left, every group on the right, so neither side sits empty.
     var showsGroups: Bool { part != .left }
     var body: some View {
+        let _ = Timing.body("results")
         VStack(alignment: .leading, spacing: 22) {
             if SendBar.isLink(results.text) {
                 if part != .right { LinkRow(text: results.text) }
@@ -784,6 +797,7 @@ private struct HitRow: View {
     let hit: SearchHit
     @State private var place = FrameBox()
     var body: some View {
+        let _ = Timing.body("hit")
         Button { SearchStore.shared.open(hit, model: model, origin: place.rect) } label: {
             HStack(spacing: 12) {
                 HitArt(hit: hit, height: 60)
@@ -885,8 +899,9 @@ private struct SearchIdle: View {
     // Titles to try: the films and shows of Stremio's home that aren't his own (Continue watching has its home on Watch).
     var tries: [String] {
         var seen = Set<String>(), out: [String] = []
+        let shownLeft = Set((flicked.isEmpty ? popular?.items.prefix(5).map { $0.title.lowercased() } : nil) ?? [])
         for r in home.rows where r.title != "Continue watching" {
-            for i in r.items where !i.title.isEmpty && !i.isYouTube && seen.insert(i.title.lowercased()).inserted { out.append(i.title); if out.count == 6 { return out } }
+            for i in r.items where !i.title.isEmpty && !i.isYouTube && !shownLeft.contains(i.title.lowercased()) && seen.insert(i.title.lowercased()).inserted { out.append(i.title); if out.count == 6 { return out } }
         }
         return out
     }
@@ -898,14 +913,18 @@ private struct SearchIdle: View {
             switch part {
             case .all:
                 RecentSearches(store: store)
+                if flicked.isEmpty { popularList }
                 tryList
                 flickedList
             case .left:
-                if store.recent.isEmpty { flickedList } else { RecentSearches(store: store) }
-                if store.recent.isEmpty && flicked.isEmpty { tryList }
+                // His own first; with none yet, what's popular on Stremio, as posters he can flick. Never an empty pane.
+                // Under a few recent searches, the rest of the pane too: what he flicked, else what's popular (gate on
+                // eb040c7: one recent search, then half a pane empty).
+                if !store.recent.isEmpty { RecentSearches(store: store) }
+                if !flicked.isEmpty { flickedList } else { popularList }
             case .right:
-                if !(store.recent.isEmpty && flicked.isEmpty) { tryList }
-                if !store.recent.isEmpty { flickedList }
+                // "Try searching" always has this side, so neither pane is ever blank open flat (gate on 4f36e1e).
+                tryList
             }
         }
         .animation(.snappy, value: tries)
@@ -926,6 +945,22 @@ private struct SearchIdle: View {
                     .buttonStyle(.plain)
                     .padding(.horizontal, 20)
                 }
+            }
+            .transition(.opacity)
+        }
+    }
+    // The first of Stremio's own rows (not Continue watching, which lives on Watch).
+    var popular: MediaRow? { home.rows.first { $0.title != "Continue watching" && !$0.items.isEmpty } }
+    @ViewBuilder var popularList: some View {
+        if let r = popular {
+            VStack(alignment: .leading, spacing: 6) {
+                RowTitle(r.title).padding(.horizontal, 20)
+                VStack(spacing: 4) {
+                    ForEach(r.items.prefix(5)) { i in
+                        HitRow(hit: SearchHit(kind: i.kind == "series" ? .show : .film, item: i, match: 0, mine: 0, order: 0))
+                    }
+                }
+                .padding(.horizontal, 12)
             }
             .transition(.opacity)
         }
@@ -964,7 +999,7 @@ private struct RecentSearches: View {
                             .frame(minHeight: 44).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        Button { withAnimation(.snappy) { store.forget(t) } } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary).frame(width: 44, height: 44) }
+                        Button { withAnimation(.snappy) { store.forget(t) } } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.75)).frame(width: 44, height: 44) }  // live, so drawn as live (it was tertiary grey)
                             .buttonStyle(.plain).accessibilityLabel("Remove \(t)")
                     }
                     .padding(.leading, 20).padding(.trailing, 8)
