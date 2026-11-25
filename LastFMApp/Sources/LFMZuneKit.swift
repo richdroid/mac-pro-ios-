@@ -284,9 +284,12 @@ struct WPPaging: ScrollTargetBehavior {
 
 // A start tile's clock (WP7's live tiles): one tile moves at a time, a few seconds apart, in a shuffled round, so the
 // start screen is alive without ever moving all at once; nothing moves while he's scrolling or the screen is covered.
+// One tile's turns, observed by that tile alone: a turn redraws one tile, never the whole start screen.
+@MainActor @Observable final class TileTurn { var count = 0 }
 @MainActor @Observable final class TileClock {
     static let shared = TileClock()
-    private(set) var turns: [String: Int] = [:]
+    @ObservationIgnored private var turns: [String: TileTurn] = [:]
+    func turn(_ id: String) -> TileTurn { if let t = turns[id] { return t }; let t = TileTurn(); turns[id] = t; return t }
     @ObservationIgnored private var live: [String] = []
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var holders = 0
@@ -302,7 +305,7 @@ struct WPPaging: ScrollTargetBehavior {
             var round: [String] = []
             while !Task.isCancelled, let self {
                 if round.isEmpty { round = self.live.shuffled() }
-                if let id = round.popLast(), !Store.shared.scrolling, !NavTransit.shared.inFlight { self.turns[id, default: 0] += 1 }
+                if let id = round.popLast(), !Store.shared.scrolling, !NavTransit.shared.inFlight { self.turn(id).count += 1 }
                 try? await Task.sleep(nanoseconds: UInt64(Double.random(in: 2.2...3.6) * 1_000_000_000))
             }
         }
@@ -340,9 +343,14 @@ struct LiveTile<Front: View, Back: View>: View {
                 fill
                 switch motion {
                 case .flip:
-                    Group { if face % 2 == 0 { front() } else { back() } }
-                        .frame(width: g.size.width, height: g.size.height)
-                        .clipped()
+                    // Both faces built from the start (a face built at the flip's midpoint decoded its picture inside
+                    // the animation); the turn only swaps which one shows.
+                    ZStack {
+                        front().opacity(face % 2 == 0 ? 1 : 0)
+                        back().opacity(face % 2 == 1 ? 1 : 0)
+                    }
+                    .frame(width: g.size.width, height: g.size.height)
+                    .clipped()
                 case .peek:
                     // The picture over the words; on a peek it rises to show the lower half's words.
                     ZStack(alignment: .top) {
@@ -362,7 +370,7 @@ struct LiveTile<Front: View, Back: View>: View {
         .clipShape(Rectangle())
         .onAppear { clock.join(id) }
         .onDisappear { clock.leave(id) }
-        .onChange(of: clock.turns[id] ?? 0) { _, _ in turn() }
+        .onChange(of: clock.turn(id).count) { _, _ in turn() }
         .accessibilityElement(children: .combine)
     }
     private func turn() {

@@ -57,6 +57,7 @@ struct Pager: View {
     // Only the page it opens on is built in the push's first frames; the others half a second later, at rest, before
     // any swipe can reach them (gate 2b: a hub built all its pages in the frame it was pushed).
     @State private var all = false
+    @State private var copies = false
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     // WP7's application title over the names: the hub's name in small capitals (or a title given).
     @Environment(\.hubName) private var hubName
@@ -111,7 +112,9 @@ struct Pager: View {
                 ScrollView(.horizontal) {
                     HStack(alignment: .top, spacing: 0) {
                         ForEach(Array(slots.enumerated()), id: \.offset) { k, i in
-                            Group { if all || k == built || n == 1 { panel(panels[i], head, cut, bars.bottom, pw, side) } else { Color.clear } }
+                            // The real pages at rest half a second in; the wrap's two copies a second after that.
+                            let copy = cyclic && (k == 0 || k == slots.count - 1)
+                            Group { if (all && (!copy || copies)) || k == built || n == 1 { panel(panels[i], head, cut, bars.bottom, pw, side) } else { Color.clear } }
                                 .frame(width: W).id(k)
                         }
                     }
@@ -146,7 +149,13 @@ struct Pager: View {
                     }
                 }
                 .task { await place() }
-                .task { try? await Task.sleep(nanoseconds: 500_000_000); all = true }
+                .task {
+                    try? await Task.sleep(nanoseconds: 500_000_000); all = true
+                    // The copies only once nothing is moving, so their build never lands in a swipe's frames.
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    while phase != .idle { try? await Task.sleep(nanoseconds: 200_000_000) }
+                    copies = true
+                }
                 // The page's width changed under it (a turn, the fold): put back on its page's edge, at rest only.
                 .onChange(of: W, initial: true) { _, w in
                     width = w
