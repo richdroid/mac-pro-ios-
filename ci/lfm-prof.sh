@@ -49,42 +49,50 @@ profile_all() {
   STEPS="shot:6 shot:6" prof p-launch-home$x $d 14 -hub home
   STEPS="shot:6 shot:6" prof p-launch-you$x $d 14 -tab 0
   # Home: a tile tapped (turnstile out, hub in), Back by its button, then the now-playing tile and Back by the edge.
-  STEPS="shot:5 tap=0.25,0.70:1 shot:3 tap=0.895,0.29:1 shot:3 tap=0.3,0.45:1 shot:3 edgeslow:1 shot:3" prof p-home-tap$x $d 24 -hub home
+  STEPS="shot:5 tap=0.25,0.70:1 shot:3 tap=${BACKAT:-0.895,0.29}:1 shot:3 tap=0.3,0.45:1 shot:3 edgeslow:1 shot:3" prof p-home-tap$x $d 24 -hub home
   # The panorama swiped through and back.
   Y=0.6 STEPS="side:5 side:2 side:2 sideback:2 sideback:2 sideback:2 shot:1" prof p-home-pan$x $d 20 -hub home
   # Pivots: now playing through and round, the profile hub round (the wrap).
   Y=0.6 STEPS="side:5 side:2 side:2 side:2 sideback:2 sideback:2 shot:1" prof p-pivot-now$x $d 20 -hub nowPlaying
   Y=0.6 STEPS="side:5 side:2 side:2 side:2 side:2 sideback:2 shot:1" prof p-pivot-profile$x $d 20 -hub profile
   # A row's page pushed and popped (charts), and a long list scrolled (history).
-  STEPS="tap=0.4,0.62:6 shot:3 tap=0.895,0.29:1 shot:2 tap=0.4,0.62:2 shot:3 edgeslow:1 shot:2" prof p-tap-artist$x $d 22 -tab 1 -kind 0
+  STEPS="tap=0.4,0.62:6 shot:3 tap=${BACKAT:-0.895,0.29}:1 shot:2 tap=0.4,0.62:2 shot:3 edgeslow:1 shot:2" prof p-tap-artist$x $d 22 -tab 1 -kind 0
   STEPS="slow:5 fling:2 fling:2 fling:2 flingback:2 flingback:2" prof p-scroll-history$x $d 18 -hub history
 }
 
 # The motions filmed (Release build), for the gate to read frame by frame beside each film's hitch log.
 films_all() {
   local x=$1 d=$2
-  STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2 tap=0.895,0.29:2 shot:1 shot:2" film home-tap$x $d 18 -hub home
+  STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2 tap=${BACKAT:-0.895,0.29}:2 shot:1 shot:2" film home-tap$x $d 18 -hub home
   STEPS="tap=0.25,0.70:6 shot:2 edgeslow:1 shot:1 shot:3" film home-swipe$x $d 18 -hub home
-  STEPS="tap=0.3,0.45:6 shot:2 tap=0.895,0.29:2 shot:2" film home-now$x $d 16 -hub home
+  STEPS="tap=0.3,0.45:6 shot:2 tap=${BACKAT:-0.895,0.29}:2 shot:2" film home-now$x $d 16 -hub home
   Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film home-pan$x $d 26 -hub home
   STEPS="shot:8 shot:8" film home-tiles$x $d 20 -hub home
   Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap$x $d 22 -hub profile
   Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-now$x $d 26 -hub nowPlaying
   Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-charts$x $d 20 -tab 1
   Y=0.6 STEPS="side:6 shot:2 edgeslow:2 shot:1 shot:3" film edge-back-pivot$x $d 18 -hub discover
-  STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-artist$x $d 18 -tab 1 -kind 0
+  STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=${BACKAT:-0.895,0.29}:1 shot:1 shot:2" film tap-artist$x $d 18 -tab 1 -kind 0
   STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-history$x $d 18 -hub history
   STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm$x $d 20 -hub home
+  # The detail pages' tops, opened from the charts and left at rest (the tray band only once scrolled).
+  STEPS="tap=0.4,0.62:7 shot:3 slow:2 shot:2" film tap-album$x $d 16 -tab 1 -kind 1
+}
+# The folded wrap-back swipe that sprang back once (run 63 gate, blocker 1), three more times.
+films_wrap() {
+  for r in 1 2 3; do
+    Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2 sideback:2 shot:2" film pivot-wrap-again$r 1 24 -hub profile
+  done
 }
 
 # Build 62's motions, the ones Richard named (taps, Back, pans, pivots, pushes, launch), for the before numbers.
 films_before() {
   local x=$1 d=$2
-  STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2 tap=0.895,0.29:2 shot:1 shot:2" film home-tap$x $d 18 -hub home
+  STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2 tap=${BACKAT:-0.895,0.29}:2 shot:1 shot:2" film home-tap$x $d 18 -hub home
   STEPS="tap=0.25,0.70:6 shot:2 edgeslow:1 shot:1 shot:3" film home-swipe$x $d 18 -hub home
   Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film home-pan$x $d 26 -hub home
   Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap$x $d 22 -hub profile
   Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-now$x $d 26 -hub nowPlaying
-  STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-artist$x $d 18 -tab 1 -kind 0
+  STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=${BACKAT:-0.895,0.29}:1 shot:1 shot:2" film tap-artist$x $d 18 -tab 1 -kind 0
   STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm$x $d 20 -hub home
 }

@@ -1,6 +1,6 @@
 name: Rotation profile
 # Branch-only (lastfm-prof): Rotation's motions filmed in Release on the simulator with the app's own hitch log, for
-# build 62 (a05f4b0, "before") and for this commit ("after"), on the same runner, so the numbers compare. Published to
+# the build on his phone (BEFORE, "before") and for this commit ("after"), on the same runner, so the numbers compare. Published to
 # the lastfm-prof release; never touches lastfm-latest.
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
           xcodegen generate
           xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
-          git worktree add /tmp/before a05f4b0921f70dfab4b699af0b7f5b427180c668
+          git worktree add /tmp/before c0ae38f39052de6393a4a79f5e78293237804b87
           (cd /tmp/before && xcodegen generate && xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1)
       - name: Films
@@ -46,8 +46,10 @@ jobs:
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Release-iphonesimulator/LastFM.app
           xcrun simctl launch "$DEVICE" $APP -hub home; sleep 20; xcrun simctl terminate "$DEVICE" $APP
           films_all "" 1
+          films_wrap
           upright
-          films_all "-portrait" 3
+          # Back is at the top left open upright (the side strip's place folded).
+          BACKAT=0.063,0.052 films_all "-portrait" 3
           xcrun simctl shutdown "$DEVICE"
       - name: Publish
         if: always()
@@ -58,8 +60,13 @@ jobs:
           gh release view lastfm-prof >/dev/null 2>&1 || gh release create lastfm-prof --prerelease --title "Rotation profile" --notes "Rotation's motions filmed (branch lastfm-prof)." --target lastfm-prof
           for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > dist/hitches.txt
           echo "$GITHUB_SHA run $GITHUB_RUN_NUMBER" > status.txt
-          (cd dist && zip -q ../logs.zip films.log build.log hitches*.txt 2>/dev/null)
-          gh release upload lastfm-prof logs.zip dist/hitches.txt --clobber
+          # The stalls' stacks named against this build (LFMStalls.swift samples, atos for the app's frames).
+          APPD=build-sim/Build/Products/Release-iphonesimulator/LastFM.app
+          ls dist/stalls-*.txt 2>/dev/null | grep -v -- -before > /tmp/sl.txt
+          python3 ci/lfm-stall-stacks.py $APPD $(cat /tmp/sl.txt) > dist/stall-stacks.txt 2>&1 || echo "stall stacks failed" >> dist/stall-stacks.txt
+          for f in $(cat /tmp/sl.txt); do n=$(basename $f .txt | sed 's/^stalls-//'); python3 ci/lfm-stall-stacks.py $APPD $f > dist/stacks-$n.txt 2>&1; done
+          (cd dist && zip -q ../logs.zip films.log build.log hitches*.txt stalls-*.txt stacks-*.txt stall-stacks.txt 2>/dev/null)
+          gh release upload lastfm-prof logs.zip dist/hitches.txt dist/stall-stacks.txt --clobber
           (cd dist && zip -qr ../film-shots.zip . -i 'lfm-*.png' 2>/dev/null) && gh release upload lastfm-prof film-shots.zip --clobber
           swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
           bash ci/lfm-shrink-all.sh dist small 900 2 > dist/publish.log 2>&1

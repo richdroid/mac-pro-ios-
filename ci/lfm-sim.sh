@@ -70,8 +70,10 @@ stop_rec() {
 hitches() {
   local c
   c=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) || return
-  if [ "$1" = clear ]; then rm -f "$c/Library/Caches/hitches.txt"; return; fi
+  if [ "$1" = clear ]; then rm -f "$c/Library/Caches/hitches.txt" "$c/Library/Caches/stalls.txt"; return; fi
   cp "$c/Library/Caches/hitches.txt" dist/hitches-$1.txt 2>/dev/null || echo "no hitch log: $1"
+  # What the main thread was doing in each stall (LFMStalls.swift), named later by ci/lfm-stall-stacks.py.
+  cp "$c/Library/Caches/stalls.txt" dist/stalls-$1.txt 2>/dev/null || true
 }
 
 # One film: name, display, seconds, then the app's own arguments; steps run while it records (STEPS="cmd:wait ...").
