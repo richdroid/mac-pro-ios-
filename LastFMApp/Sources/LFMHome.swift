@@ -141,12 +141,15 @@ struct Quickplay: View {
         VStack(alignment: .leading, spacing: S.section) {
             let albums = Self.albums(store.recent)
             if !albums.isEmpty {
-                Panorama(title: "just played", items: albums, tiles: true) { e in when(e.last.map { Date(timeIntervalSince1970: TimeInterval($0)) }) }
+                if !wide { Panorama(title: "just played", items: albums, tiles: true) { e in when(e.last.map { Date(timeIntervalSince1970: TimeInterval($0)) }) } }
             }
             // Open flat the right pane is Quickplay proper (gate 1: a strip over empty black): his week's heavy rotation,
             // who he's on repeat with, and what's new to him.
             if wide {
+                // The mosaic first, inside the margins: the strips that run under the side strip start below its status
+                // glyphs (gate 2a, item 17).
                 RotationMosaic().padding(.horizontal, S.margin)
+                if !albums.isEmpty { Panorama(title: "just played", items: albums, tiles: true) { e in when(e.last.map { Date(timeIntervalSince1970: TimeInterval($0)) }) } }
                 WeekHub(title: "on repeat", list: store.insights.week)
                 if store.insights.discoveries.count >= 3 { WeekHub(title: "new to you", list: store.insights.discoveries) }
             }

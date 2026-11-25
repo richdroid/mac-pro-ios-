@@ -54,6 +54,7 @@ struct Pager: View {
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     // WP7's application title over the names: the hub's name in small capitals (or a title given).
     @Environment(\.hubName) private var hubName
+    @Environment(\.paneLayout) private var paned
     private var caps: String? { title ?? hubName }
     // The application title's line and the gap under it.
     private var capsHeight: CGFloat { caps == nil ? 0 : ceil(20 * min(max(k, 0.9), 1.3)) + 2 }
@@ -171,13 +172,14 @@ struct Pager: View {
                 // right to the cut and gone 34 pt later, a flat dark bar with a hard foot over today's wall with a song
                 // on (run 49 gate).
                 let H = cut + 60
+                let k: Double = paned ? 0 : 1
                 LinearGradient(stops: [
-                    .init(color: S.ground.opacity(0.55), location: 0),
-                    .init(color: S.ground.opacity(0.6), location: max(0, cut - 24) / H),
-                    .init(color: S.ground.opacity(0.8), location: cut / H),
-                    .init(color: S.ground.opacity(0.5), location: (cut + 14) / H),
-                    .init(color: S.ground.opacity(0.22), location: (cut + 30) / H),
-                    .init(color: S.ground.opacity(0.07), location: (cut + 46) / H),
+                    .init(color: S.ground.opacity(0.45 * k), location: 0),
+                    .init(color: S.ground.opacity(0.5 * k), location: max(0, cut - 24) / H),
+                    .init(color: S.ground.opacity(0.8 * k), location: cut / H),
+                    .init(color: S.ground.opacity(0.5 * k), location: (cut + 14) / H),
+                    .init(color: S.ground.opacity(0.22 * k), location: (cut + 30) / H),
+                    .init(color: S.ground.opacity(0.07 * k), location: (cut + 46) / H),
                     .init(color: S.ground.opacity(0), location: 1),
                 ], startPoint: .top, endPoint: .bottom)
                     .frame(width: W, height: H)

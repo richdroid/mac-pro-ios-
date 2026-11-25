@@ -257,6 +257,8 @@ struct NowHero: View {
     }
     private func words(_ s: Scrobble, _ playing: Bool, line: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: S.pair) {
+            // Under the hub's own NOW PLAYING the status row is left out whole (gate 2a, item 15: a lone mark on its line).
+            if titled || !playing || store.trouble {
             HStack(spacing: 7) {
                 if playing, !store.trouble {
                     // Under the hub's own "NOW PLAYING" the bars alone say it: the words once, not twice.
@@ -275,6 +277,7 @@ struct NowHero: View {
             .font(.zune(.caption, .bold)).textCase(.uppercase).tracking(0.8)
             .foregroundStyle(.white.opacity(0.85))
             .padding(.bottom, S.pair)
+            }
             Text(s.title).font(.zune(.largeTitle, .light)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.8)
             Text(s.artist).font(.zune(.title3, .semibold)).foregroundStyle(.white).lineLimit(2)
             if !s.album.isEmpty { Text(s.album).font(.zune(.body)).foregroundStyle(S.soft).lineLimit(2) }

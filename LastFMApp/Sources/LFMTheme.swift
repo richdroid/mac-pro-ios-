@@ -256,7 +256,7 @@ struct BarFade: ViewModifier {
                 // From the very top of the screen, wherever this page begins (under the bars or below them).
                 let top = max(g.safeAreaInsets.top, g.frame(in: .global).minY)
                 if top > 30 {
-                    LinearGradient(stops: [.init(color: S.ground, location: 0), .init(color: S.ground.opacity(0.9), location: 0.55), .init(color: S.ground.opacity(0), location: 1)],
+                    LinearGradient(stops: [.init(color: S.ground.opacity(0.7), location: 0), .init(color: S.ground.opacity(0.45), location: 0.55), .init(color: S.ground.opacity(0), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                         .frame(height: top + 10).offset(y: -g.frame(in: .global).minY)
                 }

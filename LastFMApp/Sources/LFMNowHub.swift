@@ -107,8 +107,10 @@ struct NowPlayingHub: View {
     private var stats: NowStats { NowStats.shared }
     var body: some View {
         // "now playing" only while it's live (Last.fm answering, the song on): else what was last heard (gate 1, item 6).
-        let playing = (store.shown?.nowPlaying ?? false) && !store.trouble
         GeometryReader { g in
+            // Read here, inside the reader that lays out the pivot: read outside it, the title missed Last.fm going away
+            // upright (gate 2a, item 6: NOW PLAYING over LAST HEARD).
+            let playing = (store.shown?.nowPlaying ?? false) && !store.trouble
             let sideways = g.size.width > g.size.height * 1.15
             Group {
                 if pane {
@@ -171,7 +173,7 @@ struct NowFigures: View {
             stats.track?.plays.map { (compact($0), "scrobbles") },
             // His plays of it and of the artist are the hero's own line; here his place and his first time with it.
             stats.trackStory.flatMap { st in st.rank.map { ("#\(number($0))", "of your \(number(st.of)) songs") } },
-            stats.trackStory?.first.map { (dateShort($0), "first scrobble") },
+            stats.trackStory?.last.map { (ago($0), "last scrobble") },
         ].compactMap { $0 })
         .animation(.easeOut(duration: 0.2), value: stats.key)
     }

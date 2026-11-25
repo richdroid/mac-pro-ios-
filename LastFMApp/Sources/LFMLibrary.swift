@@ -130,7 +130,7 @@ struct LibraryTab: View {
 
     private var head: some View {
         VStack(alignment: .leading, spacing: S.head) {
-            VStack(alignment: .leading, spacing: 0) { AppTitle(text: "library"); HubTitle(text: "library", size: 80) }
+            VStack(alignment: .leading, spacing: 0) { AppTitle(text: "library"); HubTitle(text: m.shelf.name.lowercased(), size: 80) }
             search(m.shelf).padding(.horizontal, S.margin)
             if m.query.isEmpty {
                 Segments(items: LibShelf.allCases, selection: Binding(get: { m.shelf }, set: { m.shelf = $0 }), fill: true) { $0.name }
@@ -193,7 +193,8 @@ struct LibraryTab: View {
         let limit = self.shown[sh, default: 200]
         let list = isLoved ? [] : m.sorted(kind)
         HStack(alignment: .firstTextBaseline) {
-            Text(isLoved ? "\(number(m.loved.count)) loved" : "\(number(list.count)) \(kind.noun)").font(.zune(.title2, .bold)).foregroundStyle(.white)
+            // The count once it's known: never "0 artists" while the shelf is still being worked out (gate 2a, item 3).
+            Text(isLoved ? "\(number(m.loved.count)) loved" : m.lists[kind] == nil ? " " : "\(number(list.count)) \(kind.noun)").font(.zune(.title2, .bold)).foregroundStyle(.white)
             Spacer(minLength: 8)
             if !isLoved {
                 Menu {

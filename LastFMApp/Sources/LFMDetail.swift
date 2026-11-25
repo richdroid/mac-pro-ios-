@@ -42,13 +42,15 @@ struct PageLayout<Head: View, Rest: View>: View {
             let wide = g.size.width > 640
             if pane {
                 FoldSplit {
-                    Page { head(false).padding(.top, S.head) }
+                    Page { head(false).padding(.top, S.head - 8) }
                 } right: {
                     Page { VStack(alignment: .leading, spacing: S.section) { rest() }.padding(.top, S.section) }
                 }
             } else {
                 Page {
-                    VStack(alignment: .leading, spacing: S.section) { head(wide); rest() }.padding(.top, S.head)
+                    // 8 pt higher than a plain page: the scroll's own top margin put the small capitals lower than every
+                    // hub's (gate 2a, item 10).
+                    VStack(alignment: .leading, spacing: S.section) { head(wide); rest() }.padding(.top, S.head - 8)
                 }
             }
         }
