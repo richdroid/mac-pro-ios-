@@ -64,9 +64,18 @@ extension ChumbyModel {
         // his "just this once" on the shift's alarm went through the skip path and came back with an error).
         if original.isCalendar {
             let wake = CalendarWake.shared
-            func day() -> PlannedWake? { wake.plan.first { CalendarWake.alarmName($0) == original.name && abs($0.wake.timeIntervalSince(due)) < 60 } }
+            // That day by its alarm's name and time; failing that (a copy left at an older time), by its name and its
+            // event still ahead of that ring, the nearest.
+            func day() -> PlannedWake? {
+                wake.plan.first { CalendarWake.alarmName($0) == original.name && abs($0.wake.timeIntervalSince(due)) < 60 }
+                    ?? wake.plan.filter { CalendarWake.alarmName($0) == original.name && $0.start > due && $0.start.timeIntervalSince(due) <= 18 * 3600 }
+                        .min { $0.start < $1.start }
+            }
             if day() == nil { wake.refreshPlan() }     // from Home before Alarms has been opened, the plan may not be worked out yet
             if let item = day() { return await wake.moveDay(item, to: at, settings: settings, current: deviceState.alarms.first { $0.key == original.key }) }
+            // Never the skip path for a calendar alarm: it made a "just this once" beside a second calendar copy and
+            // pinned the skip to the wrong one (11-24).
+            return "That calendar day couldn’t be found, so nothing was changed. Pull down on Alarms to update and try again."
         }
         guard late >= 0 else { return "It can ring later than usual, not earlier. Nothing was changed." }
         // Fresh from the Chumby: that ring is still ahead and not about to ring, and what the one skip is on now.
@@ -304,6 +313,9 @@ struct JustOnceSheet: View {
     @State private var movedAlready = false
     var moving: Bool { adjusting || movedAlready }
     @State private var minutes = 0
+    // Where "usual" is, in minutes from `due`: 0 for his own alarms; for a calendar day ringing at a time set for it alone,
+    // the calendar's own time, so "Usual" goes back to the calendar rather than staying at the moved time (11-24).
+    @State private var usual = 0
     @State private var loadedSound = ""
     @State private var alarm = Alarm()
     @State private var sound = SoundChoice()
@@ -318,9 +330,10 @@ struct JustOnceSheet: View {
     func step(_ by: Int) { Haptic.fire(.tick); withAnimation(.snappy) { minutes = min(max(minutes + by, min(earliest, 0)), JustOnce.longest) } }
     // "25 min later than usual", "At its usual time"
     var offsetText: String {
-        if minutes == 0 { return "At its usual time" }
-        let m = abs(minutes), words = m >= 60 ? "\(m / 60) h\(m % 60 > 0 ? " \(m % 60) min" : "")" : "\(m) min"
-        return "\(words) \(minutes > 0 ? "later" : "earlier") than usual"
+        let d = minutes - usual
+        if d == 0 { return original.isCalendar ? "At the calendar’s time" : "At its usual time" }
+        let m = abs(d), words = m >= 60 ? "\(m / 60) h\(m % 60 > 0 ? " \(m % 60) min" : "")" : "\(m) min"
+        return "\(words) \(d > 0 ? "later" : "earlier") than usual"
     }
     func soundKey(_ a: Alarm) -> String { [a.type, a.arg, a.param, a.param_description, a.duration, a.snooze, a.auto_dismiss].joined(separator: "\u{1}") }
     // The same pill as the nap's lengths: outlined in the accent.
@@ -376,7 +389,7 @@ struct JustOnceSheet: View {
                 Text(name).font(.custom("Trebuchet MS", size: 24).weight(.bold)).lineLimit(2)
                 // The alarm and its day, and the usual time once. The new time lives only in "Rings at", the picker
                 // under When: the hero said it too, so the sheet showed it twice (designer, 11-11).
-                Text("\(dayWord(due)) · usually \(due.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
+                Text("\(dayWord(due)) · usually \(due.addingTimeInterval(Double(usual * 60)).formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
         }
@@ -394,9 +407,9 @@ struct JustOnceSheet: View {
                 stepChip("+5 min", label: "Five minutes later") { step(5) }
                 stepChip("+10 min", label: "Ten minutes later") { step(10) }
                 // Always in its place (appearing, it squeezed +5 and +10 sideways), dimmed while it's already usual.
-                stepChip("Usual", label: "Back to the usual time") { Haptic.fire(.tick); withAnimation(.snappy) { minutes = 0 } }
-                    .disabled(minutes == 0).opacity(minutes == 0 ? 0.4 : 1)
-                    .animation(.easeOut(duration: 0.15), value: minutes == 0)
+                stepChip("Usual", label: "Back to the usual time") { Haptic.fire(.tick); withAnimation(.snappy) { minutes = usual } }
+                    .disabled(minutes == usual).opacity(minutes == usual ? 0.4 : 1)
+                    .animation(.easeOut(duration: 0.15), value: minutes == usual)
             }
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 0, trailing: 20))
@@ -411,6 +424,9 @@ struct JustOnceSheet: View {
     }
     func load() {
         minutes = later
+        if original.isCalendar, let u = CalendarWake.shared.plan.first(where: { CalendarWake.alarmName($0) == original.name && abs($0.wake.timeIntervalSince(due)) < 60 })?.usualWake {
+            usual = min(max(Int((u.timeIntervalSince(due) / 60).rounded()), min(earliest, 0)), JustOnce.longest)
+        }
         // How it rings now, as the Chumby holds it (a calendar alarm with the calendar's set, or its own); a ring already
         // moved just this once opens with the sound it was given then.
         alarm = model.deviceState.alarms.first { $0.key == original.key } ?? original

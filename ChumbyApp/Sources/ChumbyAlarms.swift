@@ -281,7 +281,7 @@ struct AlarmRow<Notes: View>: View {
                             Text(clock.1).font(.custom("Trebuchet MS", size: 18))
                         }
                         .opacity(on ? 1 : 0.5)
-                        Text(title).font(.body.weight(.semibold)).lineLimit(1).opacity(on ? 1 : 0.6)
+                        Text(title).font(.body.weight(.semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true).opacity(on ? 1 : 0.6)
                         Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(oneLine ? 1 : 2).minimumScaleFactor(oneLine ? 0.85 : 1).opacity(on ? 1 : 0.7)
                         notes()
                     }
@@ -1138,7 +1138,7 @@ struct AlarmsTab: View {
                     // button beside it carries the usual time ("Back to 6:45 AM"), so it isn't said twice. Both lines
                     // keep one pitch, and the button centres on the two as Skip does.
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)" + (moved?.usual != nil ? " · just this once" : ""))
+                        Text("\(dayWord(n.at)) · \((fromCalendar ? CalendarWake.shared.eventLine(name: shownAlarm.name, at: moved?.usual ?? n.at) : nil) ?? alarmLabel(shownAlarm).capitalizedFirst)" + (moved?.usual != nil ? " · just this once" : ""))
                             .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
                         Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                     }
@@ -1355,8 +1355,9 @@ struct AlarmsTab: View {
                 ForEach(wake.plan) { item in
                     // Only against a recent reading, and never in the build's sample, which has no Chumby behind it.
                     let status = model.stateConfirmed && !CalendarWake.sample ? wake.onDevice(item, in: model.deviceState) : .set
-                    AlarmRow(clock: clockParts(item.wake), title: item.shown,
-                             detail: "\(item.start.formatted(date: .omitted, time: .shortened)) · \(item.exact ? "set for this day" : leadText(item.lead) + " before")",
+                    // The event's own time with its name ("Shift at 6:00 PM"), and how far ahead the wake is under it (11-24).
+                    AlarmRow(clock: clockParts(item.wake), title: "\(item.shown) at \(item.start.formatted(date: .omitted, time: .shortened))",
+                             detail: item.exact ? "Set for this day · \(leadText(item.lead)) before" : "\(leadText(item.lead)) before",
                              on: !item.skipped,
                              tile: AnyView(AlarmTile(calendarDay: item.wake, on: !item.skipped)),
                              oneLine: true,

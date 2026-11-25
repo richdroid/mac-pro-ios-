@@ -387,6 +387,37 @@ do {
     expect(o.alarmForm().contains { $0.0 == "1_own" && $0.1 == "1" }, "and every save says so, or the Chumby puts the shared set back")
 }
 
+section("a calendar day moved, then back to the calendar's time")
+do {
+    // The 11-24 case: a 12:45 appointment (90 min lead: 11:15), moved to 9:44 for that day, then sent back.
+    var r = WakeRules(); r.enabled = true
+    let appt = event("r1", "Removery", at(2026, 11, 11, 12, 45), hours: 1)
+    let moved = at(2026, 11, 11, 9, 44), usual = at(2026, 11, 11, 11, 15)
+    var m = r; m.dayEdits[WakePlanner.key(appt)] = DayEdit(wakeAt: moved.timeIntervalSince1970)
+    var plan = WakePlanner.plan([appt], rules: m, now: now, calendar: ny)
+    expect(plan.count == 1 && plan[0].wake == moved && plan[0].exact && plan[0].usualWake == usual, "a moved day keeps the calendar's own time beside its own")
+    var tpl = Alarm(); tpl.type = "beep"; tpl.arg = "Beep"
+    // The move: the Chumby held the 11:15; it is replaced by the 9:44, never kept beside it (the day is the user's call).
+    var st = state([once("Calendar: Removery", usual)])
+    var permit = st.applyCalendar(plan, settings: tpl, keep: CalendarKeep(plan: plan, events: [appt]))
+    expect(st.alarms.filter { $0.name == "Calendar: Removery" }.map(\.time) == [mins(moved)] && permit.userOff.count == 1, "moving a calendar day leaves one copy, at the new time")
+    // Back to the calendar's time: the day's own time let go.
+    plan = WakePlanner.plan([appt], rules: r, now: now, calendar: ny)
+    expect(plan[0].wake == usual && !plan[0].custom, "(the plan is back at 11:15, nothing set by hand)")
+    let copy = st.alarms.first { $0.name == "Calendar: Removery" }!
+    expect(CalendarKeep(plan: plan, events: [appt]).verdict(copy, due: moved) == .keep, "(not knowing the 9:44 was the day's own, it would ring beside the 11:15)")
+    let placed: Set<String> = [mins(moved) + "Calendar: Removery"]
+    expect(CalendarKeep(plan: plan, events: [appt], placed: placed).verdict(copy, due: moved) == .userChose, "a time the day's own time put there goes once it's let go")
+    let saved = st.alarms
+    permit = st.applyCalendar(plan, settings: tpl, keep: CalendarKeep(plan: plan, events: [appt], placed: placed))
+    expect(st.alarms.filter { $0.name == "Calendar: Removery" }.map(\.time) == [mins(usual)], "back to the usual time leaves one copy, at the calendar's time")
+    expect(permit.userOff.contains(copy.key) && !refused { _ = try AlarmWriter.check(saved: saved, sending: st.alarms, permit: permit, clock: now) }, "(allowed, as his own doing)")
+    // An event that moved by itself still keeps its old wake beside the new one, as before.
+    var later = appt; later.start = at(2026, 11, 11, 13, 45)
+    plan = WakePlanner.plan([later], rules: r, now: now, calendar: ny)
+    expect(CalendarKeep(plan: plan, events: [later], placed: placed).verdict(once("Calendar: Removery", usual), due: usual) == .keep, "an event that moved on its own keeps the old wake too")
+}
+
 section("The phone's backup alarm")
 do {
     let daily = alarm("Work", "daily", "420")

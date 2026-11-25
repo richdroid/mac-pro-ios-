@@ -317,7 +317,8 @@ struct MenuRow<V: Hashable, Options: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 12) {
-                Text(title)
+                // The title never wraps ("The / n" beside a long value, 11-24): its words are short, the value gives way.
+                Text(title).lineLimit(1).fixedSize().layoutPriority(2)
                 Spacer(minLength: 8)
                 Picker(title, selection: $selection.ticking(), content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
             }
@@ -3399,7 +3400,7 @@ struct SkipCard: View {
             }
             // Moved for one ring, the usual time is on the button ("Back to 6:45 AM"), so it isn't said twice.
             // The nap's heading already says "Nap": its line is the day alone.
-            Text(napNext && !struck ? day(at) : "\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
+            Text(napNext && !struck ? day(at) : "\(day(at)) · \(wake.eventLine(name: name, at: at) ?? label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
