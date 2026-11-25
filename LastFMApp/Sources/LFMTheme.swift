@@ -193,13 +193,33 @@ func dayName(_ d: Date) -> String {
 // played and moved the ground on every fourth frame of a scroll (run 39 review, fault 8). A new cover crossfades over
 // the old one, which stays under it until the new one is in: never black between (fault 2).
 struct Backdrop: View {
-    // WP7's dark theme (Richard, 2026-11-25: "nor do the colors and blur"): the ground is flat black on every page. The
-    // blurred cover that was here is gone; covers are content (tiles, the now-playing wall), never a smear behind it.
+    // Zune HD's and WP7's music hub (Richard, 2026-11-25: "there should be more imagery and color"): the picture of what's
+    // on (or the page's own album) big and sharp behind the page, larger than the screen and running off its right edge,
+    // under a black wash so white type reads (WP7: "dark and low contrast, a black overlay"). Never blurred.
     let ref: ArtRef?
     var moving: Bool = false
     var dim: Double = 0
     var body: some View {
-        Color.black.ignoresSafeArea().accessibilityHidden(true).allowsHitTesting(false)
+        GeometryReader { g in
+            ZStack(alignment: .topLeading) {
+                Color.black
+                if let ref {
+                    let side = max(g.size.height, g.size.width) * 1.08
+                    ArtView(ref, px: 1000, corner: 0)
+                        .frame(width: side, height: side)
+                        .offset(x: g.size.width - side * 0.82, y: -side * 0.06)
+                    LinearGradient(stops: [.init(color: .black.opacity(0.5 + dim), location: 0),
+                                           .init(color: .black.opacity(0.62 + dim), location: 0.45),
+                                           .init(color: .black.opacity(0.86), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+            }
+            .frame(width: g.size.width, height: g.size.height)
+            .clipped()
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
     }
 }
 

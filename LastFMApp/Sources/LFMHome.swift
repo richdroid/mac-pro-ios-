@@ -38,7 +38,7 @@ struct HomeView: View {
                 HomePanorama(chosen: chosen, go: go)
             }
         }
-        .background(Color.black.ignoresSafeArea())
+        .background { if pane { Backdrop(ref: store.shown?.art) } else { Color.black.ignoresSafeArea() } }
         .toolbarBackground(.hidden, for: .navigationBar)
         .onAppear { TileClock.shared.start() }
         // Back on home finds it as it was: everything flat again (reset once the hub has covered it).
@@ -105,6 +105,9 @@ private struct HomePanorama: View {
                 let travel = max(1, sec * CGFloat(count - 1))
                 let rate = min(0.6, max(0.2, (titleW + S.margin - pw * 0.8) / travel))
                 ZStack(alignment: .topLeading) {
+                    // WP7's panorama background: the slowest layer, the cover of what's on (or last played) big behind
+                    // everything, moving at half the title's rate.
+                    PanoramaBackground(ref: store.shown?.art, motion: motion, rate: rate * 0.5, travel: travel)
                     PanoramaTitle(text: "rotation", size: T, motion: motion, rate: rate)
                         .padding(.leading, side.leading + S.margin - 6)
                         .offset(y: titleTop)
@@ -194,6 +197,33 @@ private struct PanoramaTitle: View {
             .lineLimit(1).fixedSize()
             .offset(x: -motion.x * rate)
             .accessibilityAddTraits(.isHeader)
+    }
+}
+
+// The panorama's picture: square, as tall as the screen or as wide as the travel needs, darkened, sliding slowest.
+private struct PanoramaBackground: View {
+    let ref: ArtRef?
+    let motion: PagerMotion
+    let rate: CGFloat
+    let travel: CGFloat
+    var body: some View {
+        GeometryReader { g in
+            if let ref {
+                let side = max(g.size.height * 1.02, g.size.width + travel * rate + 40)
+                ZStack {
+                    ArtView(ref, px: 1000, corner: 0).frame(width: side, height: side)
+                    LinearGradient(stops: [.init(color: .black.opacity(0.42), location: 0), .init(color: .black.opacity(0.6), location: 0.4),
+                                           .init(color: .black.opacity(0.82), location: 1)], startPoint: .top, endPoint: .bottom)
+                }
+                .frame(width: side, height: side)
+                .offset(x: -motion.x * rate, y: (g.size.height - side) / 2)
+            } else {
+                Color.black
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
