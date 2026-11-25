@@ -335,7 +335,9 @@ actor ChumbyAPI {
         let (d, resp) = try await URLSession.shared.data(for: r)
         guard let h = resp as? HTTPURLResponse else { throw ChumbyError.message("No answer") }
         // The Mac answered, but says the Chumby itself isn't responding.
-        if h.statusCode == 502 { throw ChumbyError.deviceDown }
+        // 503 is the Mac too, saying the Chumby's queue was jammed for 20 s (a slow or busy Chumby). Counted as no answer,
+        // it switched routes and said "Can't reach the Mac" of a Mac that was answering (11-25).
+        if h.statusCode == 502 || h.statusCode == 503 { throw ChumbyError.deviceDown }
         if h.statusCode == 404 { throw ChumbyError.wrongPlace }
         guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
         return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)

@@ -216,12 +216,15 @@ extension Status.SeedStatus: Equatable {}
 extension Status.Fetch: Equatable {}
 
 enum APIError: LocalizedError {
-    case signInNeeded, message(String), badResponse
+    // notOwner: the Tailscale door's 403. It has no sign-in (the access code is the public link's), and the bridge gave it
+    // for a moment after a restart or a failed `tailscale status` (11-25), so it's a missed answer, never "Sign in".
+    case signInNeeded, message(String), badResponse, notOwner
     var errorDescription: String? {
         switch self {
         case .signInNeeded: return "Sign in to the Mac Pro."
         case .message(let m): return m
         case .badResponse: return "The Mac Pro sent an unexpected reply."
+        case .notOwner: return "The Mac didn’t recognise this iPhone’s Tailscale account."
         }
     }
 }
@@ -301,7 +304,8 @@ struct API {
     func statusData() async throws -> Data {
         let (data, response) = try await session.data(for: request("/api/status"))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 401 || code == 403 { throw APIError.signInNeeded }
+        if code == 401 { throw APIError.signInNeeded }
+        if code == 403 { throw APIError.notOwner }
         guard code == 200 else { throw APIError.badResponse }
         return data
     }

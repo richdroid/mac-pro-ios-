@@ -2799,6 +2799,8 @@ struct SignInView: View {
             dismiss()
         } catch APIError.signInNeeded {
             note = code.isEmpty ? "This address needs its access code." : "The Mac didn’t take that access code."
+        } catch APIError.notOwner {
+            note = "The Mac answered, but didn’t recognise this iPhone’s Tailscale account. Sign in to Tailscale as the Mac’s owner."
         } catch {
             note = "Can’t reach a Mac at this address. Is Tailscale on?"
         }
