@@ -1271,8 +1271,10 @@ struct RemoteTab: View {
     var asleep: Bool { !model.staleStatus && model.status?.screen == "asleep" }
     // The television off, or on another input, while the box is awake: treated as asleep is, with its own one key.
     var away: TVStatus.Away? { model.staleStatus ? nil : model.status?.away }
-    // The Mac answers but the TV doesn't: the keys can't reach it, so they show it.
-    var unreachable: Bool { model.status.map { !$0.online } ?? false }
+    // The Mac answers but the TV doesn't, or the Mac itself has been out of reach past its grace (~25 s, then the lip says
+    // "Reconnecting…"): the keys can't reach it, so they show it, dimmed in their places, the picture dark (11-25 debug:
+    // live keys under "Reconnecting…" each answered "The TV didn't get that").
+    var unreachable: Bool { !model.reachable || (model.status.map { !$0.online } ?? false) }
     // While something plays, where it is and a bar to move it, right under the picture, as on the Playing tab.
     // Hidden, not removed, while a flick's screen moves onto the picture: it carries its own bar, and two showed at once.
     // Its place is kept from the landing on (a start, or a film whose length isn't known yet shows the time it's at), so
@@ -1376,6 +1378,7 @@ struct RemoteTab: View {
                 .contentShape(Circle())
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel("Wake the TV")
+            .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else if let away, !unreachable {
             TelevisionKey(away: away).transition(.opacity.combined(with: .scale(scale: 0.9)))

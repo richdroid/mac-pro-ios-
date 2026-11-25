@@ -34,8 +34,17 @@ final class SpeakerStore {
     private(set) var failed = false
     private(set) var choosing: String?
     private(set) var note: String?
+    // When the bridge was last asked. A 404 (an older bridge, or the public link, which only Tailscale may use) or no
+    // answer at all is asked again on a later visit, a minute on, rather than hiding the key for the whole launch.
+    private var askedAt = Date.distantPast
+    func loadIfDue() async {
+        if available == true || Date().timeIntervalSince(askedAt) > 60 { await load() }
+    }
+    // A note from an earlier choice isn't news the next time the sheet opens.
+    func clearNote() { note = nil }
     func load() async {
         guard let u = TVBridge.url("/api/mac/audio") else { return }
+        askedAt = Date()
         var r = URLRequest(url: u); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (d, resp) = try? await URLSession.shared.data(for: r), let code = (resp as? HTTPURLResponse)?.statusCode else {
             if available == true { failed = true }
@@ -47,10 +56,14 @@ final class SpeakerStore {
         if a != audio { audio = a }
     }
     func choose(_ o: MacAudio.Output) async {
+        // Already the one playing: nothing to ask the Mac.
+        if o.current == true { Haptic.fire(.tick); return }
         guard choosing == nil, let u = TVBridge.url("/api/mac/audio/select"), let base = URL(string: TVBridge.address) else { return }
         choosing = o.id; note = nil
         Haptic.fire(.tap)
-        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 20
+        // Connecting a Bluetooth pair can take the Mac up to ~27 s (12 s to connect, up to 10 s for it to appear, then the
+        // switch), so the phone waits longer than that before calling it a failure.
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 35
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try? JSONSerialization.data(withJSONObject: ["id": o.id])
@@ -79,7 +92,7 @@ struct SpeakerKey: View {
                 .sheet(isPresented: $open) { SpeakerSheet().presentationDetents([.medium, .large]) }
             }
         }
-        .task { if store.available == nil { await store.load() } }
+        .task { await store.loadIfDue() }
     }
 }
 
@@ -112,7 +125,7 @@ struct SpeakerSheet: View {
                         }
                     } footer: {
                         if let n = store.note { Text(n) }
-                        else if let p = a.airplay, p.playing == true, let t = p.title { Text("Playing over AirPlay: " + ([t] + [p.artist].compactMap { $0 }).joined(separator: " · ")) }
+                        else if let p = a.airplay, p.playing == true, let t = p.title, !t.isEmpty { Text("Playing over AirPlay: " + ([t] + [p.artist].compactMap { $0 }.filter { !$0.isEmpty }).joined(separator: " · ")) }
                     }
                 } else if store.failed {
                     ContentUnavailableView { Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark") } actions: {
@@ -128,6 +141,7 @@ struct SpeakerSheet: View {
             .refreshable { await store.load() }
         }
         .task {
+            store.clearNote()
             await store.load()
             // A Bluetooth device coming or going shows while the sheet is up.
             while !Task.isCancelled { try? await Task.sleep(nanoseconds: 4_000_000_000); if store.choosing == nil { await store.load() } }

@@ -129,10 +129,13 @@ final class NextUp: ObservableObject {
         if let t = asking[imdb] { return await t.value }
         let t = Task { () -> StremioMeta? in
             guard let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=series&id=\(imdb)"), timeout: 15) else { return nil }
-            return await Task.detached(priority: .userInitiated) { () -> StremioMeta? in
+            let m = await Task.detached(priority: .userInitiated) { () -> StremioMeta? in
                 guard let m = try? JSONDecoder().decode(StremioMeta.self, from: d), !m.episodes.isEmpty else { return nil }
                 return m
             }.value
+            // The Mac answered with no episodes: said apart from no answer at all (the show's page, 11-25).
+            if m == nil { answeredEmpty.insert(imdb) } else { answeredEmpty.remove(imdb) }
+            return m
         }
         asking[imdb] = t
         let m = await t.value
@@ -141,6 +144,8 @@ final class NextUp: ObservableObject {
         return m
     }
     private static var asking: [String: Task<StremioMeta?, Never>] = [:]
+    // Shows the Mac answered for with no episodes at all, at the last ask.
+    private(set) static var answeredEmpty: Set<String> = []
     static func cached(_ imdb: String) -> StremioMeta? { metas[imdb] }
     // A show's Continue watching tile on screen: its episodes asked for now, so the show's page (and the Remote's and
     // Playing's lists, if it's put on) find them waiting rather than grey for a few seconds (review of dfd490e, speed 4).
