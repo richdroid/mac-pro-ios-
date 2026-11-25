@@ -89,7 +89,7 @@ struct StreakCard: View {
         let peak = max(days.max() ?? 1, 1)
         VStack(alignment: .leading, spacing: S.inner) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: "flame.fill").font(.zune(.title2)).foregroundStyle(LinearGradient(colors: [.yellow, .orange, S.accent], startPoint: .top, endPoint: .bottom))
+                Image(systemName: "flame.fill").font(.zune(.title2)).foregroundStyle(S.accent)
                     .symbolEffect(.bounce, value: i.streak)
                 Group { if let n = i.streak { Counting(n, key: "streak") { "\($0)" } } else { Text("–") } }
                     .font(.zune(size: 44, .light)).monospacedDigit().foregroundStyle(.white)

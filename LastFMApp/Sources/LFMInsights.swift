@@ -185,7 +185,7 @@ struct ErasSection: View {
                     if chapters.count > 5 {
                         Button { withAnimation(.smooth) { all.toggle() } } label: {
                             Text(all ? "Show fewer" : "Show all \(chapters.count)").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
-                                .frame(maxWidth: .infinity).frame(height: 44).glassEffect(.regular, in: Capsule())
+                                .frame(maxWidth: .infinity).frame(height: 44).wpButton()
                         }
                         .buttonStyle(Press())
                     }

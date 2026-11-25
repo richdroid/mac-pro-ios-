@@ -111,7 +111,7 @@ enum DiscoverParts {
                     Button("Try again") { m.appear() }
                         .font(.zune(.body, .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 18).frame(minHeight: 44)
-                        .glassEffect(.regular.interactive(), in: Capsule())
+                        .wpButton()
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, S.section).padding(.horizontal, S.inner)
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: S.square, style: .continuous))

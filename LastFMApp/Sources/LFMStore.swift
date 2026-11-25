@@ -115,7 +115,7 @@ struct Profile: Sendable, Equatable {
         if let k = Insights.kept() { insights = k }
         if let k = Deep.kept() { deep = k }
         // The hero's cover and backdrop from the disk before the first frame, so it opens on the picture, not its stand-in.
-        if let h = hero { ArtStore.shared.warm(h.art) }
+        if let h = hero { ArtStore.shared.warm(h.art, backdrop: false) }
         // His picture at the size his page draws it.
         if let p = profile { ArtStore.shared.warm(ArtRef(artist: p.name, album: "avatar", url: p.image), px: [240], backdrop: false) }
         shown = hero
@@ -226,8 +226,7 @@ struct Profile: Sendable, Equatable {
         Task {
             async let big = ArtStore.shared.image(ref, px: 1000)
             async let small = ArtStore.shared.image(ref, px: 156)
-            async let ground = ArtStore.shared.backdrop(ref)
-            _ = await (big, small, ground)
+            _ = await (big, small)
             guard preparing == h.id, let cur = hero, cur.art.key == ref.key else { return }
             preparing = nil
             withAnimation(.easeInOut(duration: 0.5)) { shown = cur }

@@ -431,7 +431,7 @@ struct DaySection: View {
             Text(Self.hourLabel(hour)).font(.zune(.subheadline, .medium)).monospacedDigit().foregroundStyle(S.soft)
         }
         .padding(10)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .wpButton()
         .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 }

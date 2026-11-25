@@ -12,7 +12,9 @@ import AppKit
 // round it; square covers with tight gaps. Glass is kept for what iOS 26 puts in it and what he touches.
 enum S {
     // Spacing: one system, and nothing else anywhere (Richard, 2026-11-13: "spacing is bad rn").
-    static let margin: CGFloat = 20      // a page's side inset
+    // WP7's grid (lastfm.md §27.1, Richard 2026-11-25 "make this work as a zune windows phone app"): content hung 24
+    // from the left (12 + 12); folded, the outer display is about WP7's 480 px across, so a WP7 pixel is about a point.
+    static let margin: CGFloat = 24      // a page's side inset
     static let section: CGFloat = 36     // between sections
     static let head: CGFloat = 12        // a section head (or a hub title) to its content
     static let gap: CGFloat = 12         // between rows, tiles, chips and cards side by side
@@ -23,9 +25,10 @@ enum S {
     static let corner: CGFloat = 22      // cards
     static let art: CGFloat = 52         // a row's cover
     static let tile: CGFloat = 136       // a panorama's cover
-    static let square: CGFloat = 3       // a cover's corner: square, as Zune's are
+    static let square: CGFloat = 0       // a cover's corner: square, as Zune's and WP7's are
     static let mosaic: CGFloat = 4       // between the covers of a mosaic
-    static let ground = Color(red: 0.035, green: 0.035, blue: 0.045)
+    // WP7's dark theme: the ground is flat black, nothing behind it (Richard, 2026-11-25: "nor do the colors and blur").
+    static let ground = Color.black
     static let soft = Color.white.opacity(0.66)   // second lines (an artist under a title), never a footnote
     // Zune's magenta (the gradient's start, Z.accent): love, the streak, the history bars. Marks only.
     static let accent = Color(red: 0.85, green: 0.0, blue: 0.45)
@@ -190,59 +193,13 @@ func dayName(_ d: Date) -> String {
 // played and moved the ground on every fourth frame of a scroll (run 39 review, fault 8). A new cover crossfades over
 // the old one, which stays under it until the new one is in: never black between (fault 2).
 struct Backdrop: View {
+    // WP7's dark theme (Richard, 2026-11-25: "nor do the colors and blur"): the ground is flat black on every page. The
+    // blurred cover that was here is gone; covers are content (tiles, the now-playing wall), never a smear behind it.
     let ref: ArtRef?
     var moving: Bool = false
     var dim: Double = 0
-    @State private var image: CGImage?
-    @State private var under: CGImage?
-    @State private var turn = 0
-    init(ref: ArtRef?, moving: Bool = false, dim: Double = 0) {
-        self.ref = ref; self.moving = moving; self.dim = dim
-        _image = State(initialValue: ref.flatMap { ArtStore.shared.cachedBackdrop($0) })
-    }
     var body: some View {
-        ZStack {
-            S.ground
-            GeometryReader { g in
-                let side = max(g.size.width, g.size.height) * 1.5
-                ZStack {
-                    if under == nil, image == nil, let ref { stand(ref) }
-                    if let under { Image(decorative: under, scale: 1).resizable().interpolation(.high) }
-                    if let image { Image(decorative: image, scale: 1).resizable().interpolation(.high).id(turn).transition(.opacity) }
-                }
-                .frame(width: side, height: side)
-                .rotationEffect(.degrees(-3))
-                .scaleEffect(1.06)
-                .position(x: g.size.width / 2, y: g.size.height * 0.36)
-                .opacity(0.62)
-            }
-            LinearGradient(stops: [.init(color: .black.opacity(0.05 + dim), location: 0), .init(color: .black.opacity(0.45 + dim), location: 0.55), .init(color: .black.opacity(0.82), location: 1)],
-                           startPoint: .top, endPoint: .bottom)
-        }
-        .ignoresSafeArea()
-        .accessibilityHidden(true)
-        .allowsHitTesting(false)
-        .task(id: ref?.key) {
-            guard let ref else { return }
-            let had = image
-            if let c = ArtStore.shared.cachedBackdrop(ref) {
-                if c !== had { swap(to: c, from: had) }
-                return
-            }
-            if let b = await ArtStore.shared.backdrop(ref) { swap(to: b, from: had) }
-        }
-    }
-    private func swap(to new: CGImage, from old: CGImage?) {
-        under = old
-        turn += 1
-        withAnimation(.easeInOut(duration: 0.5)) { image = new } completion: { under = nil }
-    }
-    // Before any cover has been blurred: its colours, capped as dark as the blurred cover is, so white reads on it too.
-    private func stand(_ ref: ArtRef) -> some View {
-        let p = Palette.from(name: ref.artist + ref.album)
-        let l = 0.2126 * p.vivid.r + 0.7152 * p.vivid.g + 0.0722 * p.vivid.b
-        let k = l > ArtStore.backdropLuma ? ArtStore.backdropLuma / l : 1
-        return LinearGradient(colors: [p.vivid.scaled(k).color, p.deep.scaled(min(1, k * 1.5)).color], startPoint: .topLeading, endPoint: .bottomTrailing)
+        Color.black.ignoresSafeArea().accessibilityHidden(true).allowsHitTesting(false)
     }
 }
 
@@ -250,15 +207,13 @@ struct Backdrop: View {
 // content there, not a mask (two full-page masks were an off-screen pass each, every frame; run 39 review, fault 8).
 // At the foot the system's own glass tab bar floats over the page, as in every iOS 26 app.
 struct BarFade: ViewModifier {
+    // WP7's system tray is solid: what scrolls up passes under a flat black band as tall as the bars, no fade or blur.
     func body(content: Content) -> some View {
-        content.overlay {
+        content.overlay(alignment: .top) {
             GeometryReader { g in
-                // From the very top of the screen, wherever this page begins (under the bars or below them).
                 let top = max(g.safeAreaInsets.top, g.frame(in: .global).minY)
                 if top > 30 {
-                    LinearGradient(stops: [.init(color: S.ground.opacity(0.7), location: 0), .init(color: S.ground.opacity(0.45), location: 0.55), .init(color: S.ground.opacity(0), location: 1)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: top + 10).offset(y: -g.frame(in: .global).minY)
+                    Color.black.frame(height: TopBar.across()?.maxY ?? top).offset(y: -g.frame(in: .global).minY)
                 }
             }
             .allowsHitTesting(false)

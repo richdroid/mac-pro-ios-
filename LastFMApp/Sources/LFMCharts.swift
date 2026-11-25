@@ -346,7 +346,7 @@ struct ChartsTab: View {
             }
             .font(.zune(.subheadline, .semibold)).foregroundStyle(.white).lineLimit(1).fixedSize()
             .frame(height: 44)
-            .glassEffect(.regular, in: Capsule())
+            .wpButton()
         }
         .buttonStyle(Press())
         .accessibilityLabel("Any week")
@@ -450,7 +450,7 @@ struct ChartsTab: View {
                     Button { withAnimation(.smooth) { all.toggle() } } label: {
                         Text(all ? "Show the top 10" : "Show all \(entries.count)").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 44)
-                            .glassEffect(.regular, in: Capsule())
+                            .wpButton()
                     }
                     .buttonStyle(Press())
                     .padding(.top, S.pair)
@@ -471,13 +471,13 @@ private struct CollageShare: View {
             ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
                 Label("Share", systemImage: "square.and.arrow.up").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(height: 44)
-                    .glassEffect(.regular.interactive(), in: Capsule())
+                    .wpButton()
             }
             .buttonStyle(Press())
         } else {
             Label("Share", systemImage: "square.and.arrow.up").font(.zune(.subheadline, .semibold))
                 .padding(.horizontal, 16).frame(height: 44).foregroundStyle(S.soft)
-                .glassEffect(.regular, in: Capsule())
+                .wpButton()
                 .accessibilityLabel("Share, getting the picture ready")
         }
     }

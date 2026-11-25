@@ -390,6 +390,9 @@ struct Page<C: View>: View {
             // the content padded clear of them, and the bleed said, so a strip reaches the screen's edge. Inside the safe
             // area the scroll clipped it at an invisible line short of the rail (run 49 gate: comebacks on Discover).
             let side = (leading: g.safeAreaInsets.leading, trailing: g.safeAreaInsets.trailing)
+            // WP7's top: the page starts at the top margin, or right under Back's row when the bar runs across the top;
+            // never a bar's height lower (Richard, 2026-11-25). The page's own small capitals sit S.head into it.
+            let first: CGFloat = TopBar.across().map { $0.maxY - 4 } ?? (TopBar.caps(top: g.safeAreaInsets.top, height: 0, pushed: true).y - S.head)
             ScrollViewReader { proxy in
                 ScrollView {
                     Color.clear.frame(height: 0).id("top")
@@ -398,7 +401,8 @@ struct Page<C: View>: View {
                         .padding(.leading, side.leading)
                         .padding(.trailing, side.trailing)
                 }
-                .ignoresSafeArea(.container, edges: .horizontal)
+                .contentMargins(.top, max(0, first), for: .scrollContent)
+                .ignoresSafeArea(.container, edges: [.horizontal, .top])
                 .scrollIndicators(.hidden)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
                 .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }

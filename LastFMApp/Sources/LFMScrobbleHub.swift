@@ -127,7 +127,7 @@ private struct ConnectBlock: View {
                     .padding(.horizontal, 20).frame(minHeight: 44)
             }
             .buttonStyle(Tilt())
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .wpButton()
             if let p = account.problem { Text(p).font(.zune(.subheadline)).foregroundStyle(Z.subtle) }
         }
         .padding(.horizontal, S.margin)
@@ -164,7 +164,9 @@ struct ScrobbleSettingsPage: View {
                 row(title: "Apple Music", value: libraryLine) {
                     if account.signedIn, !libraryOK {
                         if Scrobbler.shared.library == .denied || Scrobbler.shared.library == .restricted {
+                            #if canImport(UIKit)
                             Button("Settings") { if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) } }
+                            #endif
                         } else { Button("Allow") { Scrobbler.shared.askLibrary() } }
                     }
                 }
@@ -212,7 +214,7 @@ struct ScrobbleSettingsPage: View {
             button()
                 .font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                 .padding(.horizontal, 16).frame(minHeight: 44)
-                .glassEffect(.regular.interactive(), in: Capsule())
+                .wpButton()
         }
         .padding(.vertical, 4)
     }

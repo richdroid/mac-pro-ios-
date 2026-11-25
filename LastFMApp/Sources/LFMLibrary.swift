@@ -209,7 +209,7 @@ struct LibraryTab: View {
             }
         }
         .padding(.leading, 16).frame(height: 48)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .wpButton()
     }
 
     // One shelf, sorted as chosen, with how many there are and the sort beside it.
@@ -230,7 +230,7 @@ struct LibraryTab: View {
                 } label: {
                     Label(m.sort.rawValue, systemImage: "arrow.up.arrow.down").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 14).frame(height: 36)
-                        .glassEffect(.regular, in: Capsule())
+                        .wpButton()
                 }
             }
         }
@@ -308,7 +308,7 @@ struct LibraryTab: View {
                     Button { withAnimation(.smooth) { if open { grown.remove(k) } else { grown.insert(k) } } } label: {
                         Text(open ? "Show fewer" : "Show all \(number(min(list.count, 200)))").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 44)
-                            .glassEffect(.regular, in: Capsule())
+                            .wpButton()
                     }
                     .buttonStyle(Press())
                 }

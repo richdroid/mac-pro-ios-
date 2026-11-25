@@ -117,6 +117,9 @@ jobs:
             # Last.fm gone: every call fails and nothing kept is used; -mockDown also dates the failures 30 s back, so
             # the note is up from the first failed call.
             shot down$x $d 20 -tab 0 -mockDown YES
+            shot home-menu$x $d 10 -hub home -section 1
+            shot home-played$x $d 10 -hub home -section 2
+            shot profile-wrap$x $d 10 -hub profile -panel 2
             shot now-down$x $d 20 -tab 0 -panel 1 -mockDown YES
             shot discover-down$x $d 25 -tab 3 -mockDown YES
           }
@@ -230,9 +233,15 @@ jobs:
           STEPS="shot:12 shot:12" film live 1 30 -tab 0 -panel 1 -mockAdvance 11
           # The Zune pass (11-24): home's menu turnstiles out and the hub turns in; Back by its button, then by a slow drag
           # from the edge; now playing's pivot swiped through; Back by the edge from a pivot hub (never the pivot turning).
-          STEPS="shot:4 tap=0.3,0.52:2 shot:1 shot:2 tap=0.895,0.29:2 shot:1 shot:2" film home-tap 1 18 -hub home
-          STEPS="tap=0.3,0.62:6 shot:2 edgeslow:1 shot:1 shot:3" film home-swipe 1 18 -hub home
-          STEPS="tap=0.3,0.18:6 shot:2 tap=0.895,0.29:2 shot:2" film home-now 1 16 -hub home
+          # The WP7 pass (11-25): home is a panorama of live tiles. A square tile tapped (everything turnstiles out, the
+          # hub turns in), Back; the now-playing tile; the panorama swiped through its four sections and back; the tiles
+          # left to turn on their own for 16 s; a pivot swiped round past its last page to its first (WP7's wrap).
+          STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2 tap=0.895,0.29:2 shot:1 shot:2" film home-tap 1 18 -hub home
+          STEPS="tap=0.25,0.70:6 shot:2 edgeslow:1 shot:1 shot:3" film home-swipe 1 18 -hub home
+          STEPS="tap=0.3,0.45:6 shot:2 tap=0.895,0.29:2 shot:2" film home-now 1 16 -hub home
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film home-pan 1 26 -hub home
+          STEPS="shot:8 shot:8" film home-tiles 1 22 -hub home
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap 1 22 -hub profile
           Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-now 1 26 -hub nowPlaying
           Y=0.6 STEPS="side:6 shot:2 edgeslow:2 shot:1 shot:3" film edge-back-pivot 1 18 -hub discover
           # The films the run 39 review found missing. Opened a second time: whole in its first frame, nothing arriving.

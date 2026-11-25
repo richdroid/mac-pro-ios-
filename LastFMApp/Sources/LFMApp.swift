@@ -156,7 +156,6 @@ struct HubView: View {
             }
         }
         .environment(\.hubName, hub == .nowPlaying ? nil : hub.word)
-        .modifier(BarFade())
         .background { Backdrop(ref: Store.shared.shown?.art) }
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)

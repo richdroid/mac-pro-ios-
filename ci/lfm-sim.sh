@@ -39,7 +39,7 @@ flat() { $D "$DEVICE" pose open || true; sleep 6; orient landscape 3; sleep 4; }
 # 250 KB is taken again, up to three times, and named in the log if it never fills.
 shot() {
   local name=$1 display=$2 wait=$3; shift 3
-  xcrun simctl launch "$DEVICE" $APP -launchLog YES "$@"
+  xcrun simctl launch "$DEVICE" $APP -launchLog YES -tilesStill YES "$@"
   # TURN=landscape: turned with the app in front. The Home Screen never turns, so turning before the launch checked a
   # display that stayed upright and gave up (run 20: every -fland shot was upright).
   if [ -n "${TURN:-}" ]; then sleep 3; orient $TURN $display; fi
