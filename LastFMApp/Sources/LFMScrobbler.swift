@@ -247,7 +247,7 @@ struct PendingScrobble: Codable, Hashable {
         if let d = try? Data(contentsOf: logFile), let l = try? JSONDecoder().decode([ScrobbleNote].self, from: d) { log = l }
         if let d = try? Data(contentsOf: queueFile), let q = try? JSONDecoder().decode([PendingScrobble].self, from: d) { queue = q }
         lastCatchUp = UserDefaults.standard.object(forKey: "scrobble.caught") as? Date
-        if LastFM.shared.mock, LFMAccount.mockState != nil, log.isEmpty || UserDefaults.standard.bool(forKey: "fresh") { log = Self.mockLog() }
+        if LastFM.shared.mock, case .signedIn = LFMAccount.mockState { log = Self.mockLog() }
     }
 
     var ready: Bool { enabled && LFMAccount.shared.signedIn && !LastFM.shared.mock }
@@ -338,6 +338,8 @@ struct PendingScrobble: Codable, Hashable {
 
     private func itemChanged() {
         guard let p = player else { return }
+        // The same song announced again without starting over (a resume, a route change): nothing ends.
+        if let l = live, let it = p.nowPlayingItem, it.persistentID == l.item, p.currentPlaybackTime + 2 >= l.position { stateChanged(); return }
         // The song that was on ends here: it was sent already if it counted.
         if let l = live, !l.sent {
             if l.counts { enqueue(l, how: "live"); Task { await flush() } }
@@ -442,8 +444,8 @@ struct PendingScrobble: Codable, Hashable {
         let floor = Date().addingTimeInterval(-14 * 86400 + 600)
         var found: [PendingScrobble] = []
         for it in items {
-            let was = before[it.id] ?? 0
-            let new = it.plays - was
+            // A song not seen at the last look (new to the library) counts as one play, never its whole count.
+            let new = before[it.id].map { it.plays - $0 } ?? 1
             guard new > 0, let last = it.last, last > floor else { continue }
             let len = it.duration > 30 ? it.duration : 210
             for k in 0..<min(new, 20) {
@@ -456,8 +458,8 @@ struct PendingScrobble: Codable, Hashable {
         // Not twice what the live watch already queued or sent.
         let sent = log.filter { $0.kind == .scrobbled || $0.kind == .duplicate }
         found = found.filter { f in
-            !queue.contains { $0.item == f.item && abs($0.started - f.started) < max(f.duration ?? 240, 240) } &&
-            !sent.contains { $0.artist.lowercased() == f.artist.lowercased() && $0.title.lowercased() == f.title.lowercased() && abs(Int($0.played) - f.started) < max(f.duration ?? 240, 240) }
+            !queue.contains { $0.item == f.item && abs($0.started - f.started) < Self.window(f.duration) } &&
+            !sent.contains { $0.artist.lowercased() == f.artist.lowercased() && $0.title.lowercased() == f.title.lowercased() && abs(Int($0.played) - f.started) < Self.window(f.duration) }
         }
         // Plays can't overlap: sorted newest first, each one moved to end before the next one began.
         found.sort { $0.started > $1.started }
@@ -494,7 +496,7 @@ struct PendingScrobble: Codable, Hashable {
         }
         var send: [PendingScrobble] = []
         for p in batch {
-            let window = max(p.duration ?? 240, 120)
+            let window = Self.window(p.duration)
             if there.contains(where: { $0.0 == Self.norm(p.artist) && $0.1 == Self.norm(p.title) && abs($0.2 - p.started) < window }) {
                 note(ScrobbleNote(at: Date().timeIntervalSince1970, played: Double(p.started), artist: p.artist, title: p.title, album: p.album, kind: .duplicate, how: p.how, detail: "Already on Last.fm"))
             } else { send.append(p) }
@@ -538,6 +540,10 @@ struct PendingScrobble: Codable, Hashable {
         }
         if !queue.isEmpty, !done.isEmpty { await flush() }
     }
+
+    // Two plays of one song closer than this are one play: half its length, at least 90 s. A live scrobble and the
+    // library's later count of the same play land seconds apart; the same song played twice in a row lands a length apart.
+    nonisolated static func window(_ duration: Int?) -> Int { max((duration ?? 210) / 2, 90) }
 
     nonisolated static func norm(_ s: String) -> String {
         s.lowercased().folding(options: [.diacriticInsensitive], locale: nil).replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .whitespaces)
