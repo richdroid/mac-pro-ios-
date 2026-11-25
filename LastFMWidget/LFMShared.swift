@@ -164,24 +164,31 @@ struct PlayingFacts: Codable, Equatable {
 // the bundle on first use, so no target needs a plist entry. Weights onto Zune's four: Light, Semilight, Regular, Semibold.
 enum Z {
     static let registered: Bool = {
-        for n in ["Selawik-Light", "Selawik-Semilight", "Selawik-Regular", "Selawik-Semibold", "Selawik-Bold"] {
-            if let u = Bundle.main.url(forResource: n, withExtension: "ttf") { CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil) }
+        // Every face in the bundle: Selawik (in the repo), and on his phone Zune's own (SegoeZ and its all-caps and
+        // all-lowercase cuts, from the Zune 4.8 installer) and Segoe UI, put in at signing by preset-ipa.sh, never in the
+        // repo or CI. Already listed in UIAppFonts there, which makes this a no-op for them.
+        for ext in ["ttf", "otf"] {
+            for u in Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: nil) ?? [] { CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil) }
         }
-        // Segoe, the original (Richard, 2026-11-25: "omfg this font is horrific use the og font"): Microsoft's, so never in
-        // the repo or CI; preset-ipa.sh puts his own copy in the app and the widget at signing (also in UIAppFonts, so this
-        // registration may simply find it there already).
-        if let u = Bundle.main.url(forResource: "segoeui", withExtension: "ttf") { CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil) }
         return true
     }()
-    // Segoe UI when it's in the bundle (his phone); Selawik, its metric twin, in CI and the gallery. Only Segoe UI's
-    // Regular is to hand, so every weight is that one face: the hierarchy is size alone, as Zune's light faces can't be
-    // had (no faked light weight by fading).
-    static let segoe: Bool = {
-        _ = registered
-        return (CTFontCopyPostScriptName(CTFontCreateWithName("SegoeUI" as CFString, 12, nil)) as String) == "SegoeUI"
-    }()
+    private static func has(_ n: String) -> Bool { (CTFontCopyPostScriptName(CTFontCreateWithName(n as CFString, 12, nil)) as String) == n }
+    // Zune's own type (Richard, 2026-11-25: "use the og font"): SegoeZ when it's in the bundle; else Segoe UI (Regular
+    // only); else Selawik, its open metric twin, in CI and the gallery.
+    static let zuneFaces: Bool = { _ = registered; return has("SegoeZ") && has("SegoeZLC-Light") }()
+    static let segoe: Bool = { _ = registered; return has("SegoeUI") }()
+    private static func cut(_ base: String, _ w: Font.Weight) -> String {
+        switch w {
+        case .ultraLight, .thin, .light: return base + "-Light"
+        case .regular, .medium: return base
+        case .semibold: return base + "-SemiBold"
+        default: return base + "-Bold"
+        }
+    }
+    // Body, labels and figures: SegoeZ (Light for the big figures, Regular, SemiBold, Bold).
     static func name(_ w: Font.Weight) -> String {
         _ = registered
+        if zuneFaces { return cut("SegoeZ", w) }
         if segoe { return "SegoeUI" }
         switch w {
         case .ultraLight, .thin, .light: return "Selawik-Light"
@@ -191,6 +198,10 @@ enum Z {
         default: return "Selawik-Bold"
         }
     }
+    // Zune's all-lowercase cut, for the huge lowercase words (pivot and panorama headers, the menu, page titles).
+    static func lower(_ w: Font.Weight = .light) -> String { zuneFaces ? cut("SegoeZLC", w) : name(w) }
+    // Zune's all-caps cut, for the small capitals (the application title, labels).
+    static func caps(_ w: Font.Weight = .regular) -> String { zuneFaces ? cut("SegoeZUC", w) : name(w) }
     static func size(_ s: Font.TextStyle) -> CGFloat {
         switch s {
         case .largeTitle: return 34
@@ -209,6 +220,11 @@ enum Z {
 }
 
 extension Font {
+    // Huge lowercase words in Zune's lowercase cut; small capitals in its caps cut (both SegoeZ elsewhere).
+    static func zuneLower(size: CGFloat, _ weight: Font.Weight = .light) -> Font { .custom(Z.lower(weight), fixedSize: size) }
+    static func zuneLower(_ style: Font.TextStyle, _ weight: Font.Weight = .light) -> Font { .custom(Z.lower(weight), size: Z.size(style), relativeTo: style) }
+    static func zuneCaps(size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .custom(Z.caps(weight), fixedSize: size) }
+    static func zuneCaps(_ style: Font.TextStyle, _ weight: Font.Weight = .regular) -> Font { .custom(Z.caps(weight), size: Z.size(style), relativeTo: style) }
     static func zune(_ style: Font.TextStyle, _ weight: Font.Weight = .regular) -> Font {
         .custom(Z.name(weight), size: Z.size(style), relativeTo: style)
     }

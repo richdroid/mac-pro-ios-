@@ -141,7 +141,7 @@ struct NowStrip: View {
                                 Text("Played \(when(s.date))")
                             }
                         }
-                        .font(.zune(.caption, .bold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                        .font(.zuneCaps(.caption, .bold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                         Text(s.title).font(.zune(.title3, .semibold)).foregroundStyle(.white).lineLimit(1)
                         Text(s.artist).font(.zune(.subheadline)).foregroundStyle(S.soft).lineLimit(1)
                     }

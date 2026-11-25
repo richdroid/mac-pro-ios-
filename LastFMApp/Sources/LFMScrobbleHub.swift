@@ -19,7 +19,7 @@ struct ScrobbleHub: View {
 private struct WaitingNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: S.head) {
-            Text("waiting").font(.zune(size: 54, .light)).tracking(-1).foregroundStyle(.white)
+            Text("waiting").font(.zuneLower(size: 54)).tracking(-1).foregroundStyle(.white)
             Text("Scrobbling arrives with the next build of Rotation. Until then nothing is sent, and your Last.fm is unchanged.")
                 .font(.zune(.body)).foregroundStyle(Z.subtle).fixedSize(horizontal: false, vertical: true)
         }
@@ -66,7 +66,7 @@ private struct LiveSong: View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let p = l.progress, need = l.threshold
             VStack(alignment: .leading, spacing: S.pair + 2) {
-                Text("listening").font(.zune(.caption, .semibold)).textCase(.uppercase).tracking(1).foregroundStyle(.white.opacity(0.85))
+                Text("listening").font(.zuneCaps(.caption, .semibold)).textCase(.uppercase).tracking(1).foregroundStyle(.white.opacity(0.85))
                 Text(l.title).font(.zune(.title3, .semibold)).foregroundStyle(.white).lineLimit(1)
                 Text(l.artist).font(.zune(.body)).foregroundStyle(Z.subtle).lineLimit(1)
                 GeometryReader { g in
@@ -105,10 +105,10 @@ private struct LogRow: View {
         switch n.kind {
         case .scrobbled: Image(systemName: "checkmark").font(.zune(.subheadline, .semibold)).foregroundStyle(Z.accent).accessibilityLabel("Scrobbled")
         case .nowPlaying: Image(systemName: "waveform").font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.8)).accessibilityLabel("Sent as now playing")
-        case .duplicate: Text("already there").font(.zune(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
-        case .tooShort: Text("skipped").font(.zune(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
-        case .ignored, .failed: Text("not taken").font(.zune(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
-        case .queued: Text("waiting").font(.zune(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
+        case .duplicate: Text("already there").font(.zuneCaps(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
+        case .tooShort: Text("skipped").font(.zuneCaps(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
+        case .ignored, .failed: Text("not taken").font(.zuneCaps(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
+        case .queued: Text("waiting").font(.zuneCaps(.caption, .semibold)).textCase(.uppercase).foregroundStyle(Z.subtle)
         }
     }
 }
@@ -118,7 +118,7 @@ private struct ConnectBlock: View {
     private var account: LFMAccount { LFMAccount.shared }
     var body: some View {
         VStack(alignment: .leading, spacing: S.inner) {
-            Text("connect").font(.zune(size: 54, .light)).tracking(-1).foregroundStyle(.white)
+            Text("connect").font(.zuneLower(size: 54)).tracking(-1).foregroundStyle(.white)
             Text("Rotation can scrobble what you play in Apple Music, as Marvis does: live while it's open, and caught up from your library's play counts when it comes back or refreshes in the background.")
                 .font(.zune(.body)).foregroundStyle(Z.subtle).fixedSize(horizontal: false, vertical: true)
             Button { account.connect() } label: {

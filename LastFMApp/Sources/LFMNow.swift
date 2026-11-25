@@ -274,7 +274,7 @@ struct NowHero: View {
                 }
             }
             // Zune's label: small bold capitals. Then the song large and light, the artist under it in weight.
-            .font(.zune(.caption, .bold)).textCase(.uppercase).tracking(0.8)
+            .font(.zuneCaps(.caption, .bold)).textCase(.uppercase).tracking(0.8)
             .foregroundStyle(.white.opacity(0.85))
             .padding(.bottom, S.pair)
             }

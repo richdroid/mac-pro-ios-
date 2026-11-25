@@ -80,7 +80,7 @@ struct MoveMark: View {
 // New to a chart or to him: small bold capitals in white, as Zune marks a thing (never a solid white block).
 struct NewMark: View {
     var body: some View {
-        Text("New").textCase(.uppercase).font(.zune(.caption2, .heavy)).tracking(0.8).foregroundStyle(.white).fixedSize()
+        Text("New").textCase(.uppercase).font(.zuneCaps(.caption2, .heavy)).tracking(0.8).foregroundStyle(.white).fixedSize()
             .accessibilityLabel("New")
     }
 }
@@ -233,7 +233,7 @@ struct Segments<T: Hashable>: View {
             ForEach(items, id: \.self) { t in
                 let on = t == selection
                 Button { withAnimation(.snappy(duration: 0.25)) { selection = t } } label: {
-                    Text(label(t).lowercased()).font(.zune(.title2, .light))
+                    Text(label(t).lowercased()).font(.zuneLower(.title2))
                         .foregroundStyle(.white.opacity(on ? 1 : 0.4))
                         .lineLimit(1).fixedSize()
                         .frame(minHeight: 44)

@@ -101,7 +101,7 @@ private struct HomePanorama: View {
                 let titleTop = across.map { $0.maxY - T * 0.22 } ?? max(0, insets.top - 10) - T * 0.18
                 let titleH = ceil(T * 1.2)
                 let sectionsTop = titleTop + titleH - T * 0.08
-                let titleW = textWidth("rotation", size: T, tracking: -3, weight: -0.4)
+                let titleW = textWidth("rotation", size: T, tracking: -3, weight: -0.4, face: Z.lower())
                 let travel = max(1, sec * CGFloat(count - 1))
                 let rate = min(0.6, max(0.2, (titleW + S.margin - pw * 0.8) / travel))
                 ZStack(alignment: .topLeading) {
@@ -161,7 +161,7 @@ private struct HomePanorama: View {
     // own under the name.
     private func section<C: View>(_ name: String, key: String, _ i: Int, _ w: CGFloat, _ h: CGFloat, _ side: (leading: CGFloat, trailing: CGFloat), @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: S.gap) {
-            Text(name).font(.zune(size: 40, .light)).tracking(-0.8).foregroundStyle(.white)
+            Text(name).font(.zuneLower(size: 40)).tracking(-0.8).foregroundStyle(.white)
                 .lineLimit(1).fixedSize()
                 .padding(.leading, S.margin - 2)
                 .modifier(TurnstileOut(index: Home.order(key), count: Home.count, chosen: chosen.map(Home.order)))
@@ -189,7 +189,7 @@ private struct PanoramaTitle: View {
     let rate: CGFloat
     var body: some View {
         Text(text)
-            .font(.zune(size: size, .light)).tracking(-3)
+            .font(.zuneLower(size: size)).tracking(-3)
             .foregroundStyle(.white)
             .lineLimit(1).fixedSize()
             .offset(x: -motion.x * rate)
@@ -244,7 +244,7 @@ private struct TileWords: View {
     var small: String? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let small { Text(small).font(.zune(size: 14, .semibold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.85)).lineLimit(1) }
+            if let small { Text(small).font(.zuneCaps(size: 14, .semibold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.85)).lineLimit(1) }
             Text(big).font(.zune(size: 40, .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.5)
             Text(line).font(.zune(size: 16, .regular)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.8)
         }
@@ -443,7 +443,7 @@ struct MenuWords: View {
             ForEach(Hub.menu, id: \.self) { h in
                 Button { go("w-" + h.rawValue, h, nil) } label: {
                     Text(h.word)
-                        .font(.zune(size: size, .light)).tracking(-1.2)
+                        .font(.zuneLower(size: size)).tracking(-1.2)
                         .foregroundStyle(.white)
                         .lineLimit(1).fixedSize()
                         .padding(.leading, -3)
@@ -471,7 +471,7 @@ struct AlbumTiles: View {
         let t = floor((cw - S.gap) / 2)
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: S.gap) {
-                if let title { Text(title).font(.zune(size: 40, .light)).tracking(-0.8).foregroundStyle(.white).padding(.leading, -2) }
+                if let title { Text(title).font(.zuneLower(size: 40)).tracking(-0.8).foregroundStyle(.white).padding(.leading, -2) }
                 LazyVGrid(columns: [GridItem(.fixed(t), spacing: S.gap), GridItem(.fixed(t), spacing: S.gap)], alignment: .leading, spacing: S.gap) {
                     ForEach(items.prefix(8)) { e in
                         Opens(route: e.route, zoom: "tile|\(e.id)") {
@@ -496,7 +496,7 @@ struct ArtistTiles: View {
         let t = floor((cw - S.gap) / 2)
         if !list.isEmpty {
             VStack(alignment: .leading, spacing: S.gap) {
-                if let title { Text(title).font(.zune(size: 40, .light)).tracking(-0.8).foregroundStyle(.white).padding(.leading, -2) }
+                if let title { Text(title).font(.zuneLower(size: 40)).tracking(-0.8).foregroundStyle(.white).padding(.leading, -2) }
                 LazyVGrid(columns: [GridItem(.fixed(t), spacing: S.gap), GridItem(.fixed(t), spacing: S.gap)], alignment: .leading, spacing: S.gap) {
                     ForEach(list.prefix(8)) { a in
                         Opens(route: .artist(a.name), zoom: "tile|a|\(a.name)", seed: ArtRef(artist: a.name, album: a.album, url: a.image)) {

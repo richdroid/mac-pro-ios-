@@ -59,7 +59,7 @@ struct HubPivot: View {
                 Page {
                     VStack(alignment: .leading, spacing: 0) {
                         AppTitle(text: title ?? hubName ?? "rotation").frame(height: ceil(20 * min(max(k, 0.9), 1.3)) + 2, alignment: .top).turnstile(0)
-                        Text(first.header).font(.zune(size: 54 * min(max(k, 0.9), 1.2), .light)).tracking(-1).foregroundStyle(.white)
+                        Text(first.header).font(.zuneLower(size: 58 * min(max(k, 0.9), 1.2))).tracking(-1).foregroundStyle(.white)
                             .lineLimit(1).fixedSize().padding(.leading, S.margin - 2).turnstile(0)
                             .accessibilityAddTraits(.isHeader)
                         first.content.padding(.top, S.head * 2)
@@ -96,7 +96,7 @@ struct AppTitle: View {
     var body: some View {
         // WP7's application title: PhoneTextNormalStyle, 20 px in capitals, regular weight, white.
         Text(text.uppercased())
-            .font(.zune(size: 18, .regular)).tracking(0.6)
+            .font(.zuneCaps(size: 18)).tracking(0.6)
             .foregroundStyle(.white)
             .lineLimit(1)
             .padding(.leading, S.margin)

@@ -150,7 +150,7 @@ struct NowBody: View {
                 WArt(cover: s, data: entry.image(s), corner: 3).frame(width: 126, height: 126)
                     .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
                 VStack(alignment: .leading, spacing: 2) {
-                    WStatus(entry: entry).font(.zune(.caption, .semibold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.85)).padding(.bottom, 2)
+                    WStatus(entry: entry).font(.zuneCaps(.caption, .semibold)).textCase(.uppercase).tracking(0.8).foregroundStyle(.white.opacity(0.85)).padding(.bottom, 2)
                     if entry.seen != nil {
                         WTitle(text: s?.title ?? "", size: 19, width: 166).widgetAccentable()
                         WLine(text: s?.artist ?? "").font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.85))
@@ -175,7 +175,7 @@ struct NowBody: View {
                     if entry.seen != nil {
                         WLine(text: s?.title ?? "").font(.zune(size: 15, .bold)).widgetAccentable()
                         WLine(text: s?.artist ?? "").font(.zune(size: 13)).foregroundStyle(.white.opacity(0.85))
-                        if let l = entry.listeners { WLine(text: "\(WS.compact(l)) listeners").font(.zune(size: 11, .semibold)).textCase(.uppercase).foregroundStyle(.white.opacity(0.7)) }
+                        if let l = entry.listeners { WLine(text: "\(WS.compact(l)) listeners").font(.zuneCaps(size: 11, .semibold)).textCase(.uppercase).foregroundStyle(.white.opacity(0.7)) }
                     }
                 }
                 .padding(12)
@@ -192,7 +192,7 @@ struct WFigure: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(value).font(.zune(size: 24, .light)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-            Text(label).font(.zune(size: 10, .semibold)).textCase(.uppercase).tracking(0.6).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            Text(label).font(.zuneCaps(size: 10, .semibold)).textCase(.uppercase).tracking(0.6).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
         }
     }
 }

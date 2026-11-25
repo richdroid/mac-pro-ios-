@@ -65,7 +65,7 @@ struct HubTitle: View {
     }
     private func line(_ base: CGFloat, _ scale: CGFloat) -> some View {
         Text(text.lowercased())
-            .font(.zune(size: base * scale, .thin))
+            .font(.zuneLower(size: base * scale))
             .tracking(-1.5 * scale)
             .lineLimit(1)
             .fixedSize()
@@ -75,7 +75,7 @@ struct HubTitle: View {
     // How much a title shrinks to fit the room it's given (its own inset and the page's margin at the far side): to
     // 70 % at the least; past that it keeps its size and runs off the edge.
     static func scale(_ text: String, base: CGFloat, room: CGFloat, least: CGFloat = 0.7) -> CGFloat {
-        let natural = textWidth(text.lowercased(), size: base, tracking: -1.5)
+        let natural = textWidth(text.lowercased(), size: base, tracking: -1.5, face: Z.lower())
         let avail = room - (S.margin - 6) - S.margin
         guard natural > 0, avail > 0 else { return 1 }
         let fit = min(1, avail / natural)
@@ -84,9 +84,9 @@ struct HubTitle: View {
 }
 
 // A line's width in the thin system face, worked out before it's drawn, so a title is the right size in its first frame.
-func textWidth(_ s: String, size: CGFloat, tracking: CGFloat = 0, weight: CGFloat? = nil) -> CGFloat {
+func textWidth(_ s: String, size: CGFloat, tracking: CGFloat = 0, weight: CGFloat? = nil, face: String? = nil) -> CGFloat {
     #if canImport(UIKit)
-    let f = Z.uiFont(size, weight: weight ?? -0.4)
+    let f = face.flatMap { UIFont(name: $0, size: size) } ?? Z.uiFont(size, weight: weight ?? -0.4)
     #else
     let f = NSFont.systemFont(ofSize: size, weight: weight.map { NSFont.Weight(rawValue: $0) } ?? .thin)
     #endif
@@ -125,7 +125,7 @@ struct SectionHead: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             // Zune's section name: large, light, lowercase, hung from the page's left edge.
-            Text(text.lowercased()).font(.zune(.title, .light)).foregroundStyle(.white.opacity(0.96)).lineLimit(1).minimumScaleFactor(0.8)
+            Text(text.lowercased()).font(.zuneLower(.title)).foregroundStyle(.white.opacity(0.96)).lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 8)
             if let trailing { Text(trailing).font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
         }
@@ -145,7 +145,7 @@ struct Figure: View {
                 // One height whatever the shrink, so labels in a row of figures share a line.
                 .frame(height: ceil(size * 1.2), alignment: .bottom)
             // What it counts, as Zune labels a figure: small bold capitals.
-            Text(label).textCase(.uppercase).font(.zune(.caption, .semibold)).tracking(0.8).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.75)
+            Text(label).textCase(.uppercase).font(.zuneCaps(.caption, .semibold)).tracking(0.8).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.75)
         }
         .accessibilityElement(children: .combine)
     }

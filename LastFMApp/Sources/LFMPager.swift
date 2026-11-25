@@ -303,7 +303,7 @@ private struct PivotHeaders: View {
                 // The name that leaves at the left comes round again at the end as it goes.
                 let again: CGFloat = j == n ? frac : 1
                 Button { choose(i) } label: {
-                    Text(names[i]).font(.zune(size: size, .light)).tracking(-1).fixedSize()
+                    Text(names[i]).font(.zuneLower(size: size)).tracking(-1).fixedSize()
                         .foregroundStyle(.white)
                         .opacity((0.4 + 0.6 * near) * again)
                         .contentShape(Rectangle())
@@ -326,7 +326,7 @@ private struct PivotHeaders: View {
     @MainActor static func widths(_ names: [String], _ size: CGFloat) -> [CGFloat] {
         let key = "\(size)|" + names.joined(separator: "\u{1}")
         if let hit = kept[key] { return hit }
-        let out = names.map { textWidth($0, size: size, tracking: -1, weight: -0.4) }
+        let out = names.map { textWidth($0, size: size, tracking: -1, weight: -0.4, face: Z.lower()) }
         kept[key] = out
         return out
     }
