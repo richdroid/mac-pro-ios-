@@ -431,6 +431,15 @@ do {
     expect(week.filter { $0.name == "Work" }.count == 7, "a week of a daily alarm: covered while the app stays closed")
     expect(week.contains { $0.name == "Later" } && !week.contains { $0.name == "Catch-up" }, "a ring days off is covered; Catch-up is not")
     expect(week.contains { $0.name == "Nap" } == (at(2026, 11, 11, 10) > now), "a nap is a wake-up too")
+    // The 11-24 case: the day's calendar alarm came due (rang or was skipped) and the panel switched it off. The day is
+    // still a calendar day, so his daily stays quiet and gets no backup that day.
+    let omg = alarm("omg", "daily", "660")
+    let rang = once("Calendar: Removery", at(2026, 11, 11, 8, 45), on: false)
+    expect(BackupPlan.rings(in: state([omg, rang]), now: now, horizon: 36 * 3600).map(\.at) == [at(2026, 11, 12, 11)], "a calendar alarm that came due today and is off now still makes today a calendar day")
+    let offEarly = once("Calendar: Removery", at(2026, 11, 11, 13), on: false)
+    expect(BackupPlan.rings(in: state([omg, offEarly]), now: now, horizon: 36 * 3600).first?.at == at(2026, 11, 11, 11), "one switched off before its time doesn't")
+    let yesterday = once("Calendar: Removery", at(2026, 11, 10, 8, 45), on: false)
+    expect(BackupPlan.rings(in: state([omg, yesterday]), now: now, horizon: 36 * 3600).first?.at == at(2026, 11, 11, 11), "nor yesterday's")
     let ids = (1...9).map { UUID(uuidString: "00000000-0000-0000-0000-00000000000\($0)")! }
     var n = 0; func mk() -> UUID { n += 1; return ids[n - 1] }
     let r1 = BackupPlan.reconcile(kept: [], wanted: rs, delay: 5, now: now, makeID: mk)
