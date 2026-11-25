@@ -1,6 +1,7 @@
 name: Rotation profile
-# Branch-only (lastfm-prof): Rotation built in Release for the simulator, its motions profiled with Time Profiler beside
-# its hitch log, folded and open upright. Published to the lastfm-prof release; never touches lastfm-latest.
+# Branch-only (lastfm-prof): Rotation's motions filmed in Release on the simulator with the app's own hitch log, for
+# build 62 (a05f4b0, "before") and for this commit ("after"), on the same runner, so the numbers compare. Published to
+# the lastfm-prof release; never touches lastfm-latest.
 on:
   push:
     branches: [lastfm-prof]
@@ -11,43 +12,39 @@ concurrency:
   group: lastfm-prof
   cancel-in-progress: true
 jobs:
-  prof:
+  films:
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Build
+          fetch-depth: 0
+      - name: Build after and before
         run: |
           set -o pipefail
-          brew install xcodegen; xcodegen generate
+          brew install xcodegen
           mkdir -p dist
+          xcodegen generate
           xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
-      - name: Profile
-        continue-on-error: true
-        timeout-minutes: 80
-        run: |
-          set +e
-          exec > >(tee dist/prof.log) 2>&1
-          . ci/lfm-sim.sh; . ci/lfm-prof.sh
-          sim_setup build-sim/Build/Products/Release-iphonesimulator/LastFM.app
-          # The mock's history read once, so every launch after is a warm one.
-          xcrun simctl launch "$DEVICE" $APP -hub home; sleep 40; xcrun simctl terminate "$DEVICE" $APP
-          folded
-          profile_all "" 1
-          upright
-          profile_all "-up" 3
+          git worktree add /tmp/before a05f4b0921f70dfab4b699af0b7f5b427180c668
+          (cd /tmp/before && xcodegen generate && xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1)
       - name: Films
         continue-on-error: true
-        timeout-minutes: 70
+        timeout-minutes: 100
         run: |
           set +e
           exec > >(tee dist/films.log) 2>&1
           . ci/lfm-sim.sh; . ci/lfm-prof.sh
-          DEVICE=$(xcrun simctl list devices booted -j | jq -r '[.devices[][]][0].udid'); D=/tmp/dh/.build/release/devicehubctl
+          sim_setup /tmp/before/build-sim/Build/Products/Release-iphonesimulator/LastFM.app
+          # The mock's history read once, so every launch after is a warm one.
+          xcrun simctl launch "$DEVICE" $APP -hub home; sleep 40; xcrun simctl terminate "$DEVICE" $APP
           folded
+          films_before "-before" 1
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Release-iphonesimulator/LastFM.app
+          xcrun simctl launch "$DEVICE" $APP -hub home; sleep 20; xcrun simctl terminate "$DEVICE" $APP
           films_all "" 1
           upright
           films_all "-portrait" 3
@@ -58,16 +55,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          gh release view lastfm-prof >/dev/null 2>&1 || gh release create lastfm-prof --prerelease --title "Rotation profile" --notes "Rotation's motions profiled (branch lastfm-prof)." --target lastfm-prof
+          gh release view lastfm-prof >/dev/null 2>&1 || gh release create lastfm-prof --prerelease --title "Rotation profile" --notes "Rotation's motions filmed (branch lastfm-prof)." --target lastfm-prof
           for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > dist/hitches.txt
-          (cd dist && zip -q ../prof.zip prof.log build.log hitches*.txt stalls-*.txt launch-*.txt *.png 2>/dev/null)
           echo "$GITHUB_SHA run $GITHUB_RUN_NUMBER" > status.txt
-          gh release upload lastfm-prof prof.zip dist/hitches.txt --clobber
+          (cd dist && zip -q ../logs.zip films.log build.log hitches*.txt 2>/dev/null)
+          gh release upload lastfm-prof logs.zip dist/hitches.txt --clobber
           (cd dist && zip -qr ../film-shots.zip . -i 'lfm-*.png' 2>/dev/null) && gh release upload lastfm-prof film-shots.zip --clobber
           swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
           bash ci/lfm-shrink-all.sh dist small 900 2 > dist/publish.log 2>&1
           (cd small && zip -q0 ../films.zip *.mp4 2>/dev/null || zip -q ../films.zip /dev/null)
-          (cd dist && zip -q ../films-logs.zip films.log publish.log 2>/dev/null)
-          gh release upload lastfm-prof films.zip films-logs.zip --clobber
+          gh release upload lastfm-prof films.zip --clobber
           # Last, so a waiter knows everything of this run is up.
           gh release upload lastfm-prof status.txt --clobber

@@ -76,3 +76,15 @@ films_all() {
   STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-history$x $d 18 -hub history
   STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm$x $d 20 -hub home
 }
+
+# Build 62's motions, the ones Richard named (taps, Back, pans, pivots, pushes, launch), for the before numbers.
+films_before() {
+  local x=$1 d=$2
+  STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2 tap=0.895,0.29:2 shot:1 shot:2" film home-tap$x $d 18 -hub home
+  STEPS="tap=0.25,0.70:6 shot:2 edgeslow:1 shot:1 shot:3" film home-swipe$x $d 18 -hub home
+  Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film home-pan$x $d 26 -hub home
+  Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap$x $d 22 -hub profile
+  Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-now$x $d 26 -hub nowPlaying
+  STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-artist$x $d 18 -tab 1 -kind 0
+  STEPS="shot:8 relaunch:2 shot:1 shot:2 shot:4" film launch-warm$x $d 20 -hub home
+}
