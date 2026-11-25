@@ -116,7 +116,7 @@ struct WTitle: View {
     }
     static func width(_ s: String, _ size: CGFloat) -> CGFloat {
         #if canImport(UIKit)
-        return (s as NSString).size(withAttributes: [.font: (UIFont(name: "Selawik-Bold", size: size) ?? UIFont.systemFont(ofSize: size, weight: .bold))]).width
+        return (s as NSString).size(withAttributes: [.font: (UIFont(name: Z.name(.bold), size: size) ?? UIFont.systemFont(ofSize: size, weight: .bold))]).width
         #else
         return CGFloat(s.count) * size * 0.55
         #endif

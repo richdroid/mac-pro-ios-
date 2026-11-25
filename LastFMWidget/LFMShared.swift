@@ -167,10 +167,22 @@ enum Z {
         for n in ["Selawik-Light", "Selawik-Semilight", "Selawik-Regular", "Selawik-Semibold", "Selawik-Bold"] {
             if let u = Bundle.main.url(forResource: n, withExtension: "ttf") { CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil) }
         }
+        // Segoe, the original (Richard, 2026-11-25: "omfg this font is horrific use the og font"): Microsoft's, so never in
+        // the repo or CI; preset-ipa.sh puts his own copy in the app and the widget at signing (also in UIAppFonts, so this
+        // registration may simply find it there already).
+        if let u = Bundle.main.url(forResource: "segoeui", withExtension: "ttf") { CTFontManagerRegisterFontsForURL(u as CFURL, .process, nil) }
         return true
+    }()
+    // Segoe UI when it's in the bundle (his phone); Selawik, its metric twin, in CI and the gallery. Only Segoe UI's
+    // Regular is to hand, so every weight is that one face: the hierarchy is size alone, as Zune's light faces can't be
+    // had (no faked light weight by fading).
+    static let segoe: Bool = {
+        _ = registered
+        return (CTFontCopyPostScriptName(CTFontCreateWithName("SegoeUI" as CFString, 12, nil)) as String) == "SegoeUI"
     }()
     static func name(_ w: Font.Weight) -> String {
         _ = registered
+        if segoe { return "SegoeUI" }
         switch w {
         case .ultraLight, .thin, .light: return "Selawik-Light"
         case .regular: return "Selawik-Regular"
