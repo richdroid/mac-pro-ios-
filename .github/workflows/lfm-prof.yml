@@ -39,6 +39,19 @@ jobs:
           profile_all "" 1
           upright
           profile_all "-up" 3
+      - name: Films
+        continue-on-error: true
+        timeout-minutes: 70
+        run: |
+          set +e
+          exec > >(tee dist/films.log) 2>&1
+          . ci/lfm-sim.sh; . ci/lfm-prof.sh
+          DEVICE=$(xcrun simctl list devices booted -j | jq -r '[.devices[][]][0].udid'); D=/tmp/dh/.build/release/devicehubctl
+          folded
+          films_all "" 1
+          upright
+          films_all "-portrait" 3
+          xcrun simctl shutdown "$DEVICE"
       - name: Publish
         if: always()
         env:
@@ -49,4 +62,12 @@ jobs:
           for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > dist/hitches.txt
           (cd dist && zip -q ../prof.zip prof.log build.log hitches*.txt stalls-*.txt launch-*.txt *.png 2>/dev/null)
           echo "$GITHUB_SHA run $GITHUB_RUN_NUMBER" > status.txt
-          gh release upload lastfm-prof prof.zip status.txt dist/hitches.txt --clobber
+          gh release upload lastfm-prof prof.zip dist/hitches.txt --clobber
+          (cd dist && zip -qr ../film-shots.zip . -i 'lfm-*.png' 2>/dev/null) && gh release upload lastfm-prof film-shots.zip --clobber
+          swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
+          bash ci/lfm-shrink-all.sh dist small 900 2 > dist/publish.log 2>&1
+          (cd small && zip -q0 ../films.zip *.mp4 2>/dev/null || zip -q ../films.zip /dev/null)
+          (cd dist && zip -q ../films-logs.zip films.log publish.log 2>/dev/null)
+          gh release upload lastfm-prof films.zip films-logs.zip --clobber
+          # Last, so a waiter knows everything of this run is up.
+          gh release upload lastfm-prof status.txt --clobber
