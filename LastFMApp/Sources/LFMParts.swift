@@ -389,7 +389,9 @@ struct Page<C: View>: View {
                         .padding(.trailing, side.trailing)
                 }
                 .contentMargins(.top, max(0, first), for: .scrollContent)
+                .contentMargins(.bottom, Win.foot(g), for: .scrollContent)
                 .ignoresSafeArea(.container, edges: [.horizontal, .top])
+                .padding(.bottom, -Win.foot(g))
                 .scrollIndicators(.hidden)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
                 .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }

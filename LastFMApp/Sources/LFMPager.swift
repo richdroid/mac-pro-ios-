@@ -92,11 +92,14 @@ struct Pager: View {
         // The bars are read out here, where the safe area still stands: the reader inside is laid out past it.
         GeometryReader { out in
         let insets = out.safeAreaInsets
+        // The window's foot below this page, covered explicitly: ignoring the safe area left pushed hubs ~17 pt short of
+        // the bottom edge with their last row cut under a black band (run 61 gate).
+        let foot = Win.foot(out)
         GeometryReader { g in
             let side = (leading: insets.leading, trailing: insets.trailing)
             let W = max(g.size.width, 1)
             let pw = max(W - side.leading - side.trailing, 1)
-            let bars = (top: max(insets.top, g.safeAreaInsets.top), bottom: max(insets.bottom, g.safeAreaInsets.bottom))
+            let bars = (top: max(insets.top, g.safeAreaInsets.top), bottom: max(insets.bottom, g.safeAreaInsets.bottom, foot))
             let nameSize = PivotHeaders.size(panels.count, k)
             // WP7's top: the small capitals at the top margin (or on Back's row when the bar runs across the top), the
             // names right under them, nothing a bar's height lower (Richard, 2026-11-25: "artificially lowered").
@@ -206,7 +209,8 @@ struct Pager: View {
             }
             .frame(width: W, alignment: .topLeading)
         }
-        .ignoresSafeArea(.container, edges: .all)
+        .ignoresSafeArea(.container, edges: [.top, .horizontal])
+        .padding(.bottom, -foot)
         }
         .sensoryFeedback(.tick, trigger: landed)
         // The hub asked again: back to the first section.

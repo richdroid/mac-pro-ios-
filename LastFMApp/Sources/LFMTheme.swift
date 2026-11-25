@@ -202,25 +202,25 @@ struct Backdrop: View {
     var body: some View {
         // Laid out in an overlay of a colour that already covers the safe areas: inside a background the reader was given
         // the page's safe frame and the picture stopped short of the side strip and the foot (run 60).
-        Color.black.ignoresSafeArea().overlay { GeometryReader { g in
+        ScreenBleed { g in
             ZStack(alignment: .topLeading) {
                 Color.black
                 if let ref {
-                    let side = max(g.size.height, g.size.width) * 1.08
+                    let side = max(g.height, g.width) * 1.08
                     // Dim and desaturated, as WP7.5's artist pages set their photo behind the pivot.
                     ArtView(ref, px: 1000, corner: 0)
                         .frame(width: side, height: side)
                         .saturation(0.6)
-                        .offset(x: g.size.width - side * 0.82, y: -side * 0.06)
-                    LinearGradient(stops: [.init(color: .black.opacity(0.5 + dim), location: 0),
+                        .offset(x: g.width - side * 0.82, y: -side * 0.06)
+                    // Darkest across the top, where the small capitals and names sit over the cover's own lettering.
+                    LinearGradient(stops: [.init(color: .black.opacity(0.78 + dim), location: 0),
+                                           .init(color: .black.opacity(0.55 + dim), location: 0.18),
                                            .init(color: .black.opacity(0.62 + dim), location: 0.45),
                                            .init(color: .black.opacity(0.86), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                 }
             }
-            .frame(width: g.size.width, height: g.size.height)
-            .clipped()
-        }.ignoresSafeArea() }
+        }
         .accessibilityHidden(true)
         .allowsHitTesting(false)
     }
@@ -231,32 +231,32 @@ struct Backdrop: View {
 struct NowBackdrop: View {
     let song: Scrobble?
     var body: some View {
-        Color.black.ignoresSafeArea().overlay { GeometryReader { g in
+        ScreenBleed { g in
             ZStack(alignment: .topLeading) {
                 Color.black
                 if let s = song {
-                    let tint = tileColor(s.art)
-                    let side = max(g.size.height, g.size.width) * 1.05
+                    // The duotone in the cover's own vivid colour, bright (Zune desktop's is a saturated single colour).
+                    let vivid = (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.art.artist + s.art.album)).vivid.color
+                    let side = max(g.height, g.width) * 1.05
                     ArtView(s.art, px: 1000, corner: 0)
                         .frame(width: side, height: side)
                         .grayscale(1)
-                        .colorMultiply(tint.mix(with: .white, by: 0.35))
-                        .offset(x: g.size.width - side * 0.85, y: g.size.height - side)
-                    LinearGradient(stops: [.init(color: .black.opacity(0.55), location: 0), .init(color: .black.opacity(0.35), location: 0.5),
-                                           .init(color: .black.opacity(0.7), location: 1)], startPoint: .top, endPoint: .bottom)
+                        .colorMultiply(vivid.mix(with: .white, by: 0.15))
+                        .offset(x: g.width - side * 0.85, y: g.height - side)
+                    LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.22), location: 0.5),
+                                           .init(color: .black.opacity(0.6), location: 1)], startPoint: .top, endPoint: .bottom)
+                    // The giant capitals in a band at the foot, clear of the cover above (run 61 gate).
                     VStack(alignment: .leading, spacing: -24) {
                         Text(s.artist).font(.zuneCaps(size: 96, .bold))
                         if !s.album.isEmpty { Text(s.album).font(.zuneCaps(size: 96, .bold)) }
                     }
                     .textCase(.uppercase).lineLimit(1).fixedSize()
-                    .foregroundStyle(tint.mix(with: .white, by: 0.6).opacity(0.22))
+                    .foregroundStyle(vivid.mix(with: .white, by: 0.55).opacity(0.42))
                     .padding(.leading, S.margin - 4)
-                    .offset(y: g.size.height * 0.52)
+                    .offset(y: g.height - (s.album.isEmpty ? 1 : 2) * 92 - 60)
                 }
             }
-            .frame(width: g.size.width, height: g.size.height)
-            .clipped()
-        }.ignoresSafeArea() }
+        }
         .accessibilityHidden(true)
         .allowsHitTesting(false)
     }

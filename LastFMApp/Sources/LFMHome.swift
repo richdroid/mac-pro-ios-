@@ -151,9 +151,12 @@ private struct HomePanorama: View {
                 .task {
                     let n = Int(UserDefaults.standard.string(forKey: "section") ?? "") ?? 0
                     guard n > 0 else { return }
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    var t = Transaction(); t.disablesAnimations = true
-                    withTransaction(t) { pos.scrollTo(x: CGFloat(min(n, count - 1)) * sec) }
+                    // Again as the panorama settles (run 61: once, too early, and the shot stayed on start).
+                    for _ in 0..<4 {
+                        try? await Task.sleep(nanoseconds: 600_000_000)
+                        var t = Transaction(); t.disablesAnimations = true
+                        withTransaction(t) { pos.scrollTo(x: CGFloat(min(n, count - 1)) * sec) }
+                    }
                     section = n
                 }
             }
@@ -484,7 +487,7 @@ struct MenuWords: View {
             ForEach(Hub.menu, id: \.self) { h in
                 Button { go("w-" + h.rawValue, h, nil) } label: {
                     // Zune HD's menu: the huge word, and under it in small grey capitals what's inside.
-                    VStack(alignment: .leading, spacing: -size * 0.12) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(h.word)
                             .font(.zuneLower(size: size)).tracking(-1.2)
                             .foregroundStyle(.white)

@@ -176,7 +176,9 @@ struct NowHero: View {
                 // Zune HD's Now Playing: the artist's name huge and faint, drifting while it plays. A band of its own
                 // under the song, never behind its words (it ran through "Orchard Lights / Velvet Rooms", run 32), and
                 // always whole in its pane. Gone when nothing plays.
-                if playing {
+                // Not in the now-playing hub, whose ground already sets the artist in giant capitals (run 61 gate: two
+                // names, colliding).
+                if playing && titled {
                     let size: CGFloat = layout == .wide ? 110 : 84
                     MixName(text: s.artist, size: size, moving: !store.trouble)
                         .padding(.top, bandDrop(ceil(size * 1.2)) - S.pair)

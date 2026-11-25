@@ -494,3 +494,36 @@ struct TileGrid<Item: Identifiable, Cell: View>: View {
         .padding(.horizontal, S.margin)
     }
 }
+
+// The window's bounds, for what must reach the screen's foot however its container is laid out: a pushed hub stopped
+// ~17 pt short of the bottom edge with a black band over its last row (run 61 gate, blocking 2), safe area or not.
+enum Win {
+    @MainActor static var bounds: CGRect {
+        #if canImport(UIKit)
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds ?? .zero
+        #else
+        .zero
+        #endif
+    }
+    // How far below this reader's frame the window goes on: the foot it must still cover.
+    @MainActor static func foot(_ g: GeometryProxy) -> CGFloat {
+        let w = bounds
+        guard w.height > 0 else { return g.safeAreaInsets.bottom }
+        return max(g.safeAreaInsets.bottom, w.maxY - g.frame(in: .global).maxY)
+    }
+}
+
+// A picture that covers the whole screen behind a page: laid out at the page's size plus the side insets and the foot,
+// moved up and left by the insets (inside a background, ignoring the safe area left it short of the side strip and the
+// foot: run 60/61, now playing black down its right quarter).
+struct ScreenBleed<C: View>: View {
+    @ViewBuilder let content: (CGSize) -> C
+    var body: some View {
+        GeometryReader { g in
+            let i = g.safeAreaInsets
+            let size = CGSize(width: g.size.width + i.leading + i.trailing, height: g.size.height + i.top + Win.foot(g))
+            content(size).frame(width: size.width, height: size.height).clipped()
+                .offset(x: -i.leading, y: -i.top)
+        }
+    }
+}
