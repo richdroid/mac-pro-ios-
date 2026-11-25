@@ -289,9 +289,20 @@ struct TreatedArt: View {
         self.ref = ref; self.treat = treat
         _img = State(initialValue: ArtStore.shared.treatedCached(ref, treat))
     }
+    @ViewBuilder private var fallback: some View {
+        switch treat {
+        case .muted: ArtView(ref, px: 1000, corner: 0).saturation(0.6)
+        case .duotone:
+            let v = (ArtStore.shared.palette(ref) ?? Palette.from(name: ref.artist + ref.album)).vivid.color
+            ArtView(ref, px: 1000, corner: 0).grayscale(1).colorMultiply(v.mix(with: .white, by: 0.15))
+        }
+    }
     var body: some View {
         ZStack {
             if let img { Image(decorative: img, scale: 1).resizable().interpolation(.medium).aspectRatio(contentMode: .fill).transition(.opacity) }
+            // Not baked yet (a launch straight into a hub): the cover with the look as a filter for those first frames, so
+            // the page never opens on black; the baked one takes over as soon as it's made.
+            else { fallback.transition(.opacity) }
         }
         .task(id: "\(ref.key)|\(treat.tag)") {
             if let c = ArtStore.shared.treatedCached(ref, treat) { if c !== img { img = c }; return }
