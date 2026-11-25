@@ -887,6 +887,10 @@ struct Screen<Content: View>: View {
                     else { page(.all) }
                 }
             }
+            // Held at its size and safe area while the edge swipe takes a page off it (Shared/Duo.swift HoldsWhileMoving):
+            // the tab coming back under the page slides in whole, rows as they were (later list 11-24, 12). Pushed pages
+            // hold their own.
+            .holdsWhileMoving("tab \(tab)")
             .modifier(TabBarFade())
             .modifier(StatusBarFade())
             .background(groupedBackground.ignoresSafeArea())
