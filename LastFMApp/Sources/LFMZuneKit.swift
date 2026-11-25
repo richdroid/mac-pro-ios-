@@ -58,10 +58,11 @@ struct HubPivot: View {
                         Text(first.header).font(.zune(size: 54 * min(max(k, 0.9), 1.2), .light)).tracking(-1).foregroundStyle(.white)
                             .lineLimit(1).fixedSize().padding(.leading, S.margin - 2).turnstile(0)
                             .accessibilityAddTraits(.isHeader)
-                        first.content.turnstile(2).padding(.top, S.head * 2)
+                        first.content.padding(.top, S.head * 2)
                     }
                     .padding(.top, S.head)
                 }
+                .turnstile(1)
             } right: {
                 Pager(.pivot, title: " ", page: Binding(get: { max(page, panels[1].id) }, set: { page = $0 }), top: 0, panels: Array(panels.dropFirst()))
             }

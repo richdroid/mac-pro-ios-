@@ -221,7 +221,6 @@ struct Pager: View {
             ScrollView(.vertical) {
                 Color.clear.frame(height: 0).id("top")
                 p.content
-                    .turnstile(2)
                     .padding(.top, S.head)
                     .padding(.bottom, S.section)
                     .frame(width: pw, alignment: .topLeading)
@@ -235,6 +234,9 @@ struct Pager: View {
             .padding(.top, cut)
             .contentMargins(.bottom, foot, for: .scrollContent)
             .scrollIndicators(.hidden)
+            // The page swings in whole, outside its scroll: inside it, the 3D turn wrapped the library's lazy list, which
+            // then built every row of all four shelves at once on the first open (run 53, home-tap: 8.4 s with no frame).
+            .turnstile(2)
             .environment(\.pageWidth, pw)
             .environment(\.pageBleed, EdgeInsets(top: 0, leading: side.leading, bottom: 0, trailing: side.trailing))
             .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
