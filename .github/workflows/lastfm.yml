@@ -94,7 +94,8 @@ jobs:
             shot lately$x $d 14 -tab 0 -panel 2
             shot story$x $d 9 -tab 0 -panel 3
             shot charts$x $d 9 -tab 1
-            shot library$x $d 9 -tab 2
+            # Long enough for the shelves to settle open upright (gate 2b: caught loading three runs running).
+            shot library$x $d 14 -tab 2
             shot discover$x $d 10 -tab 3
             shot track$x $d 10 -tab 0 -pose track
             shot artist$x $d 11 -tab 0 -pose artist

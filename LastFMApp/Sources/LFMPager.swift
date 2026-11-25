@@ -335,7 +335,8 @@ private struct PivotHeaders: View {
         .mask {
             // And clear at the very left, so the end of the name before (wrapped or passing) never shows as a sliver at the
             // margin (run 52: the "g" of "playing" beside "song").
-            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: (S.margin - 5) / max(pw, 192)),
+            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .clear, location: (S.margin - 7) / max(pw, 192)),
+                                   .init(color: .black, location: (S.margin - 3) / max(pw, 192)),
                                    .init(color: .black, location: 1 - 96 / max(pw, 192)), .init(color: .clear, location: 1)],
                            startPoint: .leading, endPoint: .trailing)
         }

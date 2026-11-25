@@ -140,6 +140,13 @@ struct Quickplay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: S.section) {
             let albums = Self.albums(store.recent)
+            // Open flat, the right pane is headed as Zune's desktop heads it, "quickplay" in the huge light word, level
+            // with the menu's first word; the strips start under it, clear of the side strip's status glyphs (gate 2b).
+            if wide {
+                Text("quickplay").font(.zune(size: 54, .light)).tracking(-1).foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1).fixedSize().padding(.leading, S.margin - 2).padding(.top, 42)
+                    .accessibilityAddTraits(.isHeader)
+            }
             if !albums.isEmpty {
                 if !wide { Panorama(title: "just played", items: albums, tiles: true) { e in when(e.last.map { Date(timeIntervalSince1970: TimeInterval($0)) }) } }
             }
