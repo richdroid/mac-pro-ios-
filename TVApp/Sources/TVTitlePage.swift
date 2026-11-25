@@ -343,11 +343,15 @@ struct TitlePage: View {
                 Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest)
                 carry.hideForFlight()
             }
-            hand.fly(v) {
-                Hand.shared.land(title: title, art: art, tint: tint)
-                withAnimation(.easeOut(duration: 0.3)) { Hand.shared.lifted = nil }
-                carry.reappear()
-                send?()
+            // On the next turn, once the window's layer has drawn the card where his finger left it: flown in the same turn
+            // it had nothing on screen to move, and "landed" at once (CI 72b8e2e: gone 0 ms after the release).
+            Task { @MainActor in
+                hand.fly(v) {
+                    Hand.shared.land(title: title, art: art, tint: tint)
+                    withAnimation(.easeOut(duration: 0.3)) { Hand.shared.lifted = nil }
+                    carry.reappear()
+                    send?()
+                }
             }
             return
         }
