@@ -267,6 +267,15 @@ struct StartTiles: View {
     }
 }
 
+// A tile's colour from the art it stands for (Zune's colour came from the covers), darkened until white reads on it.
+@MainActor func tileColor(_ ref: ArtRef?) -> Color {
+    guard let ref else { return Z.magenta }
+    let p = ArtStore.shared.palette(ref) ?? Palette.from(name: ref.artist + ref.album)
+    let v = p.vivid
+    let l = 0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b
+    return v.scaled(l > 0.42 ? 0.42 / l : 1).color
+}
+
 // A tile's words over the accent: a figure large and light, a line under it (WP7's tile back).
 private struct TileWords: View {
     let big: String
@@ -309,7 +318,7 @@ private struct NowLiveTile: View {
     var body: some View {
         if let s = store.shown {
             // The cover, peeking up now and then to show what it is (WP7's peek).
-            LiveTile(id: "now", name: s.nowPlaying ? "now playing" : "last played", motion: .peek) {
+            LiveTile(id: "now", name: s.nowPlaying ? "now playing" : "last played", motion: .peek, fill: tileColor(s.art)) {
                 TileCover(ref: s.art, px: 600)
             } back: {
                 VStack(alignment: .leading, spacing: 0) {
@@ -344,7 +353,7 @@ private struct TodayLiveTile: View {
     private var store: Store { Store.shared }
     var body: some View {
         let n = store.today.filter { !$0.nowPlaying }.count
-        LiveTile(id: "today", name: "today") {
+        LiveTile(id: "today", name: "today", fill: tileColor(store.shown?.art)) {
             TileWords(big: number(n), line: n == 1 ? "play today" : "plays today")
         } back: {
             TileWords(big: store.insights.streak.map { "\($0)" } ?? "–", line: store.insights.streak == 1 ? "day in a row" : "days in a row")
@@ -356,7 +365,7 @@ private struct ChartsLiveTile: View {
     private var store: Store { Store.shared }
     var body: some View {
         if let a = store.insights.week.first {
-            LiveTile(id: "charts", name: "charts") {
+            LiveTile(id: "charts", name: "charts", fill: tileColor(ArtRef(artist: a.name, album: a.album, url: a.image))) {
                 TileCover(ref: ArtRef(artist: a.name, album: a.album, url: a.image), px: 300)
             } back: {
                 TileWords(big: a.name, line: "\(number(a.plays)) plays this week", small: "no. 1")
@@ -371,7 +380,7 @@ private struct LibraryLiveTile: View {
     private var store: Store { Store.shared }
     var body: some View {
         let covers = Quickplay.albums(store.recent).prefix(4).map(\.art)
-        LiveTile(id: "library", name: "library") {
+        LiveTile(id: "library", name: "library", fill: tileColor(covers.first)) {
             if covers.count == 4 {
                 // Four covers, two by two, as WP7's music tile showed his collection.
                 Grid(horizontalSpacing: 0, verticalSpacing: 0) {
@@ -389,7 +398,7 @@ private struct DiscoverLiveTile: View {
     private var picks: [Rec] { DiscoverModel.shared.recs }
     var body: some View {
         if let r = picks.first {
-            LiveTile(id: "discover", name: "discover", motion: .peek) {
+            LiveTile(id: "discover", name: "discover", motion: .peek, fill: tileColor(ArtRef(artist: r.name, album: r.album, url: r.image))) {
                 HStack(spacing: 0) {
                     ForEach(Array(picks.prefix(3).enumerated()), id: \.offset) { _, p in
                         TileCover(ref: ArtRef(artist: p.name, album: p.album, url: p.image), px: 300)
@@ -415,7 +424,7 @@ private struct RediscoverLiveTile: View {
     private var model: RediscoverModel { RediscoverModel.shared }
     var body: some View {
         if let e = model.r.albums.first ?? model.r.songs.first {
-            LiveTile(id: "rediscover", name: "rediscover") {
+            LiveTile(id: "rediscover", name: "rediscover", fill: tileColor(e.art)) {
                 TileCover(ref: e.art, px: 300)
             } back: {
                 TileWords(big: e.title, line: "you used to love", small: nil)
@@ -430,7 +439,7 @@ private struct HistoryLiveTile: View {
     private var store: Store { Store.shared }
     var body: some View {
         let last = store.recent.first
-        LiveTile(id: "history", name: "history") {
+        LiveTile(id: "history", name: "history", fill: tileColor(store.recent.dropFirst().first?.art ?? last?.art)) {
             TileWords(big: last.map { $0.title } ?? "–", line: last.map { when($0.date) } ?? "")
         } back: {
             TileWords(big: last.map { $0.artist } ?? "–", line: "last played")

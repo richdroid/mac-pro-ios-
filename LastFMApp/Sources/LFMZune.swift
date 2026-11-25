@@ -493,14 +493,22 @@ struct ArtWall: View {
         }
         guard let g = gray.makeImage() else { return nil }
         let all = CGRect(x: 0, y: 0, width: w, height: h)
-        // Tinted and laid at 42 %.
-        ctx.saveGState(); ctx.setAlpha(0.42); ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-        ctx.draw(g, in: all); ctx.setBlendMode(.multiply); ctx.setFillColor(tint); ctx.fill(all)
-        ctx.endTransparencyLayer(); ctx.restoreGState()
+        // In full colour, as Zune's Now Playing wall is (Richard, 2026-11-25: "more imagery and color"), laid at 62 %.
+        _ = g
+        ctx.saveGState(); ctx.setAlpha(0.62)
+        for r in 0..<rows {
+            for c in 0..<cols {
+                let ref = refs[(r * (cols + 2) + c) % refs.count]
+                guard let i = imgs[ref.key] else { continue }
+                ctx.draw(i, in: CGRect(x: CGFloat(c) * px, y: CGFloat(h) - CGFloat(r + 1) * px, width: px, height: px))
+            }
+        }
+        ctx.restoreGState()
+        _ = tint
         // Darker toward its foot (top to bottom: 30 %, 62 % at the middle, 75 %), then faded out over its lower half.
         let space = CGColorSpaceCreateDeviceRGB()
         func shade(_ a: CGFloat) -> CGColor { ground.copy(alpha: a) ?? ground }
-        if let shadeG = CGGradient(colorsSpace: space, colors: [shade(0.75), shade(0.62), shade(0.3)] as CFArray, locations: [0, 0.45, 1]) {
+        if let shadeG = CGGradient(colorsSpace: space, colors: [shade(0.7), shade(0.45), shade(0.15)] as CFArray, locations: [0, 0.45, 1]) {
             ctx.drawLinearGradient(shadeG, start: .zero, end: CGPoint(x: 0, y: h), options: [])
         }
         if let fade = CGGradient(colorsSpace: space, colors: [CGColor(gray: 0, alpha: 0), CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 1)] as CFArray, locations: [0, 0.5, 1]) {
