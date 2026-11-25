@@ -331,7 +331,10 @@ private struct PivotHeaders: View {
         // The names run on to the right and fade out before the page's edge: never a word cut at the side bar, or
         // showing again beyond it under the camera (run 40). A mask of this one row, not a patch of colour over it.
         .mask {
-            LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 1 - 96 / max(pw, 192)), .init(color: .clear, location: 1)],
+            // And clear at the very left, so the end of the name before (wrapped or passing) never shows as a sliver at the
+            // margin (run 52: the "g" of "playing" beside "song").
+            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: (S.margin - 5) / max(pw, 192)),
+                                   .init(color: .black, location: 1 - 96 / max(pw, 192)), .init(color: .clear, location: 1)],
                            startPoint: .leading, endPoint: .trailing)
         }
         .onAppear { pos.scrollTo(x: Self.at(f, rests)) }

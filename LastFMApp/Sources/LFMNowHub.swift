@@ -377,7 +377,7 @@ struct HistoryHub: View {
                     }
                 }
             },
-            Panel(1, "recent") { RecentSection(skipFirst: false) },
+            Panel(1, "all plays") { RecentSection(skipFirst: false) },
         ])
     }
 }
