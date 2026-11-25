@@ -31,8 +31,8 @@ struct Status: Decodable {
     struct Sharing: Decodable { let ssh: Bool; let vnc: Bool }
     struct Temp: Decodable, Identifiable { let name: String; let c: Double; var id: String { name } }
     struct SeedApp: Decodable, Identifiable {
-        let file: String; let name: String; let version: String; let build: String; let phoneBuild: String
-        let installedAt: Double; let expires: Double; let state: String; let message: String; let own: Bool
+        let file: String; let name: String; let version: String; let build: String; var phoneBuild: String
+        let installedAt: Double; let expires: Double; var state: String; let message: String; let own: Bool
         // The itms-services link of a copy signed for this iPhone, which installs over the air from anywhere on Tailscale.
         // Empty or missing (an older Mac) when there's none.
         var ota: String?
@@ -53,7 +53,50 @@ struct Status: Decodable {
             return tf != here ? tf : nil
         }
     }
-    struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
+    struct SeedStatus: Decodable {
+        let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp]
+        init(reachable: Bool, via: String, checkedAt: Double, seeding: String, fetch: Fetch?, apps: [SeedApp]) {
+            self.reachable = reachable; self.via = via; self.checkedAt = checkedAt; self.seeding = seeding; self.fetch = fetch
+            self.apps = Self.merged(apps)
+        }
+        private enum CodingKeys: String, CodingKey { case reachable, via, checkedAt, seeding, fetch, apps }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(reachable: try c.decode(Bool.self, forKey: .reachable), via: try c.decode(String.self, forKey: .via),
+                      checkedAt: try c.decode(Double.self, forKey: .checkedAt), seeding: try c.decode(String.self, forKey: .seeding),
+                      fetch: try c.decodeIfPresent(Fetch.self, forKey: .fetch), apps: try c.decode([SeedApp].self, forKey: .apps))
+        }
+        // One row per app, whatever put it on the phone (Richard, 2026-11-25: Rotation listed twice, "Build 45" from a
+        // sideloaded copy and "Build 39 is ready · Update" for an older one). The Mac reports a copy under another bundle
+        // id (a sideload beside a TestFlight install) as a separate app of its own: it folds into the row for the Mac's
+        // copy of that name, and the newest build on the phone is the one the row compares with. And an update is only
+        // ever a higher build: the Mac calls any different build "update", so an older one was offered as a downgrade.
+        static func merged(_ apps: [SeedApp]) -> [SeedApp] {
+            func key(_ a: SeedApp) -> String { a.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).trimmingCharacters(in: .whitespaces) }
+            func num(_ b: String) -> Int? { Int(b.trimmingCharacters(in: .whitespaces)) }
+            // The higher of two builds, read as numbers where both are; otherwise the first that isn't empty.
+            func newest(_ a: String, _ b: String) -> String {
+                if let x = num(a), let y = num(b) { return y > x ? b : a }
+                return a.isEmpty ? b : a
+            }
+            var out: [SeedApp] = [], ownAt: [String: Int] = [:], otherAt: [String: Int] = [:]
+            for a in apps where a.own { if ownAt[key(a)] == nil { ownAt[key(a)] = out.count }; out.append(a) }
+            for a in apps where !a.own {
+                if let i = ownAt[key(a)] {
+                    // The Mac's own row says it's missing when its bundle isn't there; a copy under another id is.
+                    out[i].phoneBuild = newest(out[i].phoneBuild, a.build)
+                    if out[i].state == "missing" { out[i].state = "update" }
+                } else if let j = otherAt[key(a)] {
+                    out[j].phoneBuild = newest(out[j].phoneBuild, a.build)
+                } else { otherAt[key(a)] = out.count; out.append(a) }
+            }
+            for i in out.indices where out[i].own && ["update", "waiting"].contains(out[i].state) {
+                // Waiting with nothing known of the phone stays waiting; a known build at or above the Mac's is current.
+                if let mac = num(out[i].build), let phone = num(out[i].phoneBuild), mac <= phone { out[i].state = "current" }
+            }
+            return out
+        }
+    }
     struct Fetch: Decodable { let state: String; let message: String }
     struct Service: Decodable, Identifiable { let label: String; let name: String; let running: Bool; var id: String { label } }
     // A temperature alert also carries its reading in °C, so it's shown in the unit chosen in Settings.
