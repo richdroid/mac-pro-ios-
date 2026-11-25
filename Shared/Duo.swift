@@ -137,7 +137,7 @@ struct HoldsWhileMoving: ViewModifier {
     // text against the edges, right only from the second open on.
     // `shown` while the page is the one in front. Covered by another page it still takes readings, of wherever the
     // system parks it, and those are no rest to hold it at when it comes back.
-    @MainActor final class Box { var rest: Reading?; var latest: Reading?; var settled = false; var shown = true }
+    @MainActor final class Box { var rest: Reading?; var latest: Reading?; var settled = false; var shown = true; var turned = false }
     init(name: String) { self.name = name }
     func body(content: Content) -> some View {
         // Only under the finger (NavTransit.underFinger). Held for a pop from Back too, the page was laid out again as
@@ -155,15 +155,25 @@ struct HoldsWhileMoving: ViewModifier {
                         box.latest = r
                         let moving = NavTransit.shared.moving()
                         if !moving, box.settled, box.shown { box.rest = r }
+                        // Covered (a tab's root under a pushed page) and turned or folded meanwhile: what it held at rest is
+                        // another posture's, wrong for the whole swipe back. Held no more until it is still in front again
+                        // (the move's end, or coming back to the front with nothing moving, settles it afresh). A posture's change only, not an
+                        // inset's wobble while it's parked.
+                        else if !moving, !box.shown, let rest = box.rest,
+                                abs(r.size.width - rest.size.width) > 40 || abs(r.size.height - rest.size.height) > 40 { box.settled = false; box.turned = true }
                         SwipeLog.note("\(name) \(moving ? "moving" : "rest") size \(Int(r.size.width))x\(Int(r.size.height)) insets t\(Int(r.insets.top)) l\(Int(r.insets.leading)) b\(Int(r.insets.bottom)) r\(Int(r.insets.trailing))")
                     }
             }
             // Pushed in mid-move, it had no reading at rest yet: the last one counts once the move is over.
             .onChange(of: transit.active) { _, now in
-                if !now, box.shown, let l = box.latest { box.rest = l; box.settled = true }
+                if !now, box.shown, let l = box.latest { box.rest = l; box.settled = true; box.turned = false }
                 SwipeLog.note("\(name) transit \(now ? "began" : "ended")")
             }
-            .onAppear { box.shown = true }
+            .onAppear {
+                box.shown = true
+                // Back in front, unsettled by a turn while covered: its latest reading counts once nothing is moving.
+                if box.turned, !NavTransit.shared.moving(), let l = box.latest { box.rest = l; box.settled = true; box.turned = false }
+            }
             .onDisappear { box.shown = false }
             .task {
                 try? await Task.sleep(nanoseconds: 600_000_000)

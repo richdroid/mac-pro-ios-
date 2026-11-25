@@ -555,7 +555,9 @@ extension View {
     // A tab's own root page: its title is the first row, so no empty bar sits above it and every tab starts at the same
     // height. Pages pushed over it have the system's bar, with its Back.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
-        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)")
+        // Held at its size and safe area while the edge swipe moves it (Shared/Duo.swift HoldsWhileMoving): the tab coming
+        // back under a page swiped off slides in whole instead of re-flowing its rows as it goes (later list 11-24, 12).
+        self.holdsWhileMoving("tab \(tab)").modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)")
             // Its name for the system (Back over a page pushed from it, and the long press on Back), its bar hidden.
             .navigationTitle(RootView.titles[tab] ?? "")
             .toolbar(.hidden, for: .navigationBar)
@@ -2808,7 +2810,7 @@ struct SoundsTab: View {
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
         // A value's list is pushed (the system's Back and edge swipe) in every posture.
         .navigationDestination(isPresented: Binding(get: { choosing != nil }, set: { if !$0 { choosing = nil } })) {
-            if let c = choosing { chooserPage(c).environmentObject(model) }
+            if let c = choosing { chooserPage(c).environmentObject(model).holdsWhileMoving("chooser") }
         }
         .fillCover(isPresented: $pickSong) { MacSongPicker(draft: draft).environmentObject(model) }
         .alert("Add a Pandora station", isPresented: $addStation) {

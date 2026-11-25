@@ -24,19 +24,24 @@ struct SettingsPages: ViewModifier {
     @MainActor static var scripted = false
     func body(content: Content) -> some View {
         content
+            // Each held at its size while the edge swipe moves it (Shared/Duo.swift HoldsWhileMoving).
             .navigationDestination(for: SettingsRoute.self) { r in
-                switch r {
-                case .root: TVSettingsPage()
-                case .box: BoxPage()
-                }
+                Group {
+                    switch r {
+                    case .root: TVSettingsPage()
+                    case .box: BoxPage()
+                    }
+                }.holdsWhileMoving("settings")
             }
-            .navigationDestination(for: AppsRoute.self) { _ in AppsPage() }
+            .navigationDestination(for: AppsRoute.self) { _ in AppsPage().holdsWhileMoving("apps") }
             .navigationDestination(for: ManagePage.self) { page in
-                switch page {
-                case .apps: ManageAppsView(store: store)
-                case .settings: ManageSettingsView(store: store)
-                case .connection: ConnectionView()
-                }
+                Group {
+                    switch page {
+                    case .apps: ManageAppsView(store: store)
+                    case .settings: ManageSettingsView(store: store)
+                    case .connection: ConnectionView()
+                    }
+                }.holdsWhileMoving("manage")
             }
             // For the build's film where touches can't reach: Settings pushed and popped, then TV settings, at a finger's pace.
             .onAppear {

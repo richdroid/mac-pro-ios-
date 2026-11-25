@@ -472,7 +472,7 @@ struct Page<C: View>: View {
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
                 .navigationDestination(for: TitleRoute.self) { r in
-                    if let t = TitleRoutes.target(r) { TitlePage(target: t) }
+                    if let t = TitleRoutes.target(r) { TitlePage(target: t).holdsWhileMoving("title") }
                 }
                 .modifier(SettingsPages(tab: tab))
                 .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
@@ -3347,7 +3347,14 @@ struct UnderFlick: ViewModifier {
         // and must be drawn there for the picture to land on, while the page's own rail stays beside it.
         let covered = ((model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering) && !(warms && model.remoteWarming)
         content
+            // Held at its size and safe area while the edge swipe moves it (Shared/Duo.swift HoldsWhileMoving), so a page
+            // swiped off, and the one coming back under it, slide whole instead of re-flowing their text as they go
+            // (Richard, 2026-11-24: "the elements with text compress in a stupid manner").
+            .holdsWhileMoving(warms ? "remote" : barHidden ? "pushed" : "tab")
             .opacity(covered ? 0 : 1)
+            // Faded out under a flick's page, it takes no touches either: invisible, it still caught them (opacity alone
+            // leaves a view hit-testable).
+            .allowsHitTesting(!covered)
             // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay
             // under the faded page, a brown (28,16,10) against the page's near-black (8,5,4) edge, a band (r30).
             .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
