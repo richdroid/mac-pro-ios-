@@ -183,7 +183,8 @@ private struct TiltBody<L: View>: View {
             .rotation3DEffect(.radians(on ? 0.3 * off : 0), axis: (x: -dy, y: dx, z: 0), perspective: on ? 0.5 : 0)
             .animation(on ? .easeOut(duration: 0.05) : .easeOut(duration: 0.1).delay(0.2), value: on)
             #if canImport(UIKit)
-            .simultaneousGesture(TouchDown { at = $0 })
+            // A UIKit recogniser that recognises beside everything and never cancels the button's touch.
+            .gesture(TouchDown { at = $0 })
             #endif
     }
 }
@@ -204,7 +205,8 @@ private struct TouchDown: UIGestureRecognizerRepresentable {
         return g
     }
     func handleUIGestureRecognizerAction(_ g: UILongPressGestureRecognizer, context: Context) {
-        if g.state == .began { down(context.converter.localLocation) }
+        let p: CGPoint? = context.converter.localLocation
+        if g.state == .began, let p { down(p) }
     }
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }

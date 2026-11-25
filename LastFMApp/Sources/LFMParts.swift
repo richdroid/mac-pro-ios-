@@ -392,7 +392,7 @@ struct Page<C: View>: View {
             let side = (leading: g.safeAreaInsets.leading, trailing: g.safeAreaInsets.trailing)
             // WP7's top: the page starts at the top margin, or right under Back's row when the bar runs across the top;
             // never a bar's height lower (Richard, 2026-11-25). The page's own small capitals sit S.head into it.
-            let first: CGFloat = TopBar.across().map { $0.maxY - 4 } ?? (TopBar.caps(top: g.safeAreaInsets.top, height: 0, pushed: true).y - S.head)
+            let first: CGFloat = TopBar.across().map { $0.maxY - 4 } ?? (TopBar.caps(top: g.safeAreaInsets.top, height: 0, pushed: true).y - 4)
             ScrollViewReader { proxy in
                 ScrollView {
                     Color.clear.frame(height: 0).id("top")
