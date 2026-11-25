@@ -1,0 +1,52 @@
+name: Rotation profile
+# Branch-only (lastfm-prof): Rotation built in Release for the simulator, its motions profiled with Time Profiler beside
+# its hitch log, folded and open upright. Published to the lastfm-prof release; never touches lastfm-latest.
+on:
+  push:
+    branches: [lastfm-prof]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: lastfm-prof
+  cancel-in-progress: true
+jobs:
+  prof:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build
+        run: |
+          set -o pipefail
+          brew install xcodegen; xcodegen generate
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Profile
+        continue-on-error: true
+        timeout-minutes: 80
+        run: |
+          set +e
+          exec > >(tee dist/prof.log) 2>&1
+          . ci/lfm-sim.sh; . ci/lfm-prof.sh
+          sim_setup build-sim/Build/Products/Release-iphonesimulator/LastFM.app
+          # The mock's history read once, so every launch after is a warm one.
+          xcrun simctl launch "$DEVICE" $APP -hub home; sleep 40; xcrun simctl terminate "$DEVICE" $APP
+          folded
+          profile_all "" 1
+          upright
+          profile_all "-up" 3
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          gh release view lastfm-prof >/dev/null 2>&1 || gh release create lastfm-prof --prerelease --title "Rotation profile" --notes "Rotation's motions profiled (branch lastfm-prof)." --target lastfm-prof
+          for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > dist/hitches.txt
+          (cd dist && zip -q ../prof.zip prof.log build.log hitches*.txt stalls-*.txt launch-*.txt *.png 2>/dev/null)
+          echo "$GITHUB_SHA run $GITHUB_RUN_NUMBER" > status.txt
+          gh release upload lastfm-prof prof.zip status.txt dist/hitches.txt --clobber
