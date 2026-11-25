@@ -1005,6 +1005,7 @@ struct AlarmsTab: View {
         .environment(\.openCalendarSettings, { openSettings() })
         .navigationDestination(isPresented: $model.alarmsPage) {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
+                .holdsWhileMoving("calendar")
         }
         // Edge to edge (fillCover), with the zoom from its row.
         .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
