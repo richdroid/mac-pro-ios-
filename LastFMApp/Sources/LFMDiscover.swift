@@ -233,10 +233,12 @@ struct AppleMusicButton: View {
     var body: some View {
         Button { Task { openURL(await AppleMusic.shared.link(what, artist: artist, title: title)) } } label: {
             // Says where it goes: Apple's mark and "Music", not a bare note in a circle (review 2026-11-14, item 18).
+            // Still says where it goes (Apple's mark and "Music"), but as a quiet word at the row's end, not a pane of
+            // glass on every row (gate 1: ten identical pills were the least Zune thing on screen).
             HStack(spacing: 3) { Image(systemName: "apple.logo"); Text("Music") }
-                .font(.zune(.subheadline, .semibold)).foregroundStyle(.white).fixedSize()
-                .padding(.horizontal, 14).frame(height: 44)
-                .glassEffect(.regular.interactive(), in: Capsule())
+                .font(.zune(.subheadline, .semibold)).foregroundStyle(.white.opacity(0.75)).fixedSize()
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(Press())
         .accessibilityLabel("Open in Apple Music")

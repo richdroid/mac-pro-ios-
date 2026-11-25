@@ -141,9 +141,15 @@ struct Quickplay: View {
         VStack(alignment: .leading, spacing: S.section) {
             let albums = Self.albums(store.recent)
             if !albums.isEmpty {
-                Panorama(title: "history", items: albums, tiles: true) { e in when(e.last.map { Date(timeIntervalSince1970: TimeInterval($0)) }) }
+                Panorama(title: "just played", items: albums, tiles: true) { e in when(e.last.map { Date(timeIntervalSince1970: TimeInterval($0)) }) }
             }
-            if wide { RotationMosaic().padding(.horizontal, S.margin) }
+            // Open flat the right pane is Quickplay proper (gate 1: a strip over empty black): his week's heavy rotation,
+            // who he's on repeat with, and what's new to him.
+            if wide {
+                RotationMosaic().padding(.horizontal, S.margin)
+                WeekHub(title: "on repeat", list: store.insights.week)
+                if store.insights.discoveries.count >= 3 { WeekHub(title: "new to you", list: store.insights.discoveries) }
+            }
         }
     }
     // Each album once, in the order last played.

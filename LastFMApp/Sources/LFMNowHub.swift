@@ -106,7 +106,8 @@ struct NowPlayingHub: View {
     private var store: Store { Store.shared }
     private var stats: NowStats { NowStats.shared }
     var body: some View {
-        let playing = store.shown?.nowPlaying ?? false
+        // "now playing" only while it's live (Last.fm answering, the song on): else what was last heard (gate 1, item 6).
+        let playing = (store.shown?.nowPlaying ?? false) && !store.trouble
         GeometryReader { g in
             let sideways = g.size.width > g.size.height * 1.15
             Group {
@@ -120,19 +121,19 @@ struct NowPlayingHub: View {
                         }
                         .background(alignment: .top) { wall }
                     } right: {
-                        Pager(.pivot, title: " ", page: Binding(get: { max(page, 1) }, set: { page = $0 }), top: 0, panels: Array(panels(.column).dropFirst()))
+                        Pager(.pivot, title: " ", page: Binding(get: { max(page, 1) }, set: { page = $0 }), top: 0, panels: Array(panels(.column, playing: playing).dropFirst()))
                     }
                 } else {
                     Pager(.pivot, title: playing ? "now playing" : "last played", page: $page, top: 0,
-                          panels: panels(sideways ? .short : size == .regular ? .wide : .column))
+                          panels: panels(sideways ? .short : size == .regular ? .wide : .column, playing: playing))
                 }
             }
         }
         .task(id: store.shown?.id) { if let s = store.shown { stats.load(s) } }
     }
 
-    private func panels(_ layout: NowHero.Layout) -> [Panel] {
-        var out = [Panel(0, "playing") {
+    private func panels(_ layout: NowHero.Layout, playing: Bool) -> [Panel] {
+        var out = [Panel(0, playing ? "playing" : "played") {
             VStack(alignment: .leading, spacing: S.section) { hero(layout) }
                 .background(alignment: .top) { wall }
         }]
@@ -168,8 +169,9 @@ struct NowFigures: View {
         BigFigures(items: [
             stats.track?.listeners.map { (compact($0), "listeners") },
             stats.track?.plays.map { (compact($0), "scrobbles") },
-            (stats.track?.userPlays ?? stats.trackStory?.plays).map { (number($0), $0 == 1 ? "your play" : "your plays") },
-            (stats.artist?.userPlays ?? stats.artistStory?.plays).flatMap { $0 > 0 ? (number($0), "artist plays") : nil },
+            // His plays of it and of the artist are the hero's own line; here his place and his first time with it.
+            stats.trackStory.flatMap { st in st.rank.map { ("#\(number($0))", "of your \(number(st.of)) songs") } },
+            stats.trackStory?.first.map { (dateShort($0), "first scrobble") },
         ].compactMap { $0 })
         .animation(.easeOut(duration: 0.2), value: stats.key)
     }
@@ -349,11 +351,12 @@ struct TagsBlock: View {
 // History: his day, and every play. A pivot of two: "today" (the figures, the last song when nothing's on, the day by the
 // hour) and "recent" (every scrobble, by day).
 struct HistoryHub: View {
-    @State private var page = 0
+    @State private var page: Int
+    init(start: Int = 0) { _page = State(initialValue: min(max(start, 0), 1)) }
     private var store: Store { Store.shared }
     var body: some View {
         let playing = store.shown?.nowPlaying ?? false
-        Pager(.pivot, page: $page, top: 0, panels: [
+        HubPivot(page: $page, panels: [
             Panel(0, "today") {
                 VStack(alignment: .leading, spacing: S.section) {
                     if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
@@ -363,6 +366,15 @@ struct HistoryHub: View {
                     }
                     .padding(.horizontal, S.margin)
                     DaySection(lead: true).id("day")
+                    // The day's songs under its chart, newest first (gate 1: half the page was empty).
+                    let today = Array(store.today.reversed())
+                    if !today.isEmpty {
+                        VStack(alignment: .leading, spacing: S.head) {
+                            SectionHead(text: "today's songs", trailing: "\(today.count)")
+                            VStack(spacing: 0) { ForEach(today.prefix(40)) { s in TrackRow(s: s) } }
+                        }
+                        .padding(.horizontal, S.margin)
+                    }
                 }
             },
             Panel(1, "recent") { RecentSection(skipFirst: false) },

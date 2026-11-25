@@ -491,7 +491,7 @@ struct TrackPage: View {
                         Text("Now playing")
                     } else if let d = s.date {
                         Image(systemName: "clock.arrow.circlepath")
-                        Text("Played \(dayName(d) == "today" ? "today" : dayName(d) == "yesterday" ? "yesterday" : dayName(d).capitalizedFirst) at \(d.formatted(date: .omitted, time: .shortened))")
+                        Text("Played \(dayName(d) == "today" ? "today" : dayName(d) == "yesterday" ? "yesterday" : dayName(d).capitalizedFirst) at \(d.formatted(date: .omitted, time: .shortened).plainSpaces)")
                     }
                 }
                 .font(.zune(.subheadline, .semibold)).foregroundStyle(.white.opacity(0.85)).padding(.top, S.pair)

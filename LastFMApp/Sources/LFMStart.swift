@@ -28,7 +28,7 @@ struct ProfileHub: View {
                         }.padding(.top, S.head)
                     }
                 } right: {
-                    Pager(.pivot, page: Binding(get: { max(page, 1) }, set: { page = $0 }), top: 0, panels: [lately, story])
+                    Pager(.pivot, title: " ", page: Binding(get: { max(page, 1) }, set: { page = $0 }), top: 0, panels: [lately, story])
                 }
             } else {
                 // A pivot of three, his own first: him and his figures, what's moving him lately, his story. Every name

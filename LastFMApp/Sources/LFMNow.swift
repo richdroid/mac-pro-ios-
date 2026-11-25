@@ -20,7 +20,7 @@ struct TodayFigures: View {
                 // Albums, not the streak: the streak has its own card on the same screen (review 2026-11-14, item 2).
                 { (n: Int) in (number(n), n == 1 ? "album" : "albums") }(Set(today.filter { !$0.album.isEmpty }.map { $0.artist + "\u{1F}" + $0.album }).count),
                 // When his day's music began.
-                today.first?.date.map { ($0.formatted(date: .omitted, time: .shortened), "first play") },
+                today.first?.date.map { ($0.formatted(date: .omitted, time: .shortened).plainSpaces, "first play") },
             ].compactMap { $0 })
         }
     }
@@ -377,7 +377,7 @@ struct DaySection: View {
     }
     static func hourLabel(_ h: Int) -> String {
         var c = DateComponents(); c.hour = h
-        return (Calendar.current.date(from: c) ?? .now).formatted(.dateTime.hour())
+        return (Calendar.current.date(from: c) ?? .now).formatted(.dateTime.hour()).plainSpaces
     }
     // Night: 8 PM to 6 AM, as runs of columns from where his day starts (one run, or two when the day starts at night).
     static func nightRuns(start: Int) -> [(first: Int, count: Int)] {
@@ -530,7 +530,7 @@ struct RunRow: View {
     // "3:02 – 3:39 PM": the first time without its AM or PM when both share it.
     static func span(_ a: Date?, _ b: Date?) -> String {
         guard let a, let b else { return "" }
-        let fa = a.formatted(date: .omitted, time: .shortened), fb = b.formatted(date: .omitted, time: .shortened)
+        let fa = a.formatted(date: .omitted, time: .shortened).plainSpaces, fb = b.formatted(date: .omitted, time: .shortened).plainSpaces
         let pa = fa.split(separator: " "), pb = fb.split(separator: " ")
         if pa.count == 2, pb.count == 2, pa[1] == pb[1] { return "\(pa[0]) – \(fb)" }
         return "\(fa) – \(fb)"
@@ -550,7 +550,7 @@ struct TrackRow: View {
                 }
                 Spacer(minLength: 8)
                 if s.loved { Image(systemName: "heart.fill").font(.zune(.footnote)).foregroundStyle(S.accent).accessibilityLabel("Loved") }
-                Text(s.date?.formatted(date: .omitted, time: .shortened) ?? "").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft)
+                Text(s.date?.formatted(date: .omitted, time: .shortened).plainSpaces ?? "").font(.zune(.subheadline)).monospacedDigit().foregroundStyle(S.soft)
             }
             .padding(.vertical, S.row / 2)
             .contentShape(Rectangle())

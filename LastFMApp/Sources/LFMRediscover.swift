@@ -106,7 +106,7 @@ struct DiscoverHub: View {
     private var m: DiscoverModel { DiscoverModel.shared }
     private var re: RediscoverModel { RediscoverModel.shared }
     var body: some View {
-        Pager(.pivot, page: $page, top: 0, panels: [
+        HubPivot(page: $page, panels: [
             Panel(0, "for you") { DiscoverParts.ForYou() },
             Panel(1, "songs") { DiscoverParts.Songs() },
             Panel(2, "rediscover") { RediscoverPage() },

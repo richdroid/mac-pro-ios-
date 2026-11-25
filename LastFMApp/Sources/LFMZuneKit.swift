@@ -33,6 +33,44 @@ extension Z {
     #endif
 }
 
+extension String {
+    // Selawik has no narrow no-break space (iOS puts one before AM and PM), so the fallback drew a wide hole: "7:01  AM"
+    // (gate 1, item 11). Plain spaces in every time the app sets.
+    var plainSpaces: String { replacingOccurrences(of: "\u{202F}", with: " ").replacingOccurrences(of: "\u{00A0}", with: " ") }
+}
+
+// A hub's pivot in every posture, one rule (gate 1, item 7): folded and open upright, the pivot under the hub's small
+// capitals; open flat, the small capitals once at the top left, the first page in the left pane under its own huge name,
+// and the rest as a pivot in the right pane, its names level with that name. Nothing crosses the fold.
+struct HubPivot: View {
+    var title: String? = nil
+    @Binding var page: Int
+    let panels: [Panel]
+    @Environment(\.paneLayout) private var pane
+    @Environment(\.hubName) private var hubName
+    @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
+    var body: some View {
+        if pane, panels.count > 1, let first = panels.first {
+            FoldSplit {
+                Page {
+                    VStack(alignment: .leading, spacing: 0) {
+                        AppTitle(text: title ?? hubName ?? "rotation").frame(height: ceil(20 * min(max(k, 0.9), 1.3)) + 2, alignment: .top).turnstile(0)
+                        Text(first.header).font(.zune(size: 54 * min(max(k, 0.9), 1.2), .light)).tracking(-1).foregroundStyle(.white)
+                            .lineLimit(1).fixedSize().padding(.leading, S.margin - 2).turnstile(0)
+                            .accessibilityAddTraits(.isHeader)
+                        first.content.turnstile(2).padding(.top, S.head * 2)
+                    }
+                    .padding(.top, S.head)
+                }
+            } right: {
+                Pager(.pivot, title: " ", page: Binding(get: { max(page, panels[1].id) }, set: { page = $0 }), top: 0, panels: Array(panels.dropFirst()))
+            }
+        } else {
+            Pager(.pivot, title: title, page: $page, top: 0, panels: panels)
+        }
+    }
+}
+
 // The application title that sits over every page in Windows Phone 7: small capitals, hung from the page's edge
 // (20 px caps in the theme; recalled position 12 from the top). Here it names where he is: ROTATION on home, the hub's
 // name over its pages.

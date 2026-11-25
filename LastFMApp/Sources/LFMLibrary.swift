@@ -122,14 +122,15 @@ struct LibraryTab: View {
         .onDisappear { typing = nil }
         .task {
             guard Pose.name == "search" else { return }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            // Once the lists are in, so the shot shows results, not the shelf loading.
+            for _ in 0..<40 where m.lists[.tracks] == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
             m.query = LastFM.shared.mock ? "glass" : ""
         }
     }
 
     private var head: some View {
         VStack(alignment: .leading, spacing: S.head) {
-            VStack(alignment: .leading, spacing: 0) { AppTitle(text: "rotation"); HubTitle(text: "library", size: 80) }
+            VStack(alignment: .leading, spacing: 0) { AppTitle(text: "library"); HubTitle(text: "library", size: 80) }
             search(m.shelf).padding(.horizontal, S.margin)
             if m.query.isEmpty {
                 Segments(items: LibShelf.allCases, selection: Binding(get: { m.shelf }, set: { m.shelf = $0 }), fill: true) { $0.name }
@@ -143,12 +144,13 @@ struct LibraryTab: View {
         let kind = Kind(rawValue: m.shelf.rawValue) ?? .artists
         let top = m.shelf == .loved ? [] : Array((m.lists[kind] ?? []).prefix(9))
         VStack(alignment: .leading, spacing: S.section) {
+            // Each count once it's known, never a zero while it's being worked out (gate 1, item 3).
             FigureGrid(items: [
-                (number(m.lists[.artists]?.count ?? 0), "artists"),
-                (number(m.lists[.albums]?.count ?? 0), "albums"),
-                (number(m.lists[.tracks]?.count ?? 0), "tracks"),
+                m.lists[.artists].map { (number($0.count), "artists") },
+                m.lists[.albums].map { (number($0.count), "albums") },
+                m.lists[.tracks].map { (number($0.count), "tracks") },
                 (number(m.loved.count), "loved"),
-            ])
+            ].compactMap { $0 })
             if top.count == 9 {
                 VStack(alignment: .leading, spacing: S.head) {
                     SectionHead(text: "most played")

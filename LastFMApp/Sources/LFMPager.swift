@@ -172,8 +172,8 @@ struct Pager: View {
                 // on (run 49 gate).
                 let H = cut + 60
                 LinearGradient(stops: [
-                    .init(color: S.ground.opacity(0.95), location: 0),
-                    .init(color: S.ground.opacity(0.93), location: max(0, cut - 24) / H),
+                    .init(color: S.ground.opacity(0.55), location: 0),
+                    .init(color: S.ground.opacity(0.6), location: max(0, cut - 24) / H),
                     .init(color: S.ground.opacity(0.8), location: cut / H),
                     .init(color: S.ground.opacity(0.5), location: (cut + 14) / H),
                     .init(color: S.ground.opacity(0.22), location: (cut + 30) / H),
@@ -248,17 +248,22 @@ struct Pager: View {
         }
     }
 
+    // Pinned to its page for its first three seconds, until his first touch: pushed on the stack, a pivot is laid out
+    // more than once (the push, the side strip arriving, the bars), and a scroll set before the last of those rested
+    // between pages or lit the wrong name (gate 1: discover's songs under a lit "for you"; profile upright two pages at
+    // once). Each pin sets the offset and the lit name together, so they can't disagree.
     private func place() async {
-        guard start > 0, start < panels.count else { placed = true; return }
-        // Up to 10 s: on a busy first launch 2.4 s wasn't enough and Now opened on his page (run 34, lfm-now folded).
-        for _ in 0..<80 {
-            // Never against his finger: the first touch ends the placing.
+        var settledOnce = false
+        for k in 0..<12 {
             if phase != .idle { break }
-            // Checked against the offset and the width as they are now, never a fraction worked out before a width change.
-            if width > 1, abs(motion.x - CGFloat(start) * width) < 0.5 { break }
-            var t = Transaction(); t.disablesAnimations = true
-            if width > 1 { withTransaction(t) { pos.scrollTo(x: CGFloat(start) * width) } }
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            if width > 1, let i = panels.firstIndex(where: { $0.id == page }) {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { pos.scrollTo(x: CGFloat(i) * width) }
+                motion.x = CGFloat(i) * width; motion.f = CGFloat(i)
+                settledOnce = true
+            }
+            if k == 1, settledOnce { placed = true }
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
         placed = true
     }
@@ -306,6 +311,15 @@ private struct PivotHeaders: View {
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(i == current ? [.isSelected, .isHeader] : [])
                 }
+                // The pages before this one, wrapped round after the last name, dimmed and tappable.
+                ForEach(0..<min(current, names.count), id: \.self) { i in
+                    Button { choose(i) } label: {
+                        Text(names[i]).font(.zune(size: size, .light)).tracking(-1).fixedSize()
+                            .foregroundStyle(.white).opacity(0.38).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHidden(true)
+                }
             }
             .padding(.leading, S.margin - 2)
             // Room after the last name, so the last ones reach the left as the others do.
@@ -338,14 +352,12 @@ private struct PivotHeaders: View {
     }
     // The name before leads only when the current one still fits whole beside it, short of the fade at the right;
     // else the current name leads at the margin (run ddd24ed: "rediscover" cut by the side strip).
+    // WP7's pivot: the current name leads at the margin, the ones after it follow dimmed, and the ones before it wrap
+    // round to the end of the row (gate 1: with the previous name leading, the row read as being on that page).
     private static func measure(_ names: [String], _ size: CGFloat, pw: CGFloat) -> [CGFloat] {
-        var starts: [CGFloat] = [], widths: [CGFloat] = [], x: CGFloat = 0
-        for n in names { let w = textWidth(n, size: size, tracking: -1, weight: -0.4); starts.append(x); widths.append(w); x += w + gap }
-        let room = pw - (S.margin - 2) - 40
-        return names.indices.map { i in
-            guard i > 0 else { return 0 }
-            return starts[i] + widths[i] - starts[i - 1] <= room ? starts[i - 1] : starts[i]
-        }
+        var starts: [CGFloat] = [], x: CGFloat = 0
+        for n in names { starts.append(x); x += textWidth(n, size: size, tracking: -1, weight: -0.4) + gap }
+        return starts
     }
     // Between two pages, between their two rests.
     static func at(_ f: CGFloat, _ rests: [CGFloat]) -> CGFloat {

@@ -9,7 +9,7 @@ struct ScrobbleHub: View {
     @State private var page: Int
     init(start: Int) { self.start = start; _page = State(initialValue: min(max(start, 0), 1)) }
     var body: some View {
-        Pager(.pivot, page: $page, top: 0, panels: [
+        HubPivot(page: $page, panels: [
             Panel(0, "log") { ScrobbleLogPage() },
             Panel(1, "settings") { ScrobbleSettingsPage() },
         ])
@@ -20,7 +20,7 @@ private struct WaitingNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: S.head) {
             Text("waiting").font(.zune(size: 54, .light)).tracking(-1).foregroundStyle(.white)
-            Text("Scrobbling switches on once Last.fm's shared secret is added to the app. Until then nothing is sent, and your listening on Last.fm is unchanged.")
+            Text("Scrobbling arrives with the next build of Rotation. Until then nothing is sent, and your Last.fm is unchanged.")
                 .font(.zune(.body)).foregroundStyle(Z.subtle).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, S.margin)
@@ -40,16 +40,17 @@ struct ScrobbleLogPage: View {
                 BigFigures(items: [
                     (number(sc.todayCount), "scrobbled today"),
                     (number(sc.queue.count), "waiting to send"),
-                    (sc.lastCatchUp.map { $0.formatted(date: .omitted, time: .shortened) } ?? "–", "library checked"),
+                    (sc.lastCatchUp.map { $0.formatted(date: .omitted, time: .shortened).plainSpaces } ?? "–", "library checked"),
                 ]).padding(.horizontal, S.margin)
                 if !sc.enabled {
                     Text("Scrobbling is off. Turn it on in settings.").font(.zune(.body)).foregroundStyle(Z.subtle).padding(.horizontal, S.margin)
                 }
                 if let l = sc.live { LiveSong(l: l).padding(.horizontal, S.margin) }
             }
-            if !sc.log.isEmpty {
+            // Only what was really sent: never ticks under "waiting" or "connect" (gate 1, item 12).
+            if account.signedIn, !sc.log.isEmpty {
                 VStack(alignment: .leading, spacing: S.head) {
-                    SectionHead(text: "log")
+                    SectionHead(text: "latest")
                     LazyVStack(spacing: 0) { ForEach(sc.log.prefix(150)) { n in LogRow(n: n) } }
                 }
                 .padding(.horizontal, S.margin)
@@ -87,12 +88,12 @@ private struct LogRow: View {
     let n: ScrobbleNote
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: S.gap) {
-            Text(Date(timeIntervalSince1970: n.played).formatted(date: .omitted, time: .shortened))
+            Text(Date(timeIntervalSince1970: n.played).formatted(date: .omitted, time: .shortened).plainSpaces)
                 .font(.zune(.subheadline)).monospacedDigit().foregroundStyle(Z.subtle).frame(width: 66, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(n.title).font(.zune(.body, .semibold)).foregroundStyle(.white).lineLimit(1)
                 Text(n.artist + (n.how == "caught up" ? " · caught up" : "")).font(.zune(.subheadline)).foregroundStyle(Z.subtle).lineLimit(1)
-                if let d = n.detail { Text(d).font(.zune(.footnote)).foregroundStyle(.white.opacity(0.45)).lineLimit(1) }
+                if let d = n.detail, n.kind != .duplicate { Text(d).font(.zune(.footnote)).foregroundStyle(.white.opacity(0.45)).lineLimit(1) }
             }
             Spacer(minLength: 0)
             mark

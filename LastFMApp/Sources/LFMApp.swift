@@ -151,7 +151,7 @@ struct HubView: View {
             case .charts: ChartsTab(top: 0)
             case .library: LibraryTab(top: 0)
             case .discover: DiscoverHub(start: panel ?? 0)
-            case .history: HistoryHub()
+            case .history: HistoryHub(start: panel ?? 0)
             case .scrobbling: ScrobbleHub(start: panel ?? 0)
             }
         }

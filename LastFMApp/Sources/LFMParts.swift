@@ -226,24 +226,25 @@ struct Segments<T: Hashable>: View {
             }
         }
     }
+    // Zune's way of choosing among siblings: the words themselves, lowercase, the chosen one white and the rest dimmed,
+    // no box round them (gate 1: iOS glass capsules sat oddly under WP7 type).
     private var bar: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .firstTextBaseline, spacing: 20) {
             ForEach(items, id: \.self) { t in
                 let on = t == selection
                 Button { withAnimation(.snappy(duration: 0.25)) { selection = t } } label: {
-                    Text(label(t)).font(.zune(.subheadline, .semibold)).foregroundStyle(.white.opacity(on ? 1 : 0.7))
+                    Text(label(t).lowercased()).font(.zune(.title2, .light))
+                        .foregroundStyle(.white.opacity(on ? 1 : 0.4))
                         .lineLimit(1).fixedSize()
-                        .padding(.horizontal, 14).frame(height: 36).frame(maxWidth: fill ? .infinity : nil)
-                        .background { if on { Capsule().fill(.white.opacity(0.24)).matchedGeometryEffect(id: "lit", in: lit) } }
-                        .contentShape(Capsule())
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .id(t)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
+            if fill { Spacer(minLength: 0) }
         }
-        .padding(4)
-        .glassEffect(.regular, in: Capsule())
         .sensoryFeedback(.tick, trigger: selection)
     }
 }
