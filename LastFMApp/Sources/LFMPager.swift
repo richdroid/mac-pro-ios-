@@ -67,7 +67,9 @@ struct Pager: View {
     @State private var selfPage: Int?
     // Only the page it opens on is built in the push's first frames; the others half a second later, at rest, before
     // any swipe can reach them (gate 2b: a hub built all its pages in the frame it was pushed).
-    @State private var all = false
+    // Then one page at a time, about 80 ms apart, the pages beside it first: built all in one frame (two or three pages
+    // and their cards), the main thread was held 2-3 s a few seconds after a hub opened (profile run 1).
+    @State private var ready: Set<Int> = []
     @State private var copies = false
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     // WP7's application title over the names: the hub's name in small capitals (or a title given).
@@ -128,7 +130,7 @@ struct Pager: View {
                         ForEach(Array(slots.enumerated()), id: \.offset) { k, i in
                             // The real pages at rest half a second in; the wrap's two copies a second after that.
                             let copy = cyclic && (k == 0 || k == slots.count - 1)
-                            Group { if (all && (!copy || copies)) || k == built || n == 1 { panel(panels[i], head, cut, bars.bottom, pw, side) } else { Color.clear } }
+                            Group { if (ready.contains(k) && (!copy || copies)) || k == built || n == 1 { panel(panels[i], head, cut, bars.bottom, pw, side) } else { Color.clear } }
                                 .frame(width: W).id(k)
                         }
                     }
@@ -166,9 +168,17 @@ struct Pager: View {
                 }
                 .task { await place() }
                 .task {
-                    try? await Task.sleep(nanoseconds: 500_000_000); all = true
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    // Nearest first (the next page, then the one before), each in a frame of its own, never mid-swipe.
+                    let b = slot(index)
+                    let order = Array(slots.indices).sorted { abs($0 - b) < abs($1 - b) }.filter { $0 != b }
+                    for k in order where !Task.isCancelled {
+                        while phase != .idle, !Task.isCancelled { try? await Task.sleep(nanoseconds: 100_000_000) }
+                        ready.insert(k)
+                        try? await Task.sleep(nanoseconds: 80_000_000)
+                    }
                     // The copies only once nothing is moving, so their build never lands in a swipe's frames.
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: 600_000_000)
                     // Never round again once the hub has gone: a cancelled sleep throws at once, so a hub popped mid-swipe
                     // spun here on the main thread for as long as the app was open.
                     while phase != .idle, !Task.isCancelled { try? await Task.sleep(nanoseconds: 200_000_000) }

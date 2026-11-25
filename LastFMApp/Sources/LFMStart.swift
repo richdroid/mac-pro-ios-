@@ -48,8 +48,11 @@ struct ProfileHub: View {
         .task(id: sync.complete) { await Taste.shared.refresh() }
     }
 
+    // Lazy, as every long pivot page: the Pager builds its other pages and the wrap's copies at rest, and as plain stacks
+    // every card of every page was laid out at once (2-3 s with the main thread held, ~3 s after the profile opened, and
+    // swipes at 34-47 fps; profile run 1). Only a page's first screen is built until he scrolls.
     private func stats(wide: Bool) -> some View {
-        VStack(alignment: .leading, spacing: S.section) {
+        LazyVStack(alignment: .leading, spacing: S.section) {
             ProfileHead().padding(.horizontal, S.margin)
             if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
             if wide {
@@ -86,7 +89,7 @@ struct ProfileHub: View {
     // This week and what's moving him now.
     private var lately: Panel {
         Panel(1, "lately") {
-            VStack(alignment: .leading, spacing: S.section) {
+            LazyVStack(alignment: .leading, spacing: S.section) {
                 TasteWeekNote()
                 WeekHub(title: "on repeat", list: store.insights.week)
                 RisingCard().padding(.horizontal, S.margin)
@@ -102,7 +105,7 @@ struct ProfileHub: View {
     // His story across the years, and all of it in months.
     private var story: Panel {
         Panel(2, "story") {
-            VStack(alignment: .leading, spacing: S.section) {
+            LazyVStack(alignment: .leading, spacing: S.section) {
                 // Always here: the story is made from the whole history, so until it's read the years being read are the
                 // story so far, never a blank page (Richard's screenshot, 2026-11-14: "your story" and nothing under it).
                 YearsSection()

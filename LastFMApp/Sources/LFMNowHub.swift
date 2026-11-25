@@ -361,7 +361,8 @@ struct HistoryHub: View {
         let playing = store.shown?.nowPlaying ?? false
         HubPivot(page: $page, panels: [
             Panel(0, "today") {
-                VStack(alignment: .leading, spacing: S.section) {
+                // Lazy, the day's songs too: forty rows were laid out in the frame the hub opened.
+                LazyVStack(alignment: .leading, spacing: S.section) {
                     if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
                     VStack(alignment: .leading, spacing: S.section) {
                         TodayFigures()
@@ -374,7 +375,7 @@ struct HistoryHub: View {
                     if !today.isEmpty {
                         VStack(alignment: .leading, spacing: S.head) {
                             SectionHead(text: "today's songs", trailing: "\(today.count)")
-                            VStack(spacing: 0) { ForEach(today.prefix(40)) { s in TrackRow(s: s) } }
+                            LazyVStack(spacing: 0) { ForEach(today.prefix(40)) { s in TrackRow(s: s) } }
                         }
                         .padding(.horizontal, S.margin)
                     }

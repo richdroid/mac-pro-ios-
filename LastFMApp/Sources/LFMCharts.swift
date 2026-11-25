@@ -276,7 +276,8 @@ struct ChartsTab: View {
                       accessory: AnyView(kindPicker.padding(.horizontal, S.margin)),
                       panels: pages.enumerated().map { i, p in
                           Panel(i, p.name.lowercased()) {
-                              VStack(alignment: .leading, spacing: S.section) {
+                              // Lazy: built a first screen at a time (every stretch's page is built at rest).
+                              LazyVStack(alignment: .leading, spacing: S.section) {
                                   // His top list straight after the figures, the collage after it: the list is what he
                                   // comes for, and it sat more than a screen down under the picture (review, run 27).
                                   content(p, onlyLeft: false, collage: false)
