@@ -90,9 +90,15 @@ jobs:
           $D "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
           ls dist | wc -l
-      - uses: actions/upload-artifact@v4
+      - name: Publish (branch prerelease mp-debug-1125, not macpro-latest)
         if: always()
-        with:
-          name: mp-debug-shots
-          path: dist/*.png
-          retention-days: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view mp-debug-1125 >/dev/null 2>&1 || gh release create mp-debug-1125 --prerelease --target mp-debug-1125 --title "Mac Pro debug 1125 shots" --notes "Branch-only shots for the 11-25 debug pass."
+          for f in shots.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload mp-debug-1125 "$f" --clobber && break; sleep 15; done
+          done
