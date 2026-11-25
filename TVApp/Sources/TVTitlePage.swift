@@ -331,13 +331,31 @@ struct TitlePage: View {
         }
         let tint = ImageStore.shared.cachedBand(URL(string: art))
         let title = st.item.title
-        // The card leaves first, with his speed, in the same turn as his release; the send follows on the next turn, so
-        // nothing the send does can hold the card where he let go (gate on cbfc0b5: up to a second between the two).
+        // The card leaves first, with his speed, in the same turn as his release, and the send goes as it lands: sent at the
+        // release, the start redrew the app mid-flight (tv-pass-1122; CI f933278 logged the send 160 ms before landing).
+        // The flight is drawn by the window's own layer (HandOverlay): inside the navigation stack the card was cut off at
+        // the page's top edge, under the lip. The window's carry takes over exactly where his finger left it.
+        if !art.isEmpty, Hand.shared.lifted == nil, carry.rest.width > 4 {
+            let hand = Hand.shared.liftCarry
+            hand.adopt(carry)
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) {
+                Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest)
+                carry.hideForFlight()
+            }
+            hand.fly(v) {
+                Hand.shared.land(title: title, art: art, tint: tint)
+                withAnimation(.easeOut(duration: 0.3)) { Hand.shared.lifted = nil }
+                carry.reappear()
+                send?()
+            }
+            return
+        }
         carry.fly(v) {
             Hand.shared.land(title: title, art: st.item.art, tint: tint)
             carry.reappear()
+            send?()
         }
-        Task { @MainActor in send?() }
     }
     // MARK: the words
     var facts: String {

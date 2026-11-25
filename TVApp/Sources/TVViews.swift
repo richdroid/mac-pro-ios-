@@ -1585,10 +1585,13 @@ struct RemoteTab: View {
         let grid = gridFor(k)
         let room = roomFor(grid)
         let w = grid.width
-        let d = max(110, min(((w - 16) * 9 / 25).rounded(.down), room))
+        // Where the width holds the keys back (folded: five keys and their 8 pt gaps), the pad takes more of its row, up to
+        // 45% (the picture stays the bigger of the two); what's still over is shared between the rows, never one band.
+        let d = max(110, min(((w - 16) * 0.45).rounded(.down), room))
         let pw = min(w - 16 - d, d * 16 / 9)
+        let spread = min(16, max(0, room - d) / (rows + 1)).rounded(.down)
         return VStack(spacing: 0) {
-            VStack(spacing: gap) {
+            VStack(spacing: gap + spread) {
                 HStack(spacing: max(16, w - pw - d)) {
                     picture(closable: true).frame(width: pw, height: pw * 9 / 16)
                     pad.frame(width: d, height: d)
