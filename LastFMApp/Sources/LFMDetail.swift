@@ -35,6 +35,7 @@ struct PageLayout<Head: View, Rest: View>: View {
     @ViewBuilder let head: (_ wide: Bool) -> Head
     @ViewBuilder let rest: () -> Rest
     @Environment(\.paneLayout) private var pane
+    @State private var scrolled = false
     var body: some View {
         // The width read in the pass that lays the page out: it was measured after, so the first frame of a page (and
         // of a turn) was the narrow layout (run 39 review, fault 1).
@@ -42,19 +43,20 @@ struct PageLayout<Head: View, Rest: View>: View {
             let wide = g.size.width > 640
             if pane {
                 FoldSplit {
-                    Page { head(false).padding(.top, S.head - 8) }
+                    Page(scrolled: $scrolled) { head(false).padding(.top, S.head - 8) }
                 } right: {
-                    Page { VStack(alignment: .leading, spacing: S.section) { rest() }.padding(.top, S.section) }
+                    Page(scrolled: $scrolled) { VStack(alignment: .leading, spacing: S.section) { rest() }.padding(.top, S.section) }
                 }
             } else {
-                Page {
-                    // 8 pt higher than a plain page: the scroll's own top margin put the small capitals lower than every
-                    // hub's (gate 2a, item 10).
-                    VStack(alignment: .leading, spacing: S.section) { head(wide); rest() }.padding(.top, S.head - 8)
+                // Open upright the small capitals start on Back's row, as a hub's (capsRow); else 8 pt higher than a plain
+                // page: the scroll's own top margin put the small capitals lower than every hub's (gate 2a, item 10).
+                Page(capsRow: true, scrolled: $scrolled) {
+                    // Lazy: what's below the first screen is laid out as he scrolls, not in the push's first frames.
+                    LazyVStack(alignment: .leading, spacing: S.section) { head(wide); rest() }.padding(.top, TopBar.across() != nil ? 0 : S.head - 8)
                 }
             }
         }
-        .modifier(BarFade())
+        .modifier(BarFade(on: scrolled))
         // Behind the fade, not under it: the page's colour runs to every edge.
         .background { Backdrop(ref: ref, moving: false, dim: 0.12) }
     }
@@ -130,7 +132,11 @@ struct PageHead<Byline: View>: View {
         VStack(alignment: .leading, spacing: S.head) {
             // WP7's application title over the page's name: what kind of page it is.
             VStack(alignment: .leading, spacing: 0) {
+                // Open upright on Back's row, beside it (the hubs' place); else at the top margin.
+                let across = !pane && TopBar.across() != nil
                 AppTitle(text: noun == "artists" ? "artist" : noun == "albums" ? "album" : "song")
+                    .frame(height: across ? PageCaps.height : nil, alignment: .center)
+                    .padding(.leading, across ? 64 : 0)
                 HubTitle(text: title, size: 72)
             }
             Group {

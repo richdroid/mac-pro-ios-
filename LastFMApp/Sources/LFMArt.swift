@@ -224,6 +224,45 @@ final class ArtStore: @unchecked Sendable {
         }
         return out
     }
+    // The backdrops' looks baked into the picture, once, off the main thread: a filter on the screen-sized layer (the
+    // hubs' desaturation, now playing's duotone) was drawn off screen in every frame a page moved, and only inside the
+    // page's own bounds, so the picture stopped short of the foot and the side strip in a hard black band (run 63 gate).
+    enum Treat: Hashable, Sendable {
+        case muted                       // the hubs' and pages' backdrop: the cover at 0.6 saturation
+        case duotone                     // now playing: the cover in one colour, its own (vivid, a little lighter)
+        var tag: String { self == .muted ? "muted" : "duo" }
+    }
+    func treatedCached(_ ref: ArtRef, _ t: Treat) -> CGImage? { images.object(forKey: "\(ref.key)@\(t.tag)" as NSString)?.image }
+    func treated(_ ref: ArtRef, _ t: Treat) async -> CGImage? {
+        if let c = treatedCached(ref, t) { return c }
+        let disk = file("treat-\(t.tag):" + ref.key)
+        if let d = try? Data(contentsOf: disk), let src = CGImageSourceCreateWithData(d as CFData, nil),
+           let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 1000] as CFDictionary) {
+            images.setObject(CGImageBox(img), forKey: "\(ref.key)@\(t.tag)" as NSString)
+            return img
+        }
+        guard let big = await image(ref, px: 1000) else { return nil }
+        var ci = CIImage(cgImage: big)
+        switch t {
+        case .muted:
+            ci = ci.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.6])
+        case .duotone:
+            let v = (palette(ref) ?? Palette.from(name: ref.artist + ref.album)).vivid
+            let c = (r: v.r + (1 - v.r) * 0.15, g: v.g + (1 - v.g) * 0.15, b: v.b + (1 - v.b) * 0.15)
+            ci = ci.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0])
+                .applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: c.r, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: c.g, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: c.b, w: 0)])
+        }
+        guard let out = lock.withLock({ context.createCGImage(ci, from: ci.extent) }) else { return nil }
+        images.setObject(CGImageBox(out), forKey: "\(ref.key)@\(t.tag)" as NSString)
+        let m = NSMutableData()
+        if let dest = CGImageDestinationCreateWithData(m, "public.jpeg" as CFString, 1, nil) {
+            CGImageDestinationAddImage(dest, out, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+            if CGImageDestinationFinalize(dest) { try? (m as Data).write(to: disk, options: .atomic) }
+        }
+        return out
+    }
     static let backdropLuma = 0.12
     private static func capped(_ img: CIImage, context: CIContext) -> CIImage {
         let avg = img.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: img.extent)])
@@ -238,6 +277,27 @@ final class ArtStore: @unchecked Sendable {
             "inputBVector": CIVector(x: 0, y: 0, z: k, w: 0)])
     }
     func cachedBackdrop(_ ref: ArtRef) -> CGImage? { images.object(forKey: "\(ref.key)@backdrop2" as NSString)?.image }
+}
+
+// A backdrop's picture with its look baked in (ArtStore.Treat): drawn plain, no filter. The picture before stays until
+// the next is ready; a first one fades in.
+struct TreatedArt: View {
+    let ref: ArtRef
+    let treat: ArtStore.Treat
+    @State private var img: CGImage?
+    init(_ ref: ArtRef, _ treat: ArtStore.Treat) {
+        self.ref = ref; self.treat = treat
+        _img = State(initialValue: ArtStore.shared.treatedCached(ref, treat))
+    }
+    var body: some View {
+        ZStack {
+            if let img { Image(decorative: img, scale: 1).resizable().interpolation(.medium).aspectRatio(contentMode: .fill).transition(.opacity) }
+        }
+        .task(id: "\(ref.key)|\(treat.tag)") {
+            if let c = ArtStore.shared.treatedCached(ref, treat) { if c !== img { img = c }; return }
+            if let i = await ArtStore.shared.treated(ref, treat) { withAnimation(.easeOut(duration: 0.25)) { img = i } }
+        }
+    }
 }
 
 struct CoverShape: ViewModifier {

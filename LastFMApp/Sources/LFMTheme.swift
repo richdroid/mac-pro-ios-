@@ -208,9 +208,10 @@ struct Backdrop: View {
                 if let ref {
                     let side = max(g.height, g.width) * 1.08
                     // Dim and desaturated, as WP7.5's artist pages set their photo behind the pivot.
-                    ArtView(ref, px: 1000, corner: 0)
+                    // The desaturation baked into the picture (no filter on a screen-sized layer).
+                    TreatedArt(ref, .muted)
                         .frame(width: side, height: side)
-                        .saturation(0.6)
+                        .clipped()
                         .offset(x: g.width - side * 0.82, y: -side * 0.06)
                     // Darkest across the top, where the small capitals and names sit over the cover's own lettering.
                     LinearGradient(stops: [.init(color: .black.opacity(0.78 + dim), location: 0),
@@ -238,10 +239,10 @@ struct NowBackdrop: View {
                     // The duotone in the cover's own vivid colour, bright (Zune desktop's is a saturated single colour).
                     let vivid = (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.art.artist + s.art.album)).vivid.color
                     let side = max(g.height, g.width) * 1.05
-                    ArtView(s.art, px: 1000, corner: 0)
+                    // The duotone baked into the picture (no filter on a screen-sized layer).
+                    TreatedArt(s.art, .duotone)
                         .frame(width: side, height: side)
-                        .grayscale(1)
-                        .colorMultiply(vivid.mix(with: .white, by: 0.15))
+                        .clipped()
                         .offset(x: g.width - side * 0.85, y: g.height - side)
                     LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.22), location: 0.5),
                                            .init(color: .black.opacity(0.6), location: 1)], startPoint: .top, endPoint: .bottom)
@@ -267,12 +268,17 @@ struct NowBackdrop: View {
 // At the foot the system's own glass tab bar floats over the page, as in every iOS 26 app.
 struct BarFade: ViewModifier {
     // WP7's system tray is solid: what scrolls up passes under a flat black band as tall as the bars, no fade or blur.
+    // Only once something has scrolled under it: at rest the page's picture runs to the top as a hub's does, the small
+    // capitals on Back's row (run 63 gate: a black bar holding Back, the page "artificially lowered").
+    var on = true
     func body(content: Content) -> some View {
         content.overlay(alignment: .top) {
             GeometryReader { g in
                 let top = max(g.safeAreaInsets.top, g.frame(in: .global).minY)
                 if top > 30 {
                     Color.black.frame(height: TopBar.across()?.maxY ?? top).offset(y: -g.frame(in: .global).minY)
+                        .opacity(on ? 1 : 0)
+                        .animation(.easeOut(duration: 0.15), value: on)
                 }
             }
             .allowsHitTesting(false)
@@ -383,11 +389,14 @@ enum Diag {
         let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
         l.add(to: .main, forMode: .common)
         link = l
+        // And what the main thread was doing in each stall (LFMStalls.swift).
+        StallSampler.shared.start()
     }
     @objc private func tick(_ l: CADisplayLink) {
         let now = l.timestamp
         let interval = max(l.targetTimestamp - l.timestamp, 1.0 / 120)
-        guard last > 0 else { last = now; began = now; mark = now; return }
+        StallSampler.beat = now
+        guard last > 0 else { last = now; began = now; mark = now; StallSampler.origin = now; return }
         let gap = now - last
         last = now
         let late = gap > interval * 1.5, missed = late ? Int((gap / interval).rounded()) - 1 : 0

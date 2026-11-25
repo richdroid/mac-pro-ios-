@@ -370,6 +370,10 @@ private struct PageBleedKey: EnvironmentKey { static let defaultValue = EdgeInse
 // A page's scroll: content, the bottom air, and back to the top when its tab is tapped again.
 struct Page<C: View>: View {
     var top = 0
+    // A detail page's top, as a hub's: open upright its small capitals sit on Back's row (the scroll starts there), and
+    // it says when anything has scrolled up under the bar (BarFade shows the tray only then).
+    var capsRow = false
+    var scrolled: Binding<Bool>? = nil
     @ViewBuilder let content: () -> C
     var body: some View {
         GeometryReader { g in
@@ -379,7 +383,9 @@ struct Page<C: View>: View {
             let side = (leading: g.safeAreaInsets.leading, trailing: g.safeAreaInsets.trailing)
             // WP7's top: the page starts at the top margin, or right under Back's row when the bar runs across the top;
             // never a bar's height lower (Richard, 2026-11-25). The page's own small capitals sit S.head into it.
-            let first: CGFloat = TopBar.across().map { $0.maxY - 4 } ?? (TopBar.caps(top: g.safeAreaInsets.top, height: 0, pushed: true).y - 4)
+            let first: CGFloat = capsRow && TopBar.across() != nil
+                ? TopBar.caps(top: g.safeAreaInsets.top, height: PageCaps.height, pushed: true).y
+                : TopBar.across().map { $0.maxY - 4 } ?? (TopBar.caps(top: g.safeAreaInsets.top, height: 0, pushed: true).y - 4)
             ScrollViewReader { proxy in
                 ScrollView {
                     Color.clear.frame(height: 0).id("top")
@@ -394,6 +400,9 @@ struct Page<C: View>: View {
                 .padding(.bottom, -Win.foot(g))
                 .scrollIndicators(.hidden)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
+                .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 2 } action: { _, v in
+                    if let scrolled, scrolled.wrappedValue != v { scrolled.wrappedValue = v }
+                }
                 .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
                 // A build's pose scrolled to (open flat, his page's foot is in this pane).
                 .task {
@@ -406,6 +415,9 @@ struct Page<C: View>: View {
         }
     }
 }
+
+// The small capitals' line on a detail page, the hubs' own (Pager's capsHeight at the default size).
+enum PageCaps { static let height: CGFloat = 22 }
 
 func plays(_ n: Int) -> String { "\(number(n)) \(n == 1 ? "play" : "plays")" }
 func ago(_ uts: Int) -> String {

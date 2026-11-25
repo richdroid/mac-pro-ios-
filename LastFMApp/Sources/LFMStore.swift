@@ -119,6 +119,8 @@ struct Profile: Sendable, Equatable {
         // His picture at the size his page draws it.
         if let p = profile { ArtStore.shared.warm(ArtRef(artist: p.name, album: "avatar", url: p.image), px: [240], backdrop: false) }
         shown = hero
+        // The backdrops' baked looks for what's shown, off the main thread: ready before a hub is opened.
+        if let r = hero?.art { Task.detached(priority: .utility) { _ = await ArtStore.shared.treated(r, .muted); _ = await ArtStore.shared.treated(r, .duotone) } }
         // The covers of today's wall, decoded off the main thread while the first frame is made, so they're there in it.
         let wall = ArtWall.gather(recent)
         Task.detached(priority: .userInitiated) { for r in wall { ArtStore.shared.warm(r, px: [156], backdrop: false) } }
@@ -227,6 +229,10 @@ struct Profile: Sendable, Equatable {
             async let big = ArtStore.shared.image(ref, px: 1000)
             async let small = ArtStore.shared.image(ref, px: 156)
             _ = await (big, small)
+            // The backdrops' baked looks too, so ground and cover change together.
+            async let muted = ArtStore.shared.treated(ref, .muted)
+            async let duo = ArtStore.shared.treated(ref, .duotone)
+            _ = await (muted, duo)
             guard preparing == h.id, let cur = hero, cur.art.key == ref.key else { return }
             preparing = nil
             withAnimation(.easeInOut(duration: 0.5)) { shown = cur }

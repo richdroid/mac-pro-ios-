@@ -97,7 +97,11 @@ private struct HomePanorama: View {
                 let sec = min(pw - 48, 440)
                 let count = 4
                 // WP7's panorama title: 186.667 px Light on a 480 px screen, so about 0.36 of the width.
-                let T = min(150, max(112, pw * 0.36)) * min(max(k, 0.9), 1.1)
+                let T0 = min(150, max(112, pw * 0.36)) * min(max(k, 0.9), 1.1)
+                // Always wider than the screen, as WP7's panorama title is: open upright the capped size fitted whole
+                // inside it (run 63 gate, Zune gap 3). Grown until it runs 12 % past the edge.
+                let w0 = textWidth("rotation", size: T0, tracking: -3, weight: -0.4, face: Z.lower())
+                let T = w0 > 0 && w0 < pw * 1.12 ? T0 * pw * 1.12 / w0 : T0
                 let across = TopBar.across()
                 let titleTop = across.map { $0.maxY - T * 0.22 } ?? max(0, insets.top - 10) - T * 0.18
                 let titleH = ceil(T * 1.2)
