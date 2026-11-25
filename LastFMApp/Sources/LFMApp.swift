@@ -146,7 +146,7 @@ struct HubView: View {
     var body: some View {
         Group {
             switch hub {
-            case .nowPlaying: NowPlayingHub()
+            case .nowPlaying: NowPlayingHub(start: panel ?? 0)
             case .profile: ProfileHub(start: panel ?? 0)
             case .charts: ChartsTab(top: 0)
             case .library: LibraryTab(top: 0)

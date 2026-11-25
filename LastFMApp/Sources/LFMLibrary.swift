@@ -129,7 +129,7 @@ struct LibraryTab: View {
 
     private var head: some View {
         VStack(alignment: .leading, spacing: S.head) {
-            HubTitle(text: "library", size: 80)
+            VStack(alignment: .leading, spacing: 0) { AppTitle(text: "rotation"); HubTitle(text: "library", size: 80) }
             search(m.shelf).padding(.horizontal, S.margin)
             if m.query.isEmpty {
                 Segments(items: LibShelf.allCases, selection: Binding(get: { m.shelf }, set: { m.shelf = $0 }), fill: true) { $0.name }

@@ -247,7 +247,7 @@ struct ChartsTab: View {
                 FoldSplit {
                     Page(top: top) {
                         VStack(alignment: .leading, spacing: S.section) {
-                            VStack(alignment: .leading, spacing: S.head) { HubTitle(text: "charts", size: 80); periods; kindRow.padding(.horizontal, S.margin) }
+                            VStack(alignment: .leading, spacing: S.head) { VStack(alignment: .leading, spacing: 0) { AppTitle(text: "rotation"); HubTitle(text: "charts", size: 80) }; periods; kindRow.padding(.horizontal, S.margin) }
                             content(m.period, onlyLeft: true)
                         }
                         .padding(.top, S.head)

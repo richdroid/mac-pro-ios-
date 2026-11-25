@@ -292,7 +292,7 @@ private struct PivotHeaders: View {
     static func size(_ count: Int, _ k: CGFloat) -> CGFloat { (count > 4 ? 40 : 54) * min(max(k, 0.9), 1.2) }
     var body: some View {
         let f = max(0, min(CGFloat(names.count - 1), motion.f))
-        let rests = Self.rests(names, size)
+        let rests = Self.rests(names, size, pw: pw)
         ScrollView(.horizontal) {
             HStack(alignment: .firstTextBaseline, spacing: Self.gap) {
                 ForEach(names.indices, id: \.self) { i in
@@ -322,24 +322,30 @@ private struct PivotHeaders: View {
         }
         .onAppear { pos.scrollTo(x: Self.at(f, rests)) }
         .onChange(of: f) { _, f in pos.scrollTo(x: Self.at(f, rests)) }
-        .onChange(of: size) { _, _ in pos.scrollTo(x: Self.at(f, Self.rests(names, size))) }
+        .onChange(of: size) { _, _ in pos.scrollTo(x: Self.at(f, Self.rests(names, size, pw: pw))) }
     }
     // Where the row rests for each page: scrolled so the name before the current one leads at the margin (the first two
     // pages rest at the row's start).
     // Measured once per set of names and size, not in every frame of a swipe (the body runs each frame as the names
     // follow the finger, and Charts' seven names were seven text measurements a frame).
     @MainActor private static var restsKept: [String: [CGFloat]] = [:]
-    @MainActor static func rests(_ names: [String], _ size: CGFloat) -> [CGFloat] {
-        let key = "\(size)|" + names.joined(separator: "\u{1}")
+    @MainActor static func rests(_ names: [String], _ size: CGFloat, pw: CGFloat) -> [CGFloat] {
+        let key = "\(size)|\(Int(pw))|" + names.joined(separator: "\u{1}")
         if let hit = restsKept[key] { return hit }
-        let out = measure(names, size)
+        let out = measure(names, size, pw: pw)
         restsKept[key] = out
         return out
     }
-    private static func measure(_ names: [String], _ size: CGFloat) -> [CGFloat] {
-        var starts: [CGFloat] = [], x: CGFloat = 0
-        for n in names { starts.append(x); x += textWidth(n, size: size, tracking: -1, weight: -0.4) + gap }
-        return names.indices.map { $0 == 0 ? 0 : starts[$0 - 1] }
+    // The name before leads only when the current one still fits whole beside it, short of the fade at the right;
+    // else the current name leads at the margin (run ddd24ed: "rediscover" cut by the side strip).
+    private static func measure(_ names: [String], _ size: CGFloat, pw: CGFloat) -> [CGFloat] {
+        var starts: [CGFloat] = [], widths: [CGFloat] = [], x: CGFloat = 0
+        for n in names { let w = textWidth(n, size: size, tracking: -1, weight: -0.4); starts.append(x); widths.append(w); x += w + gap }
+        let room = pw - (S.margin - 2) - 40
+        return names.indices.map { i in
+            guard i > 0 else { return 0 }
+            return starts[i] + widths[i] - starts[i - 1] <= room ? starts[i - 1] : starts[i]
+        }
     }
     // Between two pages, between their two rests.
     static func at(_ f: CGFloat, _ rests: [CGFloat]) -> CGFloat {

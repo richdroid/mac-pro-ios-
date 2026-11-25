@@ -259,8 +259,9 @@ struct NowHero: View {
         VStack(alignment: .leading, spacing: S.pair) {
             HStack(spacing: 7) {
                 if playing, !store.trouble {
-                    Image(systemName: "waveform")
-                    Text("Now playing")
+                    // Under the hub's own "NOW PLAYING" the bars alone say it: the words once, not twice.
+                    Image(systemName: "waveform").symbolEffect(.variableColor.iterative, options: .repeating).foregroundStyle(Z.accent)
+                    if titled { Text("Now playing") }
                 } else if playing {
                     // Last.fm gone: what it last said was playing, not live bars over a song that may have ended (run 34).
                     Image(systemName: "clock.arrow.circlepath")

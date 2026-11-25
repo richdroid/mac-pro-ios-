@@ -247,7 +247,7 @@ struct PendingScrobble: Codable, Hashable {
         if let d = try? Data(contentsOf: logFile), let l = try? JSONDecoder().decode([ScrobbleNote].self, from: d) { log = l }
         if let d = try? Data(contentsOf: queueFile), let q = try? JSONDecoder().decode([PendingScrobble].self, from: d) { queue = q }
         lastCatchUp = UserDefaults.standard.object(forKey: "scrobble.caught") as? Date
-        if LastFM.shared.mock, case .signedIn = LFMAccount.mockState { log = Self.mockLog() }
+        if LastFM.shared.mock, case .signedIn = LFMAccount.mockState { log = Self.mockLog(); lastCatchUp = Clock.now.addingTimeInterval(-240) }
     }
 
     var ready: Bool { enabled && LFMAccount.shared.signedIn && !LastFM.shared.mock }

@@ -101,7 +101,8 @@ func share(_ part: Int, of whole: Int) -> String? {
 struct NowPlayingHub: View {
     @Environment(\.paneLayout) private var pane
     @Environment(\.horizontalSizeClass) private var size
-    @State private var page = 0
+    @State private var page: Int
+    init(start: Int = 0) { _page = State(initialValue: min(max(start, 0), 3)) }
     private var store: Store { Store.shared }
     private var stats: NowStats { NowStats.shared }
     var body: some View {
