@@ -157,6 +157,7 @@ final class TVModel {
         }
         // Anything else he tapped opens as its page on the tab he is on: the poster a card for his hand (brief 3.4). The
         // page is pushed by the tab's own stack, so the system's Back returns to the exact place he came from.
+        SpeedMark.begin("title")
         titleAsk = target
         titleAsks += 1
     }

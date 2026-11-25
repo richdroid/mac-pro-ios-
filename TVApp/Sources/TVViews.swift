@@ -246,7 +246,7 @@ struct RootView: View {
         RailItem(value: 6, title: "Search", symbol: "magnifyingglass"),
     ]
     private var tabBinding: Binding<Int> {
-        TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
+        TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick); SpeedMark.begin("tab \($0)") }; model.tab = $0 })) { t in
             // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
             // rebuilt, so what was loaded, and the choices made on it, stay.
             if t == 1 { model.browsing = nil }
@@ -281,6 +281,7 @@ struct RootView: View {
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
                 HitchLog.shared.note("tab \(was)→\(t)")
+                SpeedMark.end("tab \(t)")
                 #endif
                 UserDefaults.standard.set(t, forKey: "tab")
                 // Opening Playing shows what's on now, not what was on at the last look.
@@ -294,7 +295,7 @@ struct RootView: View {
         .background { StatusFollower(playingSymbol: $playingSymbol) }
         // The Mac out of reach is the lip's to say ("Reconnecting…"); a pill here covered every page's title (tv-pass-1122).
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { BackFinder.start(); followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 6]) { model.tab = $0 } }
+        .onAppear { BackFinder.start(); followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 6]) { SpeedMark.begin("tab \($0)"); model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task {
             await BrowseStore.shared(.stremio).loadHome()

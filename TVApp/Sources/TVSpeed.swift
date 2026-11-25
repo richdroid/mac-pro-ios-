@@ -344,7 +344,28 @@ enum Timing {
     }
     @MainActor private static var started = false
 }
+// How long a move takes from his finger to its first frame on screen (a title page pushed, a tab changed), for the
+// build's logged runs only (-swipeLog YES): "open <name> N ms" in the hitch log, timed to the display's next frame after
+// the page appeared, so a slow first build shows as a number (11-25 target: under about 150 ms).
+@MainActor
+enum SpeedMark {
+    private static var started: [String: CFTimeInterval] = [:]
+    static func begin(_ name: String) { guard Timing.on else { return }; started[name] = CACurrentMediaTime() }
+    static func end(_ name: String) {
+        guard Timing.on, let t0 = started.removeValue(forKey: name) else { return }
+        // The frame after this one: the appearing page's first draw has been committed by then.
+        final class Once: NSObject {
+            let fire: () -> Void
+            init(_ f: @escaping () -> Void) { fire = f }
+            @objc func tick(_ l: CADisplayLink) { l.invalidate(); fire() }
+        }
+        let once = Once { HitchLog.shared.note(String(format: "open %@ %.0f ms", name, (CACurrentMediaTime() - t0) * 1000)) }
+        let l = CADisplayLink(target: once, selector: #selector(Once.tick(_:)))
+        l.add(to: .main, forMode: .common)
+    }
+}
 #else
+enum SpeedMark { static func begin(_ name: String) {}; static func end(_ name: String) {} }
 enum Timing {
     static func measure<T>(_ name: String, _ f: () throws -> T) rethrows -> T { try f() }
     static func body(_ name: String) {}

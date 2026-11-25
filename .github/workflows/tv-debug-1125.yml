@@ -1,0 +1,153 @@
+name: TV debug 11-25 (branch)
+# Branch-only evidence for tv-debug-1125 (remove before merging). Built Release. In each posture (folded, open upright,
+# open flat): the Remote's states, a series' page, a film's streams, Search and Watch; a title card thrown, a shelf card
+# thrown, put back and carried slowly, each with its hand log and what was sent; and the tab tour with its timing lines.
+# Folded: every Remote key pressed in turn (what each sent), wake, and the speaker sheet. Open upright: an outage.
+# Published to the tv-debug-1125 release.
+on:
+  push:
+    branches: [tv-debug-1125]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-debug-1125
+  cancel-in-progress: true
+jobs:
+  pass:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator (Release)
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Release -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 42
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Release-iphonesimulator/TV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          # With "path" added (ci/flick-hands): one finger held, then carried, for the throws.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 \
+            && F=$(grep -rl 'args\[1\] == "touch" || args\[1\] == "drag"' Sources) \
+            && python3 -c 'import sys; f,p=sys.argv[1:]; m="if args[1] == \"touch\" || args[1] == \"drag\" {"; s=open(f).read(); assert m in s; open(f,"w").write(s.replace(m, open(p).read()+m, 1))' "$F" $GITHUB_WORKSPACE/ci/flick-hands/devicehub-path.swift \
+            && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # A film of one launch: name, display, seconds, address, then the launch's args; ACT (a function) runs mid-film.
+          film() {
+            local name=$1 display=$2 secs=$3 address=$4; shift 4
+            local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            rm -f /tmp/tv-home-applied.log /tmp/tv-flick-sends.log /tmp/tv-keys.log
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -swipeLog YES "$@"
+            if [ -n "$ACT" ]; then $ACT; fi
+            sleep $secs
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-$name-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-$name-hitches.log
+            cp /tmp/tv-home-applied.log dist/tv-$name-applied.log 2>/dev/null || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/hand-log.txt" ] && mv "$c/Library/Caches/hand-log.txt" dist/tv-$name-hand.log
+            c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-swipe.log
+            cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+            cp /tmp/tv-keys.log dist/tv-$name-keys.log 2>/dev/null || true
+            ACT=
+          }
+          cardAt() { grep -o 'what=card&x=0\.[0-9]*&y=0\.[0-9]*' /tmp/tv-home-applied.log 2>/dev/null | grep -v 'x=0\.000' | tail -1; }
+          # A real finger: a still hold (0.7 s), then per kind: thrown up fast; carried sideways and let go (must go home,
+          # nothing sent); carried slowly up into the lip over 1.5 s, rested and let go.
+          hand() {
+            sleep 10
+            local at x y; at=$(cardAt)
+            [ -z "$at" ] && { echo "no card position ($1)"; return; }
+            x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+            case $1 in
+              throw) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.12 0 || echo "path failed" ;;
+              back) $D "$DEVICE" path $x $y 0.7 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
+              carry) $D "$DEVICE" path $x $y 0.7 $x 0.1 1.5 0 $x 0.1 0.4 0 || echo "path failed" ;;
+            esac
+          }
+          throwIt() { hand throw; }; backIt() { hand back; }; carryIt() { hand carry; }
+          # Every key on the Remote, pressed through accessibility in turn, 0.9 s apart: what each sent is in -keys.log.
+          pressAll() {
+            sleep 10
+            for k in "Up" "Right" "Down" "Left" "Select. Hold for a long press." "Back" "Home" "Menu" "Back 10 seconds" "Forward 10 seconds" "Pause" "Play" "Sleep or wake"; do
+              echo "press $k"; $D "$DEVICE" tap "$k" || echo "  $k not found"; sleep 0.9
+            done
+          }
+          wakeIt() { sleep 9; $D "$DEVICE" tap "Wake the TV" || echo "Wake not found"; sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-wake-pressed$WX.png; }
+          speakerIt() {
+            sleep 9; $D "$DEVICE" tap "Speaker" || echo "Speaker not found"
+            sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker$WX.png
+            $D "$DEVICE" tap "Sample Headphones" || echo "headphones not found"
+            sleep 0.8; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker-connecting$WX.png
+            sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker-chosen$WX.png
+          }
+          posture() {
+            local x=$1 d=$2
+            for S in ridle repisode rasleep roffline; do shot remote-$S$x $d 9 $M/$S -tab 0; done
+            curl -s $M/real/reset > /dev/null; shot title-series$x $d 14 $M/real -tab 3 -pose realseries
+            shot streams$x $d 14 $M -tab 3 -pose streams
+            shot search$x $d 12 $M -tab 6 -pose search
+            shot watch$x $d 12 $M -tab 3
+            curl -s $M/fnormal/reset > /dev/null; ACT=throwIt; film flick-title$x $d 12 $M/fnormal -tab 3 -pose flick-starting
+            curl -s $M/fnormal/reset > /dev/null; ACT=throwIt; film flick-shelf$x $d 12 $M/fnormal -tab 3 -pose shelf
+            curl -s $M/fnormal/reset > /dev/null; ACT=backIt; film putback-shelf$x $d 8 $M/fnormal -tab 3 -pose shelf
+            curl -s $M/fnormal/reset > /dev/null; ACT=carryIt; film carry-shelf$x $d 12 $M/fnormal -tab 3 -pose shelf
+            film tour$x $d 25 $M/live -tab 0 -pose tour
+          }
+          posture "" 1
+          curl -s $M/real/reset > /dev/null; ACT=pressAll; film keys 1 4 $M/real -tab 0
+          WD=1; WX=; ACT=wakeIt; film wake 1 8 $M/rasleep -tab 0
+          ACT=speakerIt; film speaker 1 4 $M/ridle -tab 0
+          $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 1 || true; sleep 4
+          posture "-portrait" 3
+          WD=3; WX=-portrait; ACT=speakerIt; film speaker-portrait 3 4 $M/ridle -tab 0
+          # The Mac gone from 10 s to 50 s after the reset: nothing said for ~25 s, then calm amber, cleared on return.
+          curl -s $M/outage/reset > /dev/null; film outage-portrait 3 66 $M/outage -tab 0
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          posture "-flat" 3
+          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-debug-1125 >/dev/null 2>&1 || gh release create tv-debug-1125 --prerelease --title "TV debug 11-25" --notes "Branch tv-debug-1125: shots, films and logs."
+          for f in shots.zip films.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-debug-1125 "$f" --clobber && break; sleep 15; done
+          done

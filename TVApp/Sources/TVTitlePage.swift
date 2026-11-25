@@ -159,6 +159,7 @@ struct TitlePage: View {
         // The page's ground is drawn by its tab, behind the lip and the page as one piece (the lip sits above the stack,
         // so a ground of the page's own ended in a hard line under it: gates on 654ff00 and 6bf2944).
         .onAppear {
+            SpeedMark.end("title")
             model.titleGrounds.removeAll { $0.id == groundID }
             model.titleGrounds.append(.init(id: groundID, tab: model.tab, art: st.item.art))
         }
