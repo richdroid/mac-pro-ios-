@@ -157,7 +157,7 @@ struct HoldsWhileMoving: ViewModifier {
                         if !moving, box.settled, box.shown { box.rest = r }
                         // Covered (a tab's root under a pushed page) and turned or folded meanwhile: what it held at rest is
                         // another posture's, wrong for the whole swipe back. Held no more until it is still in front again
-                        // (the move.s end, or coming back to the front with nothing moving, settles it afresh). A posture's change only, not an
+                        // (the move's end, or coming back to the front with nothing moving, settles it afresh). A posture's change only, not an
                         // inset's wobble while it's parked.
                         else if !moving, !box.shown, let rest = box.rest,
                                 abs(r.size.width - rest.size.width) > 40 || abs(r.size.height - rest.size.height) > 40 { box.settled = false; box.turned = true }
