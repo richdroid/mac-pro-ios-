@@ -44,6 +44,16 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
           # The simulator build for the films job, kept as a zip (ditto keeps the bundle whole).
           ditto -c -k --keepParent build-sim/Build/Products/Debug-iphonesimulator/LastFM.app LastFM-sim.zip
+      # A build that fails says why where the lead can read it without a token: its log on the release.
+      - name: Publish the build log on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ci/lfm-sim.sh
+          grep -E 'error:|warning: .*will never|BUILD FAILED' dist/build.log | head -200 > build-errors.txt; tail -80 dist/build.log >> build-errors.txt
+          release
+          upload build-errors.txt
       - uses: actions/upload-artifact@v4
         with:
           name: lastfm-sim
