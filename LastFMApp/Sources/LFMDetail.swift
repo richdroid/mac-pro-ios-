@@ -60,15 +60,14 @@ struct PageLayout<Head: View, Rest: View>: View {
     }
 }
 
-// The cover large, with a shadow in its own colour.
+// The cover large and flat, as WP7 sets art: no shadow (its 34 pt glow was drawn off screen in every frame of the zoom
+// that opens the page).
 struct BigCover: View {
     let ref: ArtRef
     let zoom: String?
     var round = false
     var body: some View {
-        let tint = ArtStore.shared.palette(ref)?.vivid.color ?? Palette.from(name: ref.artist + ref.album).vivid.color
         ArtView(ref, px: 1000, corner: round ? 400 : 14)
-            .shadow(color: tint.opacity(0.45), radius: 34, y: 14)
             .modifier(SourceIf(id: zoom))
     }
 }

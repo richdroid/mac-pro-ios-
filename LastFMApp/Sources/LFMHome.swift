@@ -481,7 +481,10 @@ struct MenuWords: View {
     @Environment(\.pageWidth) private var width
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     var body: some View {
-        let size = min(64, max(46, width * 0.13)) * min(max(k, 0.9), 1.2)
+        let want = min(64, max(46, width * 0.13)) * min(max(k, 0.9), 1.2)
+        // Every word whole within its section: open upright "scrobbling" ran past the menu's edge and was cut mid-screen
+        // (run 62). The longest word sets the size; measured once per width.
+        let size = Self.fit(want, width)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Hub.menu, id: \.self) { h in
                 Button { go("w-" + h.rawValue, h, nil) } label: {
@@ -507,6 +510,16 @@ struct MenuWords: View {
 }
 
 extension MenuWords {
+    @MainActor private static var fitted: [String: CGFloat] = [:]
+    @MainActor static func fit(_ want: CGFloat, _ width: CGFloat) -> CGFloat {
+        let key = "\(want)|\(width)"
+        if let f = fitted[key] { return f }
+        let room = width - S.margin * 2 + 3
+        let widest = Hub.menu.map { textWidth($0.word, size: want, tracking: -1.2, weight: -0.4, face: Z.lower()) }.max() ?? 0
+        let f = width > 0 && widest > room ? max(30, floor(want * room / widest)) : want
+        fitted[key] = f
+        return f
+    }
     static func inside(_ h: Hub) -> String {
         switch h {
         case .profile: return "scrobbles  streak  lately  story"

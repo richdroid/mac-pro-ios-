@@ -298,7 +298,7 @@ struct WeekHub: View {
                 ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 400, corner: 10).frame(width: side).zoomSource("\(title)|\(a.name)")
                 if title != "new to you" {
                     RankShade().frame(width: side, height: side)
-                    Text("\(k + 1)").font(.zune(size: min(64, side * 0.48), .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
+                    Text("\(k + 1)").font(.zune(size: min(64, side * 0.48), .thin)).foregroundStyle(.white)
                         .offset(x: -2, y: 18)
                 }
                 if a.isNew && title != "new to you" {
@@ -446,7 +446,8 @@ struct CanonCard: View {
                                 Opens(route: .artist(a.name), zoom: "canon|\(a.name)") {
                                     ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 160, corner: 8).frame(width: S.art).zoomSource("canon|\(a.name)")
                                 }
-                                .shadow(color: .black.opacity(0.45), radius: 6, x: 2)
+                                // A dark edge between the overlapping covers, not a shadow (re-rendered off screen in every frame of a swipe).
+                                .overlay { Rectangle().strokeBorder(.black.opacity(0.55), lineWidth: 1) }
                                 .zIndex(Double(20 - k))
                             }
                             Spacer(minLength: 0)

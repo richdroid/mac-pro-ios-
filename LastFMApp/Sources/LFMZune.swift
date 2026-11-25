@@ -191,8 +191,7 @@ struct RotationMosaic: View {
             ZStack(alignment: .bottomLeading) {
                 ArtView(e.art, px: 300, corner: 8).zoomSource("rotation|\(e.id)")
                 RankShade(corner: 8)
-                Text(number(e.plays)).font(.zune(.caption, .semibold)).monospacedDigit().foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.6), radius: 3).padding(6)
+                Text(number(e.plays)).font(.zune(.caption, .semibold)).monospacedDigit().foregroundStyle(.white).padding(6)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -338,7 +337,6 @@ struct MixView: View {
             .opacity(shown ? 1 : 0)
             Opens(route: .artist(artist)) {
                 ArtView(center, px: 400, corner: 14).frame(width: layout.core, height: layout.core)
-                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
             }
             .position(layout.center)
             .accessibilityLabel(artist)

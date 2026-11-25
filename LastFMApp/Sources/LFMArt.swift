@@ -240,6 +240,18 @@ final class ArtStore: @unchecked Sendable {
     func cachedBackdrop(_ ref: ArtRef) -> CGImage? { images.object(forKey: "\(ref.key)@backdrop2" as NSString)?.image }
 }
 
+struct CoverShape: ViewModifier {
+    let round: CGFloat?
+    func body(content: Content) -> some View {
+        if let r = round {
+            content.clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: r, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 0.5) }
+        } else {
+            content.clipped().overlay { Rectangle().strokeBorder(.white.opacity(0.08), lineWidth: 0.5) }
+        }
+    }
+}
+
 // A cover, square, with a designed stand-in until it comes and if it never does: the album's own colour and a disc.
 struct ArtView: View {
     let ref: ArtRef
@@ -265,9 +277,9 @@ struct ArtView: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        // Square, as Zune's covers are (a corner of 3 pt at most); a round picture (his own) keeps its shape.
-        .clipShape(RoundedRectangle(cornerRadius: corner >= 40 ? corner : min(corner, S.square), style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: corner >= 40 ? corner : min(corner, S.square), style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 0.5) }
+        // Square, as Zune's covers are; a round picture (his own) keeps its shape. Square is a plain bounds clip, never a
+        // shape mask (a mask is drawn off screen for every cover in every frame of a scroll or swipe).
+        .modifier(CoverShape(round: corner >= 40 ? corner : nil))
         .task(id: ref) {
             let had = image
             if let c = ArtStore.shared.cached(ref, px: px) {

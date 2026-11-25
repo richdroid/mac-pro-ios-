@@ -323,7 +323,6 @@ struct RecordsSection: View {
                 LinearGradient(stops: [.init(color: .black.opacity(0.2), location: 0), .init(color: .black.opacity(0.75), location: 0.25), .init(color: .black.opacity(0.92), location: 1)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: S.pair) {
                     Text(number(r.plays)).font(.zune(size: 64, .light)).monospacedDigit().foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.8), radius: 10)
                     Text(what).font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                     Text(name).font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
                     Text(LocalDay.date(r.day).formatted(.dateTime.month(.wide).day().year())).font(.zune(.subheadline)).foregroundStyle(.white.opacity(0.7))

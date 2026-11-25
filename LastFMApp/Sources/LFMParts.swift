@@ -178,7 +178,7 @@ struct Panorama: View {
                     ArtView(e.art, px: 400, corner: 10).frame(width: side).zoomSource("\(title)|\(e.id)")
                     if ranks {
                         RankShade().frame(width: side, height: side)
-                        Text("\(k + 1)").font(.zune(size: min(72, side * 0.5), .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
+                        Text("\(k + 1)").font(.zune(size: min(72, side * 0.5), .thin)).foregroundStyle(.white)
                             .offset(x: -2, y: 18)
                     }
                 }

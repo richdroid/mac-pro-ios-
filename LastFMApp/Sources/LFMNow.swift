@@ -421,8 +421,9 @@ struct DaySection: View {
         HStack(spacing: 10) {
             HStack(spacing: -12) {
                 ForEach(Array(list.suffix(4).reversed().enumerated()), id: \.element.id) { i, s in
-                    ArtView(s.art, px: 120, corner: 5).frame(width: 38).zIndex(Double(10 - i))
-                        .shadow(color: .black.opacity(0.4), radius: 4)
+                    ArtView(s.art, px: 120, corner: 5).frame(width: 38)
+                        .overlay { Rectangle().strokeBorder(.black.opacity(0.5), lineWidth: 1) }
+                        .zIndex(Double(10 - i))
                 }
             }
             VStack(alignment: .leading, spacing: 1) {

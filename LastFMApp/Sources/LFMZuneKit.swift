@@ -376,8 +376,13 @@ struct LiveTile<Front: View, Back: View>: View {
                     .frame(width: g.size.width, height: g.size.height, alignment: .top)
                     .clipped()
                 }
+                // Over a picture, a low shade under the name instead of a shadow (WP7's tiles have none; a text shadow was
+                // drawn off screen in every frame the start screen moved).
+                if motion == .peek || fill == .clear {
+                    LinearGradient(colors: [.clear, .black.opacity(0.4)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 34).frame(maxWidth: .infinity).allowsHitTesting(false)
+                }
                 Text(name).font(.zune(size: 17, .regular)).foregroundStyle(.white).lineLimit(1)
-                    .shadow(color: .black.opacity(motion == .peek || fill == .clear ? 0.5 : 0), radius: 3)
                     .padding(.leading, 10).padding(.bottom, 6)
             }
             .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0), perspective: angle == 0 ? 0 : 0.6)
