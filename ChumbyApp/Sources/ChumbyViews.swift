@@ -317,7 +317,8 @@ struct MenuRow<V: Hashable, Options: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 12) {
-                Text(title)
+                // The title never wraps ("The / n" beside a long value, 11-24): its words are short, the value gives way.
+                Text(title).lineLimit(1).fixedSize().layoutPriority(2)
                 Spacer(minLength: 8)
                 Picker(title, selection: $selection.ticking(), content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
             }
@@ -924,15 +925,31 @@ struct HomeTab: View {
     @State private var bubbles: [Bubble] = []
     @State private var goneAt: Date?
     @State private var demoed = false
-    private static let lines = ["chumbalicious!", "welcome back.", "enjoy tinkering?", "wake up to your internet life", "eight arms, one job", "squeeze me!", "blub.", "i run on 175 MHz and vibes"]
+    // What he says to a tap: short (one line over the octopus), warm, in his own lowercase voice (Richard, 11-24: "many
+    // more"). Dealt as a shuffled deck kept across launches (OctoDeck), so none comes round again until all have.
+    static let lines = [
+        "chumbalicious!", "welcome back.", "enjoy tinkering?", "wake up to your internet life", "eight arms, one job",
+        "squeeze me!", "blub.", "i run on 175 MHz and vibes", "hi hi hi!", "oh! it's you.", "missed you.",
+        "eight arms, all waving", "you look rested.", "sleep well tonight?", "i kept the clock warm.", "hug? i have spares.",
+        "tickles!", "boop.", "glub glub.", "ink-redible to see you", "i'll wake you, promise.", "five more minutes?",
+        "the alarms are in good hands", "eight hands, actually", "dream of the sea.", "stay cosy.", "that's my best side.",
+        "you again! yay.", "i was just napping.", "squish acknowledged.", "my favourite human.", "you're doing great.",
+        "drink some water!", "one tap = one smile", "i'm not ticklish. ok, i am.", "hello from the deep.",
+        "glad you're here.", "everything's ticking.", "made with 100% octopus", "small screen, big heart",
+        "shh, the clock's thinking", "beep boop, said fondly", "i saved you a song.", "good morning-ish!",
+        "night owl? me too.", "bubbles on the house.", "pet the octopus: done.", "you found me!", "it's a good day for it.",
+        "all eight arms say hi", "take it easy today.", "don't forget to stretch.", "i believe in you.", "rise and shine. later.",
+        "softly does it.", "a little squeeze helps.", "home sweet home.", "tap me anytime.", "blub blub, friend.",
+        "wiggle wiggle.", "proudly made of pixels", "high eight!",
+    ]
     var dark: Bool { scheme == .dark }
     var ringing: Bool { !model.unreachable && (model.sys.ringing.map { !$0.snoozed } ?? false) }
 
     func poke() {
         model.tick()
         squishedAt = Date()
-        withAnimation(.spring(duration: 0.38, bounce: 0.6)) { say = Self.lines[line % Self.lines.count] }
         line += 1
+        withAnimation(.spring(duration: 0.4, bounce: 0.35)) { say = Self.lines[OctoDeck.next(count: Self.lines.count)] }
         puff(7)
         let now = Date()
         Task {
@@ -1079,10 +1096,19 @@ struct HomeTab: View {
             }
             .overlay(alignment: .top) {
                 atOctopus {
-                    if let say {
-                        Text(say).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1).fixedSize().padding(.horizontal, 15).padding(.vertical, 7).glass(18)
-                            .offset(y: -46 * k - 8).transition(.scale(scale: 0.3).combined(with: .opacity))
+                    // The bubble grows up from its own foot, over his head. The lift is on the holder, not the bubble: on
+                    // the bubble it put the scale's anchor at his centre, 50 pt below, so each line swept up across him
+                    // instead of popping in (11-24, "the text entrance is broken"). Each line is its own view, so a
+                    // second tap swaps lines with the same entrance rather than retyping inside the old bubble.
+                    ZStack {
+                        if let say {
+                            Text(say).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1).fixedSize().padding(.horizontal, 15).padding(.vertical, 7).glass(18)
+                                .id(line)
+                                .transition(.asymmetric(insertion: .scale(scale: 0.55, anchor: .bottom).combined(with: .opacity),
+                                                        removal: .scale(scale: 0.9, anchor: .bottom).combined(with: .opacity)))
+                        }
                     }
+                    .offset(y: -46 * k - 8)
                 }
                 .allowsHitTesting(false)
             }
@@ -3399,7 +3425,7 @@ struct SkipCard: View {
             }
             // Moved for one ring, the usual time is on the button ("Back to 6:45 AM"), so it isn't said twice.
             // The nap's heading already says "Nap": its line is the day alone.
-            Text(napNext && !struck ? day(at) : "\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
+            Text(napNext && !struck ? day(at) : "\(day(at)) · \(wake.eventLine(name: name, at: at) ?? label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
@@ -3659,5 +3685,25 @@ struct SleepyOctopus: View {
         }
         .frame(width: 60, height: 52)
         .accessibilityHidden(true)
+    }
+}
+
+// The octopus's lines as a deck: shuffled, dealt one per tap, and kept in the app's settings so a new launch carries on
+// where the last left off. A fresh shuffle never starts with the line just said; a different number of lines (a build
+// that added some) shuffles anew.
+enum OctoDeck {
+    static func next(count: Int, defaults: UserDefaults = .standard) -> Int {
+        guard count > 1 else { return 0 }
+        var deck = defaults.array(forKey: "octoDeck") as? [Int] ?? []
+        var pos = defaults.integer(forKey: "octoDeckPos")
+        if deck.count != count || Set(deck) != Set(0..<count) || pos >= count {
+            let last = deck.indices.contains(pos - 1) ? deck[pos - 1] : -1
+            deck = Array(0..<count).shuffled()
+            if deck.first == last { deck.swapAt(0, Int.random(in: 1..<count)) }
+            pos = 0
+        }
+        defaults.set(deck, forKey: "octoDeck")
+        defaults.set(pos + 1, forKey: "octoDeckPos")
+        return deck[pos]
     }
 }

@@ -180,8 +180,11 @@ final class CalendarWake: ObservableObject {
         let signature = WakePlanner.signature(rules)
         let synced = UserDefaults.standard.string(forKey: "wakeRulesSynced")
         let on = rules.enabled
+        // Every time a day's own time puts on the Chumby is remembered (a few days), so once that day is moved again or
+        // sent back to the calendar's time, the old copy goes rather than ringing beside the new one.
+        let placed = Self.notePlaced(wanted)
         let keep = CalendarKeep(plan: plan, events: evs, labels: rules.dayEdits.compactMapValues { $0.label },
-                                off: !on, rulesChanged: synced != nil && synced != signature)
+                                off: !on, rulesChanged: synced != nil && synced != signature, placed: placed)
         let stored = storedSettings
         do {
             // The same careful save as everything else: read fresh, change only the calendar's alarms, never under a
@@ -234,6 +237,22 @@ final class CalendarWake: ObservableObject {
 }
 
 extension CalendarWake {
+    // The event a calendar alarm ringing at `at` wakes for, with the event's own time: "Shift at 6:00 PM" (11-24: the
+    // wake time alone left him working out when the thing itself starts). Nil when the plan doesn't have that day.
+    func eventLine(name: String, at: Date) -> String? {
+        guard name.hasPrefix(Alarm.calendarPrefix), let d = plan.first(where: { Self.alarmName($0) == name && abs($0.wake.timeIntervalSince(at)) < 60 }) else { return nil }
+        return "\(d.shown) at \(d.start.formatted(date: .omitted, time: .shortened))"
+    }
+    // The times days' own times have put on the Chumby ("minutes" + name), with `wanted`'s added, kept two days past.
+    static func notePlaced(_ wanted: [PlannedWake], now: Date = Date()) -> Set<String> {
+        let key = "wakePlaced"
+        var list = UserDefaults.standard.stringArray(forKey: key) ?? []
+        for w in wanted where w.exact { let k = WakePlanner.minutes(w.wake) + WakePlanner.alarmName(w); if !list.contains(k) { list.append(k) } }
+        let floor = Int(now.timeIntervalSince1970 / 60) - 2 * 1440
+        list = list.filter { k in Int(k.prefix { $0.isNumber }).map { $0 >= floor } ?? false }
+        UserDefaults.standard.set(list, forKey: key)
+        return Set(list)
+    }
     // "Just this once" for a calendar day: the day's own time, and its own sound when it differs from what the Chumby
     // holds for it, saved by the calendar's own update, so the day's one alarm moves in one save. CalendarKeep counts an
     // edited day as the user's call, and the save carries force=1 for the old time it drops, which the Chumby accepts
@@ -243,9 +262,10 @@ extension CalendarWake {
         guard at.timeIntervalSinceNow >= 120 else { return "That’s too soon to set. Pick a later time." }
         func sound(_ a: Alarm) -> String { [a.type, a.arg, a.param, a.param_description, a.duration, a.snooze, a.auto_dismiss, a.action, a.action_param].joined(separator: "\u{1}") }
         var e = rules.dayEdits[item.key] ?? DayEdit()
-        e.wakeAt = at.timeIntervalSince1970
+        // Set at the calendar's own time ("Usual"), the day's time is let go, so it follows the calendar again.
+        e.wakeAt = item.usualWake.map { abs($0.timeIntervalSince(at)) < 60 } == true ? nil : at.timeIntervalSince1970
         if let current, sound(settings) != sound(current) { var own = e.own ?? Alarm(); own.takeSettings(from: settings); e.own = own }
-        rules.dayEdits[item.key] = e
+        rules.dayEdits[item.key] = e.isEmpty ? nil : e
         note = nil
         _ = await sync()
         return note

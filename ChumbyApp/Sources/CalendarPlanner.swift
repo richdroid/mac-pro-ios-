@@ -79,6 +79,7 @@ struct PlannedWake: Identifiable, Equatable {
     var exact = false           // rings at a time set for this day, not "how long before"
     var label: String?          // this day's own label, in place of the title on the Chumby
     var own: Alarm?             // this day's own sound and snooze (DayEdit.own), in place of the shared set
+    var usualWake: Date?        // when the calendar's rule alone would wake (its lead before the start), whatever the day's own time
     var shown: String { label ?? title }
     var id: String { key }
 }
@@ -138,6 +139,7 @@ enum WakePlanner {
             let edit = r.dayEdits[key(first)]
             var lead = r.leadOverrides[key(first)] ?? (work ? r.workLead : r.otherLead + (first.hasLocation ? r.travelExtra : 0))
             var wake = first.start.addingTimeInterval(TimeInterval(-lead * 60))
+            let usual = wake
             // A time set for this day alone, as long as it's still before the event.
             if let at = edit?.wakeAt, at < first.start.timeIntervalSince1970 {
                 wake = Date(timeIntervalSince1970: at)
@@ -151,6 +153,7 @@ enum WakePlanner {
             item.exact = wake.timeIntervalSince1970 == edit?.wakeAt
             if let l = edit?.label?.trimmingCharacters(in: .whitespaces), !l.isEmpty { item.label = l }
             item.own = edit?.own
+            item.usualWake = usual
             // Worth saying if the night before leaves little sleep.
             if let i = usable.indices.last(where: { usable[$0].end <= wake && days[$0] < day }) {
                 let before = usable[i]
@@ -178,11 +181,16 @@ struct CalendarKeep {
     // The rules themselves were changed by hand since the last update (how long before work, a word, a calendar): a wake
     // that moved because of that is replaced, not left ringing beside its new time.
     var rulesChanged = false
+    // Times a day's own time put on the Chumby ("minutes" + name, as the Chumby holds them; CalendarWake.placed). One the
+    // plan no longer wants was moved again or sent back to the calendar's time by hand, so it goes: kept, it rang beside
+    // the usual one as a second same-named copy (11-24: "Back to the usual time" left the moved 9:44 copy on the Chumby).
+    var placed: Set<String> = []
     enum Verdict { case keep, userChose, gone }
     // For a calendar alarm that's on, due within 24 h, which the plan no longer wants.
     func verdict(_ a: Alarm, due: Date) -> Verdict {
         // Its event: same title, starting after the alarm and no more than 18 hours after it (any lead there is).
         if off { return .userChose }
+        if placed.contains(a.time + a.name) { return .userChose }
         func near(_ start: Date) -> Bool { start >= due && start.timeIntervalSince(due) <= 18 * 3600 }
         // Events whose day was given a label this alarm goes by (the event's id, from "id@start", so it's found after the
         // event moves too).

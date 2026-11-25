@@ -547,8 +547,16 @@ extension ChumbyState {
         guard a.isOn else { return nil }
         let cal = ChumbyClock.calendar      // "that day" is the Chumby's day
         let skipping = (calOverride ?? 0) != 0
-        let calendarDays = Set(alarms.filter { $0.isOn && $0.when == "once" && $0.isCalendar }.compactMap { a in
-            Double(a.time).map { cal.startOfDay(for: Date(timeIntervalSince1970: $0 * 60)) }
+        // A calendar one-off that's on, or one whose time has come today by the Chumby's clock though it's off now: the
+        // panel switches a "once" alarm off when it rings or is skipped, and that day is still a calendar day (11-24: the
+        // phone's backup rang for omg at 11:00 after the 10:45 calendar alarm was skipped and switched off). Until the app
+        // reads the Chumby's own record of calendar days (/psp/chalarm_caldays), this is the closest it can tell.
+        let clock = chumbyNow ?? Date()
+        let calendarDays = Set(alarms.filter { $0.when == "once" && $0.isCalendar }.compactMap { a -> Date? in
+            guard let m = Double(a.time) else { return nil }
+            let t = Date(timeIntervalSince1970: m * 60)
+            guard a.isOn || (t <= clock && cal.isDate(t, inSameDayAs: clock)) else { return nil }
+            return cal.startOfDay(for: t)
         })
         var from = now
         for _ in 0..<12 {
