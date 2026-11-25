@@ -167,31 +167,18 @@ struct Panorama: View {
         } else if !items.isEmpty {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: title, trailing: trailing).padding(.horizontal, S.margin)
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: S.gap) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { k, e in tile(k, e) }
-                    }
-                    .scrollTargetLayout()
-                    .padding(.leading, S.margin + bleed.leading)
-                    .padding(.trailing, S.margin + bleed.trailing)
-                }
-                .scrollIndicators(.hidden)
-                .scrollTargetBehavior(.viewAligned)
-                // To the screen's edge, under the side bar (run 48 gate, blocker 4: comebacks cut short of the rail).
-                .clipped()
-                .padding(.leading, -bleed.leading)
-                .padding(.trailing, -bleed.trailing)
+                TileGrid(items: items) { k, e, w in tile(k, e, w) }
             }
         }
     }
-    private func tile(_ k: Int, _ e: Entry) -> some View {
+    private func tile(_ k: Int, _ e: Entry, _ side: CGFloat) -> some View {
         Opens(route: e.route, zoom: "\(title)|\(e.id)") {
             VStack(alignment: .leading, spacing: S.pair) {
                 ZStack(alignment: .bottomLeading) {
-                    ArtView(e.art, px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(e.id)")
+                    ArtView(e.art, px: 400, corner: 10).frame(width: side).zoomSource("\(title)|\(e.id)")
                     if ranks {
-                        RankShade().frame(width: S.tile, height: S.tile)
-                        Text("\(k + 1)").font(.zune(size: 72, .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
+                        RankShade().frame(width: side, height: side)
+                        Text("\(k + 1)").font(.zune(size: min(72, side * 0.5), .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
                             .offset(x: -2, y: 18)
                     }
                 }
@@ -199,7 +186,7 @@ struct Panorama: View {
                 Text(e.title).font(.zune(.subheadline, .semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
                 Text(caption(e)).font(.zune(.footnote)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
             }
-            .frame(width: S.tile, alignment: .leading)
+            .frame(width: side, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
     }

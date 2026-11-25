@@ -287,45 +287,29 @@ struct WeekHub: View {
         if !list.isEmpty {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: title).padding(.horizontal, S.margin)
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: S.gap) {
-                        ForEach(Array(list.enumerated()), id: \.element.id) { k, a in tile(k, a) }
-                    }
-                    .scrollTargetLayout()
-                    .padding(.leading, S.margin + bleed.leading)
-                    .padding(.trailing, S.margin + bleed.trailing)
-                }
-                .scrollIndicators(.hidden)
-                .scrollTargetBehavior(.viewAligned)
-                // Runs under the side bar to the screen's edge, as Zune's strips run off it (run 44: cut mid-name at an
-                // invisible line short of the rail), and clipped there.
-                // Clipped first, at the scroll's own (widened) frame: clipped after the padding it was cut back to the
-                // page's width, short of the rail (run 48 gate, blocker 4).
-                .clipped()
-                .padding(.leading, -bleed.leading)
-                .padding(.trailing, -bleed.trailing)
+                TileGrid(items: list) { k, a, w in tile(k, a, w) }
             }
         }
     }
-    private func tile(_ k: Int, _ a: ArtistCount) -> some View {
+    private func tile(_ k: Int, _ a: ArtistCount, _ side: CGFloat) -> some View {
         Opens(route: .artist(a.name), zoom: "\(title)|\(a.name)") {
         VStack(alignment: .leading, spacing: S.pair) {
             ZStack(alignment: .bottomLeading) {
-                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(a.name)")
+                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 400, corner: 10).frame(width: side).zoomSource("\(title)|\(a.name)")
                 if title != "new to you" {
-                    RankShade().frame(width: S.tile, height: S.tile)
-                    Text("\(k + 1)").font(.zune(size: 64, .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
+                    RankShade().frame(width: side, height: side)
+                    Text("\(k + 1)").font(.zune(size: min(64, side * 0.48), .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
                         .offset(x: -2, y: 18)
                 }
                 if a.isNew && title != "new to you" {
-                    NewMark().frame(width: S.tile - 16, height: S.tile - 16, alignment: .topTrailing).padding(8)
+                    NewMark().frame(width: side - 16, height: side - 16, alignment: .topTrailing).padding(8)
                 }
             }
             .padding(.bottom, title == "new to you" ? S.pair : S.gap)
             Text(a.name).font(.zune(.subheadline, .semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
             Text("\(a.plays) \(a.plays == 1 ? "play" : "plays")").font(.zune(.footnote)).monospacedDigit().foregroundStyle(S.soft)
         }
-        .frame(width: S.tile, alignment: .leading)
+        .frame(width: side, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
     }

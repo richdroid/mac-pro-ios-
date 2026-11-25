@@ -466,3 +466,31 @@ private struct NoBounceProbe: UIViewRepresentable {
     func updateUIView(_ v: Probe, context: Context) {}
 }
 #endif
+
+// Art as WP7 lays it inside a pivot or a hub (the music hub's "new"): a grid of squares, three across folded and four
+// with room, two rows and the rest a tap away. Never a sideways strip inside a pivot: a sideways drag there scrolled the
+// strip instead of turning the pivot (run 60, pivot-wrap: "on repeat" scrolled 1-2-3 → 5-6-7 and lately never turned).
+struct TileGrid<Item: Identifiable, Cell: View>: View {
+    let items: [Item]
+    @ViewBuilder let cell: (Int, Item, CGFloat) -> Cell
+    @Environment(\.pageWidth) private var page
+    @State private var all = false
+    var body: some View {
+        let cols = page >= 560 ? 4 : 3
+        let w = floor((max(page, 240) - S.margin * 2 - S.gap * CGFloat(cols - 1)) / CGFloat(cols))
+        let shown = all ? items : Array(items.prefix(cols * 2))
+        VStack(alignment: .leading, spacing: S.gap) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(w), spacing: S.gap, alignment: .top), count: cols), alignment: .leading, spacing: S.gap) {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { k, e in cell(k, e, w) }
+            }
+            if items.count > cols * 2 {
+                Button { withAnimation(Z.easeOut(0.35)) { all.toggle() } } label: {
+                    Text(all ? "Show fewer" : "Show all \(items.count)").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 44).wpButton()
+                }
+                .buttonStyle(Press())
+            }
+        }
+        .padding(.horizontal, S.margin)
+    }
+}
