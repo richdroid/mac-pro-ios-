@@ -25,8 +25,9 @@ enum MacKey {
 enum MacSwipe { case up, down, left, right, back, forward, launchpad, desktop, notifications }
 
 // The Mac's screen as a small MacBook, shaped by how the Duo is held (the system gives the posture, never the angle):
-//  - Laptop (partly folded, the crease across) and open flat upright share one plan: the picture on the lid, set on
-//    the hinge; below it a function row, a full Mac keyboard and a trackpad, so folding between them moves nothing.
+//  - Laptop (partly folded, the crease across): the picture on the lid, set on the hinge; below it a function row, a
+//    full Mac keyboard and a trackpad. Only while the hinge is partly open: open flat or fully unfolded upright, the
+//    Screen is the folded portrait one, scaled up (Richard, 2026-11-25).
 //  - Closed: the picture whole under the camera, then the function row, a row of modifiers and arrows, the trackpad.
 //  - Book (the crease down the middle): picture and keys on the left page, the right page all trackpad.
 //  - Landscape, closed or open flat: the picture pinned to the top, its dock in the black under it.
@@ -345,9 +346,10 @@ struct RemoteScreenView: View {
         let kind: ScreenPlan.Kind
         if let force { kind = force }
         else if fold.folded, let c = fold.crease { kind = c.width >= c.height ? .laptop : .book }
-        else if force == nil, fold.crease == nil, w < 600, h > w { kind = .closed }
         else if w > h { kind = w >= 800 ? .flatLandscape : .closedLandscape }
-        else if w >= 600 { kind = .laptop }
+        // Upright and not half folded (open flat, or fully unfolded and held up), the Screen is the folded portrait one:
+        // picture on top, the tools, the modifiers and the trackpad. The keyboard-and-trackpad laptop is only for the
+        // laptop posture itself, the hinge partly open (Richard, 2026-11-25).
         else { kind = .closed }
         var p = ScreenPlan(kind: kind)
         switch kind {
@@ -1237,12 +1239,20 @@ struct RemoteScreenView: View {
             let page = min(crease.midX - half, width - crease.midX - half) - 12 - 16
             let each = max(min(Self.dockHalf, page), 0)
             HStack(spacing: 0) {
-                Group { if dockOpen { capsule { HStack(spacing: Self.dockGap) { dockKeys(compact: each < Self.dockHalf) }.frame(width: each, alignment: .leading) } } }
-                    .frame(width: max(0, crease.midX - half), alignment: .trailing)
+                // The left page keeps its width with the keys tucked away. It was a frame on an `if` that drew nothing
+                // then, and a modifier on nothing is nothing: the page went, and the tucked dock (^ and Done) slid over
+                // to the far left (Richard's screenshots, 2026-11-25, "the bottom controls are broken").
+                ZStack(alignment: .trailing) {
+                    Color.clear.frame(height: 1)
+                    if dockOpen { capsule { HStack(spacing: Self.dockGap) { dockKeys(compact: each < Self.dockHalf) }.frame(width: each, alignment: .leading) } }
+                }
+                .frame(width: max(0, crease.midX - half))
                 Color.clear.frame(width: half * 2, height: 1)
                 Group {
                     if dockOpen { capsule { HStack(spacing: Self.dockGap) { dockTools(compact: each < Self.dockHalf, spread: true) }.frame(width: each) } }
-                    else { capsule { dockTools() } }
+                    // Tucked away, ^ and Done stay where ⌄ and Done were, at the right-hand end of the open capsule, so
+                    // the key that brings the keys back is under the finger that put them away.
+                    else { capsule { dockTools() }.frame(width: each + 12, alignment: .trailing) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
