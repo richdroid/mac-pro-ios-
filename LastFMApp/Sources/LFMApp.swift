@@ -156,7 +156,7 @@ struct HubView: View {
             }
         }
         .environment(\.hubName, hub == .nowPlaying ? nil : hub.word)
-        .background { Backdrop(ref: Store.shared.shown?.art) }
+        .background { if hub == .nowPlaying { NowBackdrop(song: Store.shared.shown) } else { Backdrop(ref: Store.shared.shown?.art) } }
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
     }

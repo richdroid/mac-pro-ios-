@@ -205,13 +205,52 @@ struct Backdrop: View {
                 Color.black
                 if let ref {
                     let side = max(g.size.height, g.size.width) * 1.08
+                    // Dim and desaturated, as WP7.5's artist pages set their photo behind the pivot.
                     ArtView(ref, px: 1000, corner: 0)
                         .frame(width: side, height: side)
+                        .saturation(0.6)
                         .offset(x: g.size.width - side * 0.82, y: -side * 0.06)
                     LinearGradient(stops: [.init(color: .black.opacity(0.5 + dim), location: 0),
                                            .init(color: .black.opacity(0.62 + dim), location: 0.45),
                                            .init(color: .black.opacity(0.86), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
+                }
+            }
+            .frame(width: g.size.width, height: g.size.height)
+            .clipped()
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+}
+
+// Zune desktop's Now Playing: the picture of what's on across the whole screen in one colour (a duotone in the cover's
+// own colour, no blur), and over it the artist and album in giant capitals running off the right edge.
+struct NowBackdrop: View {
+    let song: Scrobble?
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .topLeading) {
+                Color.black
+                if let s = song {
+                    let tint = tileColor(s.art)
+                    let side = max(g.size.height, g.size.width) * 1.05
+                    ArtView(s.art, px: 1000, corner: 0)
+                        .frame(width: side, height: side)
+                        .grayscale(1)
+                        .colorMultiply(tint.mix(with: .white, by: 0.35))
+                        .offset(x: g.size.width - side * 0.85, y: g.size.height - side)
+                    LinearGradient(stops: [.init(color: .black.opacity(0.55), location: 0), .init(color: .black.opacity(0.35), location: 0.5),
+                                           .init(color: .black.opacity(0.7), location: 1)], startPoint: .top, endPoint: .bottom)
+                    VStack(alignment: .leading, spacing: -24) {
+                        Text(s.artist).font(.zuneCaps(size: 96, .bold))
+                        if !s.album.isEmpty { Text(s.album).font(.zuneCaps(size: 96, .bold)) }
+                    }
+                    .textCase(.uppercase).lineLimit(1).fixedSize()
+                    .foregroundStyle(tint.mix(with: .white, by: 0.6).opacity(0.22))
+                    .padding(.leading, S.margin - 4)
+                    .offset(y: g.size.height * 0.52)
                 }
             }
             .frame(width: g.size.width, height: g.size.height)

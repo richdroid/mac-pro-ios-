@@ -105,9 +105,10 @@ private struct HomePanorama: View {
                 let travel = max(1, sec * CGFloat(count - 1))
                 let rate = min(0.6, max(0.2, (titleW + S.margin - pw * 0.8) / travel))
                 ZStack(alignment: .topLeading) {
-                    // WP7's panorama background: the slowest layer, the cover of what's on (or last played) big behind
-                    // everything, moving at half the title's rate.
-                    PanoramaBackground(ref: store.shown?.art, motion: motion, rate: rate * 0.5, travel: travel)
+                    // WP7's panorama background: the cover of what's on (or last played) big behind everything. The
+                    // layers run title slowest, then the background, then the sections (Microsoft's panorama guidance,
+                    // hh202912); no ratio is documented, so the background sits between the two.
+                    PanoramaBackground(ref: store.shown?.art, motion: motion, rate: min(0.85, rate + (1 - rate) * 0.4), travel: travel)
                     PanoramaTitle(text: "rotation", size: T, motion: motion, rate: rate)
                         .padding(.leading, side.leading + S.margin - 6)
                         .offset(y: titleTop)
@@ -193,7 +194,8 @@ private struct PanoramaTitle: View {
     var body: some View {
         Text(text)
             .font(.zuneLower(size: size)).tracking(-3)
-            .foregroundStyle(.white)
+            // As WP7.5's "music+videos": the title in Zune's magenta running into violet across its width.
+            .foregroundStyle(LinearGradient(colors: [Z.magenta, Color(red: 0.62, green: 0.16, blue: 0.78)], startPoint: .leading, endPoint: .trailing))
             .lineLimit(1).fixedSize()
             .offset(x: -motion.x * rate)
             .accessibilityAddTraits(.isHeader)
@@ -481,18 +483,37 @@ struct MenuWords: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Hub.menu, id: \.self) { h in
                 Button { go("w-" + h.rawValue, h, nil) } label: {
-                    Text(h.word)
-                        .font(.zuneLower(size: size)).tracking(-1.2)
-                        .foregroundStyle(.white)
-                        .lineLimit(1).fixedSize()
-                        .padding(.leading, -3)
-                        .frame(maxWidth: .infinity, minHeight: size * 1.15, alignment: .leading)
-                        .contentShape(Rectangle())
+                    // Zune HD's menu: the huge word, and under it in small grey capitals what's inside.
+                    VStack(alignment: .leading, spacing: -size * 0.12) {
+                        Text(h.word)
+                            .font(.zuneLower(size: size)).tracking(-1.2)
+                            .foregroundStyle(.white)
+                            .lineLimit(1).fixedSize()
+                            .padding(.leading, -3)
+                        Text(Self.inside(h)).font(.zuneCaps(size: 12, .semibold)).tracking(0.6)
+                            .foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: size * 1.3, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(Tilt())
                 .modifier(TurnstileOut(index: Home.order("w-" + h.rawValue), count: Home.count, chosen: chosen.map(Home.order)))
                 .accessibilityLabel(h.word)
             }
+        }
+    }
+}
+
+extension MenuWords {
+    static func inside(_ h: Hub) -> String {
+        switch h {
+        case .profile: return "scrobbles  streak  lately  story"
+        case .charts: return "week  month  year  collage"
+        case .library: return "artists  albums  songs  loved"
+        case .discover: return "for you  songs  rediscover"
+        case .history: return "today  all plays"
+        case .scrobbling: return "log  settings"
+        case .nowPlaying: return "song  artist  album"
         }
     }
 }
