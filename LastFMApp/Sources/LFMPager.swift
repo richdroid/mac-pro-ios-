@@ -26,6 +26,18 @@ struct Panel: Identifiable {
     var f: CGFloat = 0
     // The slot the paging chose as the finger lifted (read once, as the scroll starts to settle).
     @ObservationIgnored var target: Int?
+    // The scroll's phase, kept out of view state: as state, each touch, lift and rest worked the whole hub out again,
+    // the lift's in the first frame of the settle.
+    @ObservationIgnored var phase: ScrollPhase = .idle
+    // A page turned: the tick, felt as the finger lifts. Read only by the tick's own small view.
+    var landed = 0
+    @ObservationIgnored var ticked: Int?
+}
+
+// The landing's haptic, alone in a view of its own, so a tick redraws nothing else.
+struct PagerTick: View {
+    let motion: PagerMotion
+    var body: some View { Color.clear.frame(width: 0, height: 0).sensoryFeedback(.tick, trigger: motion.landed).accessibilityHidden(true) }
 }
 
 struct Pager: View {
@@ -46,12 +58,11 @@ struct Pager: View {
     @State private var pos = ScrollPosition(edge: .leading)
     // A page's full width now, side bars included (it changes on a turn and at the fold, not as a side bar arrives).
     @State private var width: CGFloat = 0
-    @State private var landed = 0
     // Opened on a section other than the first (a widget's link, a build's pose): not settled, and nothing read from
     // where the scroll is, until it has really been put there.
     @State private var placed = false
-    // The scroll's phase, so nothing moves the pager while his finger or a fling is on it.
-    @State private var phase: ScrollPhase = .idle
+    // The scroll's phase (kept in `motion`), so nothing moves the pager while his finger or a fling is on it.
+    private var phase: ScrollPhase { motion.phase }
     // The page the pager set itself as it landed (not asked for from outside): no correction follows that change.
     @State private var selfPage: Int?
     // Only the page it opens on is built in the push's first frames; the others half a second later, at rest, before
@@ -131,13 +142,15 @@ struct Pager: View {
                 .onScrollGeometryChange(for: CGSize.self) { CGSize(width: $0.contentOffset.x, height: $0.containerSize.width) } action: { _, v in
                     motion.x = v.width; motion.f = v.width / max(v.height, 1) - CGFloat(off); PagerMotion.moves += 1
                 }
-                // The landing is decided as his finger lifts, so the lit name and the tick move with the page, not after
-                // it has come to rest. At rest, checked; a rest on a copy is put on its real page.
+                // The landing is decided as his finger lifts: the tick then (the lit name follows the scroll itself). The
+                // page is said at rest, so nothing is worked out again in the settle's frames (§26: nothing heavy in a
+                // landing). At rest, checked; a rest on a copy is put on its real page.
                 .onScrollPhaseChange { _, new in
-                    phase = new
+                    motion.phase = new
                     if new == .decelerating, let t = motion.target {
                         motion.target = nil
-                        land(real(t))
+                        let i = real(t)
+                        if panels.indices.contains(i), panels[i].id != page, placed { motion.ticked = i; motion.landed += 1 }
                     } else if new == .idle {
                         let r = Int((motion.f).rounded())
                         if cyclic, r < 0 || r >= n {
@@ -156,7 +169,10 @@ struct Pager: View {
                     try? await Task.sleep(nanoseconds: 500_000_000); all = true
                     // The copies only once nothing is moving, so their build never lands in a swipe's frames.
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    while phase != .idle { try? await Task.sleep(nanoseconds: 200_000_000) }
+                    // Never round again once the hub has gone: a cancelled sleep throws at once, so a hub popped mid-swipe
+                    // spun here on the main thread for as long as the app was open.
+                    while phase != .idle, !Task.isCancelled { try? await Task.sleep(nanoseconds: 200_000_000) }
+                    guard !Task.isCancelled else { return }
                     copies = true
                 }
                 // The page's width changed under it (a turn, the fold): put back on its page's edge, at rest only.
@@ -212,7 +228,7 @@ struct Pager: View {
         .ignoresSafeArea(.container, edges: [.top, .horizontal])
         .padding(.bottom, -foot)
         }
-        .sensoryFeedback(.tick, trigger: landed)
+        .background { PagerTick(motion: motion) }
         // The hub asked again: back to the first section.
         .onChange(of: top) { _, _ in
             if let first = panels.first?.id, page != first { withAnimation(Z.easeOut(0.35)) { pos.scrollTo(x: CGFloat(slot(0)) * width) } }
@@ -282,7 +298,8 @@ struct Pager: View {
         guard placed || phase != .idle else { return }
         placed = true
         let id = panels[max(0, min(panels.count - 1, i))].id
-        if id != page { selfPage = id; page = id; landed += 1 }
+        if id != page { selfPage = id; page = id; if motion.ticked != i { motion.landed += 1 } }
+        motion.ticked = nil
     }
 }
 

@@ -11,7 +11,6 @@ import SwiftUI
 struct HomeView: View {
     @Environment(\.paneLayout) private var pane
     @Environment(\.openRoute) private var open
-    @State private var chosen: String?
     private var store: Store { Store.shared }
     var body: some View {
         Group {
@@ -20,14 +19,14 @@ struct HomeView: View {
                     Page {
                         VStack(alignment: .leading, spacing: S.head) {
                             AppTitle(text: "rotation").modifier(order("title"))
-                            StartTiles(width: nil, chosen: chosen, go: go)
+                            StartTiles(width: nil, go: go)
                         }
                         .padding(.top, S.head)
                     }
                 } right: {
                     Page {
                         VStack(alignment: .leading, spacing: S.section) {
-                            MenuWords(chosen: chosen, go: go).padding(.leading, S.margin)
+                            MenuWords(go: go).padding(.leading, S.margin)
                             AlbumTiles(title: "just played", items: Quickplay.albums(store.recent), width: nil)
                             ArtistTiles(title: "on repeat", list: store.insights.week, width: nil)
                         }
@@ -35,7 +34,7 @@ struct HomeView: View {
                     }
                 }
             } else {
-                HomePanorama(chosen: chosen, go: go)
+                HomePanorama(go: go)
             }
         }
         .background { if pane { Backdrop(ref: store.shown?.art) } else { Color.black.ignoresSafeArea() } }
@@ -44,20 +43,21 @@ struct HomeView: View {
         // Back on home finds it as it was: everything flat again (reset once the hub has covered it).
         .onDisappear {
             TileClock.shared.stop()
-            var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { chosen = nil }
+            var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { HomeLeave.shared.chosen = nil }
         }
         .task(id: store.shown?.id) { if let s = store.shown { NowStats.shared.load(s, full: false) } }
         // What the rediscover tile shows, worked out off the main thread once the screen has settled.
         .task { try? await Task.sleep(nanoseconds: 2_500_000_000); RediscoverModel.shared.appear() }
     }
 
-    private func order(_ key: String) -> TurnstileOut { TurnstileOut(index: Home.order(key), count: Home.count, chosen: chosen.map(Home.order)) }
+    private func order(_ key: String) -> TurnstileOut { TurnstileOut(index: Home.order(key), count: Home.count) }
 
     // Everything leaves first (0.25 s, feathered, the tapped one last), then the hub is pushed without the system's slide:
     // its own turnstile brings it in.
     private func go(_ key: String, _ hub: Hub, _ panel: Int?) {
-        guard chosen == nil else { return }
-        chosen = key
+        guard HomeLeave.shared.chosen == nil else { return }
+        // Read by the turnstiles alone: the tiles and words under them aren't worked out again as they leave.
+        HomeLeave.shared.chosen = Home.order(key)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             open.hub(hub, panel)
@@ -76,12 +76,13 @@ enum Home {
 // The panorama: its title, then its sections, each paged to the left margin with WP7's paging; the title slides at
 // a fraction of the sections' rate, so its end comes into view only as the last section does.
 private struct HomePanorama: View {
-    let chosen: String?
     let go: (String, Hub, Int?) -> Void
     @State private var motion = PagerMotion()
     @State private var pos = ScrollPosition(edge: .leading)
-    @State private var section = 0
-    @State private var landed = 0
+    // Where the panorama rests, kept out of view state: as state, the lift redrew the whole panorama in the first frame
+    // of its settle. The tick has a small view of its own.
+    @State private var rest = Rest()
+    final class Rest { var section = 0 }
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     private var store: Store { Store.shared }
     var body: some View {
@@ -112,12 +113,12 @@ private struct HomePanorama: View {
                     PanoramaTitle(text: "rotation", size: T, motion: motion, rate: rate)
                         .padding(.leading, side.leading + S.margin - 6)
                         .offset(y: titleTop)
-                        .modifier(TurnstileOut(index: 0, count: Home.count, chosen: chosen.map(Home.order)))
+                        .modifier(TurnstileOut(index: 0, count: Home.count))
                         .turnstile(0)
                     ScrollView(.horizontal) {
                         HStack(alignment: .top, spacing: 0) {
-                            section("start", key: "h-start", 0, sec, H - sectionsTop, side) { StartTiles(width: sec - S.margin - 12, chosen: chosen, go: go) }
-                            section("menu", key: "h-menu", 1, sec, H - sectionsTop, side) { MenuWords(chosen: chosen) { go($0, $1, $2) } }
+                            section("start", key: "h-start", 0, sec, H - sectionsTop, side) { StartTiles(width: sec - S.margin - 12, go: go) }
+                            section("menu", key: "h-menu", 1, sec, H - sectionsTop, side) { MenuWords { go($0, $1, $2) } }
                             section("just played", key: "h-played", 2, sec, H - sectionsTop, side) {
                                 AlbumTiles(title: nil, items: Quickplay.albums(store.recent), width: sec - S.margin - 12)
                             }
@@ -138,12 +139,12 @@ private struct HomePanorama: View {
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in motion.x = x }
                     .onScrollPhaseChange { _, p in
                         Store.shared.scrolling = p != .idle
-                        if p == .decelerating, let t = motion.target { motion.target = nil; if t != section { section = t; landed += 1 } }
-                        if p == .idle { section = Int((motion.x / max(sec, 1)).rounded()) }
+                        if p == .decelerating, let t = motion.target { motion.target = nil; if t != rest.section { rest.section = t; motion.landed += 1 } }
+                        if p == .idle { rest.section = Int((motion.x / max(sec, 1)).rounded()) }
                     }
                     .frame(width: W, height: H - sectionsTop)
                     .offset(y: sectionsTop)
-                    .sensoryFeedback(.tick, trigger: landed)
+                    .background { PagerTick(motion: motion) }
                 }
                 .frame(width: W, height: H, alignment: .topLeading)
                 .clipped()
@@ -157,7 +158,7 @@ private struct HomePanorama: View {
                         var t = Transaction(); t.disablesAnimations = true
                         withTransaction(t) { pos.scrollTo(x: CGFloat(min(n, count - 1)) * sec) }
                     }
-                    section = n
+                    rest.section = n
                 }
             }
             .ignoresSafeArea(.container, edges: .all)
@@ -171,7 +172,7 @@ private struct HomePanorama: View {
             Text(name).font(.zuneLower(size: 40)).tracking(-0.8).foregroundStyle(.white)
                 .lineLimit(1).fixedSize()
                 .padding(.leading, S.margin - 2)
-                .modifier(TurnstileOut(index: Home.order(key), count: Home.count, chosen: chosen.map(Home.order)))
+                .modifier(TurnstileOut(index: Home.order(key), count: Home.count))
                 .accessibilityAddTraits(.isHeader)
             ScrollView(.vertical) {
                 content()
@@ -238,7 +239,6 @@ private struct PanoramaBackground: View {
 // Each opens its hub with the turnstile; each tips under the finger; they turn one at a time (TileClock).
 struct StartTiles: View {
     let width: CGFloat?
-    let chosen: String?
     let go: (String, Hub, Int?) -> Void
     @Environment(\.pageWidth) private var pageWidth
     private var store: Store { Store.shared }
@@ -268,7 +268,7 @@ struct StartTiles: View {
     private func tile<C: View>(_ key: String, _ hub: Hub, _ panel: Int?, w: CGFloat, h: CGFloat, @ViewBuilder _ c: () -> C) -> some View {
         Button { go(key, hub, panel) } label: { c().frame(width: w, height: h) }
             .buttonStyle(Tilt())
-            .modifier(TurnstileOut(index: Home.order(key), count: Home.count, chosen: chosen.map(Home.order)))
+            .modifier(TurnstileOut(index: Home.order(key), count: Home.count))
     }
 }
 
@@ -477,7 +477,6 @@ private struct ScrobbleLiveTile: View {
 // MARK: - The menu: Zune HD's huge words
 
 struct MenuWords: View {
-    let chosen: String?
     let go: (String, Hub, Int?) -> Void
     @Environment(\.pageWidth) private var width
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
@@ -500,7 +499,7 @@ struct MenuWords: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(Tilt())
-                .modifier(TurnstileOut(index: Home.order("w-" + h.rawValue), count: Home.count, chosen: chosen.map(Home.order)))
+                .modifier(TurnstileOut(index: Home.order("w-" + h.rawValue), count: Home.count))
                 .accessibilityLabel(h.word)
             }
         }

@@ -137,12 +137,15 @@ extension View {
 
 // Turnstile forward out [S4]: 0° to 50° about the left edge in 0.25 s, exponential ease in; feathered 50 ms apart with
 // the tapped item last, as Windows Phone leaves a list.
+// What home's tap chose (its place in Home.keys), read only by the turnstiles: as a value handed down, a tap worked out
+// every tile and word on home again in the first frame of the turnstile.
+@MainActor @Observable final class HomeLeave { static let shared = HomeLeave(); var chosen: Int? }
 struct TurnstileOut: ViewModifier {
     let index: Int
     let count: Int
-    let chosen: Int?
     @Environment(\.accessibilityReduceMotion) private var still
     func body(content: Content) -> some View {
+        let chosen = HomeLeave.shared.chosen
         let gone = chosen != nil && !still
         // The order of leaving: everything else from the top, the chosen word last.
         let order = chosen.map { index == $0 ? count : (index < $0 ? index : index - 1) } ?? 0
@@ -166,9 +169,12 @@ private struct TiltBody<L: View>: View {
     let pressed: Bool
     @State private var at: CGPoint?
     @State private var size: CGSize = .zero
+    // The finger has travelled: a swipe begun on the tile, not a press. The tilt lets go at once (WP7 drops it as a pan
+    // starts); held through its 0.2 s release, a tile stayed tipped while the panorama or pivot moved off under it.
+    @State private var travelled = false
     @Environment(\.accessibilityReduceMotion) private var still
     var body: some View {
-        let on = pressed && !still
+        let on = pressed && !still && !travelled
         // Where the finger is, as −1…1 across and down from the centre; the centre if it isn't known.
         let p = at ?? CGPoint(x: size.width / 2, y: size.height / 2)
         let dx = size.width > 0 ? max(-1, min(1, (p.x - size.width / 2) / (size.width / 2))) : 0
@@ -181,10 +187,10 @@ private struct TiltBody<L: View>: View {
             .scaleEffect(on ? sink : 1)
             // The press tips the side under the finger in: a rotation about the axis at right angles to the finger's offset.
             .rotation3DEffect(.radians(on ? 0.3 * off : 0), axis: (x: -dy, y: dx, z: 0), perspective: on ? 0.5 : 0)
-            .animation(on ? .easeOut(duration: 0.05) : .easeOut(duration: 0.1).delay(0.2), value: on)
+            .animation(on ? .easeOut(duration: 0.05) : .easeOut(duration: 0.1).delay(travelled ? 0 : 0.2), value: on)
             #if canImport(UIKit)
             // A UIKit recogniser that recognises beside everything and never cancels the button's touch.
-            .gesture(TouchDown { at = $0 })
+            .gesture(TouchDown(down: { at = $0; travelled = false }, moved: { travelled = true }))
             #endif
     }
 }
@@ -193,6 +199,7 @@ private struct TiltBody<L: View>: View {
 // button's touch.
 private struct TouchDown: UIGestureRecognizerRepresentable {
     let down: (CGPoint) -> Void
+    var moved: () -> Void = {}
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
     func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
         let g = UILongPressGestureRecognizer()
@@ -206,9 +213,17 @@ private struct TouchDown: UIGestureRecognizerRepresentable {
     }
     func handleUIGestureRecognizerAction(_ g: UILongPressGestureRecognizer, context: Context) {
         let p: CGPoint? = context.converter.localLocation
-        if g.state == .began, let p { down(p) }
+        // Travel is read in the window: the tile moves with a scroll, so under its own finger it barely moves at all.
+        let w = g.location(in: nil)
+        if g.state == .began, let p { context.coordinator.from = w; context.coordinator.gone = false; down(p) }
+        // More than 10 pt from where it came down: a swipe, said once.
+        if g.state == .changed, let f = context.coordinator.from, !context.coordinator.gone, hypot(w.x - f.x, w.y - f.y) > 10 {
+            context.coordinator.gone = true; moved()
+        }
     }
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var from: CGPoint?
+        var gone = false
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
     }
 }
@@ -520,10 +535,14 @@ struct ScreenBleed<C: View>: View {
     @ViewBuilder let content: (CGSize) -> C
     var body: some View {
         GeometryReader { g in
-            let i = g.safeAreaInsets
-            let size = CGSize(width: g.size.width + i.leading + i.trailing, height: g.size.height + i.top + Win.foot(g))
+            // The whole window from wherever this reader sits in it: the insets alone still left the home indicator's
+            // strip black under the last row upright and folded (run 62, history and now playing).
+            let i = g.safeAreaInsets, f = g.frame(in: .global), w = Win.bounds
+            let x = w.width > 0 ? max(0, f.minX - w.minX) : i.leading, y = w.height > 0 ? max(0, f.minY - w.minY) : i.top
+            let size = CGSize(width: max(g.size.width + i.leading + i.trailing, w.width > 0 ? w.maxX - f.minX + x : 0),
+                              height: max(g.size.height + i.top + Win.foot(g), w.height > 0 ? w.maxY - f.minY + y : 0))
             content(size).frame(width: size.width, height: size.height).clipped()
-                .offset(x: -i.leading, y: -i.top)
+                .offset(x: -x, y: -y)
         }
     }
 }
