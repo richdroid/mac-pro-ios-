@@ -44,13 +44,14 @@ struct DashboardTab: View {
     var body: some View {
         Group {
             switch side {
-            case .all: now; boards; switches
+            case .all: now; boards; switches; MacMusicSection()
             // Open flat: what's on and the boards on the left, the switches on the right.
             case .left: now; boards
-            case .right: switches
+            case .right: switches; MacMusicSection()
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
+        .modifier(MacMusicLoop(on: side != .left))
         .onChange(of: remote.busy) { _, b in if b == nil { asked = [:] } }
         // Done when the Console answers yes, warn when it says no or can't be reached: once per press, on the answer.
         .haptic(.done, trigger: remote.answered) { _, _ in side != .right }
