@@ -70,7 +70,7 @@ struct ChumbyApp: App {
             await CalendarWake.shared.scheduleRefresh()
             // the phone's backup alarms from the Chumby's own list, so they hold while the app stays closed
             if let s = try? await chumbyTry({ try JSONDecoder().decode(ChumbyState.self, from: try await $0.raw("state").data) }) {
-                await ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()), escalation: BackupPlan.Escalation(s.escalate))
+                await ChumbyBackupAlarm.shared.sync(state: s)
                 await ChumbyBackupAlarm.shared.settle()
             }
         }

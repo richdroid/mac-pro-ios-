@@ -217,6 +217,12 @@ struct ChumbyState: Decodable {
     var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
     // The ring watch's escalation, [FIRST, AGAIN] seconds (/psp/alarm_escalate); nil from a Chumby that doesn't say.
     var escalate: [Int]?
+    // The days a calendar alarm came due while on, "YYYYMMDD" by the Chumby's clock (/psp/chalarm_caldays, the panel hook's
+    // chCalMark; 11-25). The panel switches a once alarm off as it comes due, so the list alone can't show these days.
+    var calDays: Set<String> = []
+    // How the newest rings ended, newest first (as a=hist "ends"), so a Stop on the Chumby reaches the backup alarm
+    // with any state read, not only by the Mac's quiet push.
+    var ends: [RingEnd] = []
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
@@ -253,13 +259,15 @@ struct ChumbyState: Decodable {
         rang = (try? c.decodeIfPresent(Ring.self, forKey: .rang)) ?? nil
         musicPlaying = ((try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil)?.playing ?? false
         escalate = (try? c.decodeIfPresent([Int].self, forKey: .escalate)) ?? nil
+        calDays = Set((try? c.decodeIfPresent([String].self, forKey: .caldays)) ?? [])
+        ends = (try? c.decodeIfPresent([RingEnd].self, forKey: .ends)) ?? []
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case escalate, missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, pandoraAdd, local, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
+    enum Key: String, CodingKey { case caldays, ends, escalate, missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, pandoraAdd, local, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
 }
 
 // The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
@@ -285,6 +293,10 @@ struct Song: Codable, Identifiable, Hashable { let t: Double; let title: String;
 // An alarm that started ringing, as the Chumby logs it (a=hist "rings", a=state "rang"): when, and the alarm's name. A
 // once-only calendar alarm leaves the alarm list after it fires, so "Woke up to" pairs songs with these, not the list.
 struct Ring: Codable, Hashable { let t: Double; let name: String }
+// How a ring ended, as the panel hook logs it (a=hist and a=state "ends"): "stop" (the alarm screen put away: his Stop on
+// the Chumby or the phone, or the auto dismiss), "snooze" (`until`: when it rings again), "played" (its length ran out),
+// "replaced". A ring cut off by a restart has no row.
+struct RingEnd: Codable, Hashable { let t: Double; let kind: String; let name: String; var until: Double? = nil }
 
 struct RingReport: Decodable, Equatable {
     var state: String
@@ -552,12 +564,14 @@ extension ChumbyState {
         // phone's backup rang for omg at 11:00 after the 10:45 calendar alarm was skipped and switched off). Until the app
         // reads the Chumby's own record of calendar days (/psp/chalarm_caldays), this is the closest it can tell.
         let clock = chumbyNow ?? Date()
-        let calendarDays = Set(alarms.filter { $0.when == "once" && $0.isCalendar }.compactMap { a -> Date? in
+        var calendarDays = Set(alarms.filter { $0.when == "once" && $0.isCalendar }.compactMap { a -> Date? in
             guard let m = Double(a.time) else { return nil }
             let t = Date(timeIntervalSince1970: m * 60)
             guard a.isOn || (t <= clock && cal.isDate(t, inSameDayAs: clock)) else { return nil }
             return cal.startOfDay(for: t)
         })
+        // and the Chumby's own record of them (11-25), which holds even once the calendar alarm has left the list
+        for k in calDays { if let d = Self.day(k, cal) { calendarDays.insert(d) } }
         var from = now
         for _ in 0..<12 {
             guard let d = a.nextFire(after: from) else { return nil }
@@ -567,6 +581,11 @@ extension ChumbyState {
             return d
         }
         return nil
+    }
+    // "20261125" as the start of that day in `cal`
+    static func day(_ k: String, _ cal: Calendar) -> Date? {
+        guard k.count == 8, let n = Int(k) else { return nil }
+        return cal.date(from: DateComponents(year: n / 10000, month: n / 100 % 100, day: n % 100))
     }
     // A one-off or nap whose time is truly behind it by the Chumby's own clock (`chumby`, from its state), with two hours to
     // spare for any snooze. Without the Chumby's clock nothing counts as expired. The Chumby clears its own Catch-up.

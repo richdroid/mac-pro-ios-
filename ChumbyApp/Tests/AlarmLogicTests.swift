@@ -467,6 +467,41 @@ do {
     expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: at(2026, 11, 11, 12, 50)).cancel.isEmpty, "a late push for an earlier ring takes no other ring's backup")
     expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: nil).cancel.isEmpty, "and with no time it takes nothing")
     expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 6), at: dentist).cancel.isEmpty, "nor one that has already rung")
+    // 11-25: the Chumby's own record of ring ends, read with any state (a=state "ends"), not only the Mac's quiet push.
+    func end(_ kind: String, _ d: Date, _ name: String = "Calendar: Dentist", until: Date? = nil) -> RingEnd { RingEnd(t: d.timeIntervalSince1970, kind: kind, name: name, until: until?.timeIntervalSince1970) }
+    let t1 = at(2026, 11, 11, 13, 1)
+    let fe = BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50))], now: t1.addingTimeInterval(20), delay: 5, makeID: mk)
+    expect(fe.cancel.map(\.ringAt) == [dentist] && fe.entries.count == r1.entries.count - 1, "a Stop row on the Chumby takes the ring's backup at the next state read")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50), "Dentist")], now: t1, delay: 5, makeID: mk).cancel.count == 1, "the name with or without its Calendar: prefix")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", at(2026, 11, 11, 12, 40))], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "an earlier ring's Stop takes nothing")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50), "Work")], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "nor another alarm's")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50)), end("played", dentist.addingTimeInterval(40))], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "a Stop after it played out isn't his in time")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50))], now: t1, delay: 5, length: { _ in 1 }, makeID: mk).cancel.isEmpty, "nor one at the end of its length (the auto dismiss)")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("replaced", dentist.addingTimeInterval(50))], now: t1, delay: 5, makeID: mk).cancel.isEmpty && BackupPlan.fromEnds(r1.entries, ends: [], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "no Stop row, no change")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50))], now: at(2026, 11, 11, 12, 59), delay: 5, makeID: mk).cancel.isEmpty, "a ring not begun yet is left alone")
+    let fs = BackupPlan.fromEnds(r1.entries, ends: [end("snooze", dentist.addingTimeInterval(50), until: at(2026, 11, 11, 13, 10))], now: t1, delay: 5, makeID: mk)
+    expect(fs.add.map(\.fireAt) == [at(2026, 11, 11, 13, 10).addingTimeInterval(300)] && fs.cancel.count == 1, "a Snooze row moves it to the snooze's end, its beep and the delay")
+    expect(BackupPlan.fromEnds(fs.entries, ends: [end("snooze", dentist.addingTimeInterval(50), until: at(2026, 11, 11, 13, 10))], now: t1, delay: 5, makeID: mk).add.isEmpty, "read again, nothing changes")
+    let fss = BackupPlan.fromEnds(fs.entries, ends: [end("stop", at(2026, 11, 11, 13, 11)), end("snooze", dentist.addingTimeInterval(50), until: at(2026, 11, 11, 13, 10))], now: at(2026, 11, 11, 13, 11), delay: 5, makeID: mk)
+    expect(fss.cancel.count == 1 && fss.add.isEmpty, "snooze, then Stop on the re-ring: the backup goes")
+}
+
+section("the Chumby's own calendar days (a=state caldays)")
+do {
+    // The 11-24 case once the calendar alarm has left the list (a save drops one-offs two hours past): only the Chumby's
+    // record says today was a calendar day.
+    let omg = alarm("omg", "daily", "660")
+    var s = state([omg]); s.calDays = ["20261111"]
+    expect(s.ring(of: omg, after: now) == at(2026, 11, 12, 11), "a day in caldays keeps the daily quiet that day")
+    expect(BackupPlan.rings(in: s, now: now, horizon: 36 * 3600).map(\.at) == [at(2026, 11, 12, 11)], "and gives it no backup")
+    s.calOverride = 0
+    expect(s.ring(of: omg, after: now) == at(2026, 11, 11, 11), "unless calendar days are set not to override")
+    var s2 = state([omg]); s2.calDays = ["20261110", "bad", "2026111"]
+    expect(s2.ring(of: omg, after: now) == at(2026, 11, 11, 11), "yesterday's day or a malformed one changes nothing")
+    let j = #"{"ok":true,"alarms":[],"caldays":["20261124","20261125"],"ends":[{"t":1795638367,"kind":"stop","name":"Calendar: CR Shift","until":0}]}"#
+    let d = try! JSONDecoder().decode(ChumbyState.self, from: Data(j.utf8))
+    expect(d.calDays == ["20261124", "20261125"] && d.ends.first?.kind == "stop" && d.ends.first?.until == 0, "a=state's caldays and ends are read")
+    expect(try! JSONDecoder().decode(ChumbyState.self, from: Data(#"{"ok":true,"alarms":[]}"#.utf8)).calDays.isEmpty, "an older Chumby without them reads as none")
 }
 
 section("The backup rings after the Chumby's loud beep")
