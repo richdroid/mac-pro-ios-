@@ -44,9 +44,9 @@ jobs:
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
           node ci/mock-chumby.js & MOCK=$!
           sleep 2
-          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          git log -1 --format=%B | grep -q "\[quick\]" || git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
-          open -a DeviceHub; sleep 10
+          git log -1 --format=%B | grep -q "\[quick\]" || { open -a DeviceHub; sleep 10; }
           # Each launch is its own copy of the scene (the mock keeps one live state per scene name): restarted per shot.
           # Run 1 (79fcde1): the simulator was found shut down after DeviceHub and a "pose closed" sent to an already closed
           # Duo; every launch then failed. Each shot and film now checks it is up first, and boots it again if not.
@@ -102,6 +102,14 @@ jobs:
             done
           }
           ensure
+          if git log -1 --format=%B | grep -q "\[quick\]"; then
+            # [quick] in the commit: folded only (the posture it opens in, no DeviceHub), the starting and switch shots.
+            restart_mock
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/soundsplay -tab 3 -pose pandoraswitch
+            for t in 6 8 10 12 14 16 18 20 22 24 26 28 30; do sleep 2; xcrun simctl io "$DEVICE" screenshot --display=1 dist/chumby-quick-$t.png; done
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            ls dist; exit 0
+          fi
           stills 1 ""
           films 1 ""
           ensure; $D "$DEVICE" pose open; sleep 6; ensure

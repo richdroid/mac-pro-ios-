@@ -2400,12 +2400,15 @@ struct NowPlaying: View {
                                 // A station's name is what he just tapped: whole, on two lines if it needs them (gate 11-25:
                                 // "Sunny Day Re…"), with its status on one line, inside the cover's height.
                                 Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(station != nil ? 2 : 1)
+                                    // Folded, beside Stop, two lines still cut "Cocteau Twins & Slowdive Ra…" (run 3): a
+                                    // station's name gives a little size rather than words.
+                                    .minimumScaleFactor(station != nil ? 0.7 : 1)
                                 // Chosen a moment ago and not yet sounding: said so, where its artist will be.
                                 // Two lines while starting, so the one status of the wait is never cut short beside the spinner.
                                 Text(station != nil ? "Starting…" : starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(starting != nil ? 2 : 1)
                                     .contentTransition(.opacity)
                             } else if playing, let held {
-                                Text(held.label).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(2)
+                                Text(held.label).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(2).minimumScaleFactor(0.7)
                                 Text(held.source == "pandora" ? "Pandora" : "Radio").foregroundStyle(.secondary).lineLimit(1)
                             } else {
                                 Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
