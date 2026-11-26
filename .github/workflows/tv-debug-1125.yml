@@ -127,11 +127,12 @@ jobs:
             curl -s $M/fnormal/reset > /dev/null; ACT=throwIt; film flick-shelf$x $d 12 $M/fnormal -tab 3 -pose shelf
             curl -s $M/fnormal/reset > /dev/null; ACT=backIt; film putback-shelf$x $d 8 $M/fnormal -tab 3 -pose shelf
           }
-          # Final check after the gate's evidence (run 91909a6 has every posture): wake by a finger, the speaker sheet.
+          # Final check of the wake key's words after a finger's press, folded then open upright (the speaker sheet was
+          # checked in a05ac5c, every posture's flick in 91909a6 and 8260e0f).
           WD=1; WX=; ACT=wakeIt; film wake 1 4 $M/rasleep -tab 0
-          ACT=speakerIt; film speaker 1 3 $M/ridle -tab 0
           $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 1 || true; sleep 5
-          WD=3; WX=-portrait; ACT=speakerIt; film speaker-portrait 3 3 $M/ridle -tab 0
+          wakeUp() { sleep 9; snap 2 wake-2s; local a=$!; snap 7 wake-7s; local b=$!; snap 14 wake-14s; local c=$!; $D "$DEVICE" tap "Wake the TV" || echo "Wake not found"; wait $a $b $c; }
+          WD=3; WX=-portrait; ACT=wakeUp; film wake-portrait 3 4 $M/rasleep -tab 0
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist
       - name: Publish

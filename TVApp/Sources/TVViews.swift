@@ -1214,7 +1214,12 @@ struct RemoteTab: View {
     @ObservedObject private var nextUp = NextUp.shared
     // The build's shot of the typing bar opens with it up.
     @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
-    @State private var wakeAskedAt: Date?
+    // What the wake key says after a press: waking for 10 s, then still asleep until 40 s, then itself again. Plain state
+    // moved on by a task (a TimelineView reading the press time never showed "Waking the TV…" in CI a05ac5c: the words
+    // stayed "Wake the TV" at 2, 7 and 14 s after a finger's press that sent the key).
+    enum WakeWords: Equatable { case waking, stuck }
+    @State private var wakeWords: WakeWords?
+    @State private var wakeTimer: Task<Void, Never>?
     // The layout's own idea of typing: on with the keyboard key, and off only once the keyboard has gone, so the page
     // never lays itself out in the room a keyboard still on its way down leaves (Remote gate 4: for half a second it
     // split into two columns upright, crushed open flat, and came back under the keyboard folded).
@@ -1352,16 +1357,24 @@ struct RemoteTab: View {
             Button {
                 model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") }
                 // Said on the key at once, until the TV answers (or 10 s): a press with nothing to show for it read as dead.
-                wakeAskedAt = Date()
+                wakeTimer?.cancel()
+                wakeWords = .waking
+                #if os(iOS)
+                HitchLog.shared.note("wake pressed")
+                #endif
+                wakeTimer = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { wakeWords = .stuck }
+                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { wakeWords = nil }
+                }
             } label: {
                 // The whole ring is the key: the glyph over the words, never cut. "Waking the TV…" with the light running round
                 // it after a press; still asleep 10 s on, it says so (tv-pass-1122).
-                // Ticking only after a press, for its 40 s of words: ticking every second while the TV slept redrew the key
-                // for nothing and kept the screen from ever being still.
-                TimelineView(.periodic(from: .now, by: wakeAskedAt.map { Date().timeIntervalSince($0) < 41 } == true ? 1 : 3600)) { t in
-                    let since = wakeAskedAt.map { t.date.timeIntervalSince($0) }
-                    let waking = since.map { $0 < 10 } ?? false
-                    let stuck = since.map { $0 >= 10 && $0 < 40 } ?? false
+                let waking = wakeWords == .waking, stuck = wakeWords == .stuck
+                Group {
                     GeometryReader { g in
                         let d = min(g.size.width, g.size.height)
                         VStack(spacing: d * 0.04) {
