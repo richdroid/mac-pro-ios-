@@ -166,7 +166,8 @@ private struct HomePanorama: View {
                 let bgRate = max(titleRate + 0.05, min(0.9, (H * 1.02 - pw) / travel))
                 // Wide enough for the whole travel at that rate (gate on build 78: a black band down the last section
                 // folded, the picture shorter than the distance it slid).
-                let bgSide = max(H * 1.02, pw + bgRate * travel + 40)
+                // The whole width, side strip included (folded the strip is at the right: run 79 still ended short there).
+                let bgSide = max(H * 1.02, W + bgRate * travel + 40)
                 ZStack(alignment: .topLeading) {
                     PanoramaBackground(ref: Ground.hubs.pick?.ref, motion: motion, rate: bgRate, side: bgSide)
                         .modifier(TurnstileOut(index: 0, count: Home.count))
