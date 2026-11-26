@@ -38,12 +38,16 @@ final class MacMusicStore: ObservableObject {
     func read(_ model: AppModel) async {
         async let n: MacMusicNow? = try? model.api.macFeed("/api/mac/music/now", timeout: 15)
         async let a: MacAudioList? = try? model.api.macFeed("/api/mac/audio", timeout: 25)
-        let (gotNow, gotAudio) = await (n, a)
-        guard busy == nil, let gotNow else { return }   // a press began meanwhile: its own read follows
-        // A bridge without the music session answers without one: nothing to drive.
-        available = gotNow.session != nil
-        UserDefaults.standard.set(available, forKey: "macMusic.available")
-        if gotNow != now { now = gotNow }
+        // Lyrics' state lands as soon as it's read, never held back by a slow speaker query.
+        let gotNow = await n
+        if busy == nil, let gotNow {   // a press began meanwhile: its own read follows
+            // A bridge without the music session answers without one: nothing to drive.
+            available = gotNow.session != nil
+            UserDefaults.standard.set(available, forKey: "macMusic.available")
+            if gotNow != now { now = gotNow }
+        }
+        let gotAudio = await a
+        guard busy == nil, gotNow != nil else { return }
         if let gotAudio {
             let s = gotAudio.outputs.first { $0.id == gotAudio.preferred }
             if s != speaker { speaker = s }
@@ -60,8 +64,8 @@ final class MacMusicStore: ObservableObject {
         guard busy == nil else { return }
         busy = key; asked[key] = want; say = nil
         let a = try? await model.api.macDo(path, body, timeout: 45)
-        say = a?.say ?? a?.error ?? "Couldn’t reach the Mac."
-        if a?.done == true { answered += 1 } else { refused += 1 }
+        // The Mac's answer is shown only when it refused or failed: on success the switch has already said it.
+        if a?.done == true { answered += 1; say = nil } else { say = a?.say ?? a?.error ?? "Couldn’t reach the Mac."; refused += 1 }
         busy = nil
         await read(model)
         asked = [:]
@@ -96,10 +100,12 @@ struct MacMusicSection: View {
         guard lyricsOn else { return "Full screen on the Mac, through the speaker" }
         if store.now?.session?.speakerConnected == false { return store.now?.session?.speakerSay ?? "The speaker didn’t connect" }
         if let t = store.now?.title, store.now?.state == "playing" { return [t, store.now?.artist].compactMap { $0 }.joined(separator: " · ") }
+        if store.now?.title != nil { return "Paused · turns off after 2 minutes" }
         return "AirPlay a song to Mac Pro · turns off after 2 minutes"
     }
     private var speakerNote: String {
         if store.busy == "speaker" { return "Asking the Mac…" }
+        if store.speaker?.connected == nil { return "Checking…" }
         if store.speaker?.connected == true { return "Connected to the Mac" }
         return lyricsOn ? "Not connected" : "Free for your other devices"
     }
