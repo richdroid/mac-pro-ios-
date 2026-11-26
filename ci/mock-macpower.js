@@ -49,6 +49,11 @@ const feeds = {
 const consoleState = { running: true, frontmost: true, fullscreen: true, page: 'temps', board: null, rotate: false, rotateSecs: 45, mode: 'desk', rotating: ['machine', 'media', 'home', 'work', 'tonight'], animations: 'full', display: 'awake', glance: false, at: Date.now() };
 module.exports = (q, s) => {
   const u = new URL(q.url, 'http://x');
+  // Music on the Mac (the Dashboard's Music section): port 9061 is a Mac whose lyrics session is on (the Console sent aside), any other has it off.
+  const lyricsOn = q.socket.localPort === 9061;
+  if (u.pathname === '/api/mac/music/now') { s.end(JSON.stringify(lyricsOn ? { state: 'playing', title: 'Sample Song', artist: 'Sample Artist', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: true } } : { state: 'stopped', session: { on: false } })); return true; }
+  if (u.pathname === '/api/mac/audio') { s.end(JSON.stringify({ outputs: [{ id: 'hk', name: 'HK Invoke_C20142', connected: lyricsOn }, { id: 'mbp', name: 'Mac Pro Speakers', connected: false }], preferred: 'hk' })); return true; }
+  if (u.pathname === '/api/mac/console' && q.method === 'GET') { s.end(JSON.stringify(lyricsOn ? { ...consoleState, frontmost: false } : consoleState)); return true; }
   if (u.pathname === '/api/mac/console' && q.method === 'GET') { s.end(JSON.stringify(consoleState)); return true; }
   // The actions mirror and shared dismissals (2026-11-13): nothing under way; a dismissal is taken.
   if (u.pathname === '/api/mac/actions/current') { s.end(JSON.stringify({ action: null })); return true; }
