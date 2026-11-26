@@ -43,13 +43,22 @@ jobs:
           xcrun simctl launch "$DEVICE" $APP -hub home; sleep 40; xcrun simctl terminate "$DEVICE" $APP
           folded
           films_before "-before" 1
+          films_scroll "-before" 1
+          upright
+          films_scroll "-before-portrait" 3
+          flat
+          films_scroll "-before-open" 3
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Release-iphonesimulator/LastFM.app
           xcrun simctl launch "$DEVICE" $APP -hub home; sleep 20; xcrun simctl terminate "$DEVICE" $APP
+          folded
           films_all "" 1
-          films_wrap
+          films_scroll "" 1
           upright
           # Back is at the top left open upright (the side strip's place folded).
           BACKAT=0.063,0.052 films_all "-portrait" 3
+          films_scroll "-portrait" 3
+          flat
+          films_scroll "-open" 3
           xcrun simctl shutdown "$DEVICE"
       - name: Publish
         if: always()

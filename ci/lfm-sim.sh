@@ -105,6 +105,10 @@ film() {
       side) $D "$DEVICE" drag 0.8 ${Y:-0.75} 0.2 ${Y:-0.75} 0.25 || echo "drag failed";;
       sideback) $D "$DEVICE" drag 0.2 ${Y:-0.75} 0.8 ${Y:-0.75} 0.25 || echo "drag failed";;
       sideslow) $D "$DEVICE" drag 0.75 ${Y:-0.75} 0.35 ${Y:-0.75} 1.2 || echo "drag failed";;
+      # A short fast throw (a fifth of the width in 60 ms): turns one page by its speed alone, as WP7's flick does.
+      flick) $D "$DEVICE" drag 0.7 ${Y:-0.75} 0.5 ${Y:-0.75} 0.06 || echo "drag failed";;
+      # Pulled up past a list's foot and let go (after flings have reached it): WP7's compression at the end.
+      push) $D "$DEVICE" drag ${X:-0.5} 0.8 ${X:-0.5} 0.3 0.9 || echo "drag failed";;
       link) xcrun simctl openurl "$DEVICE" "$LINK" || echo "link failed";;
       edge) $D "$DEVICE" drag ${EX:-0.01} 0.5 0.9 0.5 0.8 || echo "drag failed";;
       tap) if [ -n "$arg" ]; then $D "$DEVICE" touch ${arg%,*} ${arg#*,} 0.05 || echo "tap failed"; else $D "$DEVICE" touch ${TX:-0.3} ${TY:-0.3} 0.05 || echo "tap failed"; fi;;

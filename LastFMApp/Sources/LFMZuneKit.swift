@@ -597,3 +597,83 @@ struct ScreenBleed<C: View>: View {
         }
     }
 }
+
+// WP7's list ends (Richard, 2026-11-25: "model it exactly off of zune"): pulled past its top or foot, a Windows Phone list
+// compresses, squeezed toward the far edge of the screen, instead of sliding away from the edge as iOS's rubber band
+// does, and lets go when the finger does. The system's own pull (its distance, its damping, its spring back) is read
+// from the scroll and shown as that squeeze: the content is held at its edge and scaled about the screen's far edge, so
+// the near edge still moves the distance the pull would have moved it. Nothing is read or redrawn while the list
+// scrolls inside its ends; the scroll indicator shows while it moves, as WP7's thin bar did.
+struct WPScroll<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @State private var ends = ScrollEnds()
+    var body: some View {
+        // One stack, as the scroll lays its content out itself (its default spacing and alignment): the squeeze is of the
+        // whole, never of each piece.
+        ScrollView(.vertical) { VStack { content() }.modifier(Compressed(ends: ends)) }
+            .onScrollGeometryChange(for: ScrollEnds.Pull.self) { ScrollEnds.Pull($0) } action: { _, p in ends.pull = p }
+    }
+}
+@MainActor @Observable final class ScrollEnds {
+    var pull = Pull.none
+    struct Pull: Equatable {
+        // How far past an end (plus at the top, minus at the foot), and where the screen's far edge is in the content.
+        var by: CGFloat = 0, far: CGFloat = 0, height: CGFloat = 1
+        static let none = Pull()
+        init() {}
+        init(_ g: ScrollGeometry) {
+            let top = -(g.contentOffset.y + g.contentInsets.top)
+            let end = max(-g.contentInsets.top, g.contentSize.height + g.contentInsets.bottom - g.containerSize.height)
+            let foot = g.contentOffset.y - end
+            guard g.contentSize.height > 1, top > 0.5 || foot > 0.5 else { return }
+            height = g.contentSize.height
+            if top > 0.5 { by = top; far = g.visibleRect.maxY + top }
+            else { by = -foot; far = max(0, g.visibleRect.minY - foot) }
+        }
+    }
+}
+private struct Compressed: ViewModifier {
+    let ends: ScrollEnds
+    func body(content: Content) -> some View {
+        let p = ends.pull
+        // The near edge moves the pull's distance; everything between it and the far edge is squeezed (never past a
+        // fifth: a long pull flattens no more). The same modifiers at rest, as nothing (one structure: a pull's start
+        // never rebuilds the list).
+        let span = p.by > 0 ? max(p.far, 1) : max(p.height - p.far, 1)
+        let s = p.by == 0 ? 1 : max(0.8, 1 - abs(p.by) / span)
+        content
+            .scaleEffect(x: 1, y: s, anchor: UnitPoint(x: 0.5, y: min(1, p.far / max(p.height, 1))))
+            .offset(y: -p.by)
+    }
+}
+
+// WP7's pivot and panorama settle: once the finger lifts, the page eases into place quickly (an exponential ease out,
+// as every Silverlight toolkit transition is, [S4]) rather than drifting in on iOS's long default deceleration. The
+// scroll's own deceleration, set to the system's fast rate: its decay is exponential, the same family, and short.
+struct FastSettle: View {
+    var body: some View {
+        #if canImport(UIKit)
+        FastSettleProbe().frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
+        #else
+        Color.clear.frame(width: 0, height: 0)
+        #endif
+    }
+}
+#if canImport(UIKit)
+private struct FastSettleProbe: UIViewRepresentable {
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                var v = self?.superview
+                while let s = v {
+                    if let sv = s as? UIScrollView { sv.decelerationRate = .fast; return }
+                    v = s.superview
+                }
+            }
+        }
+    }
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ v: Probe, context: Context) {}
+}
+#endif

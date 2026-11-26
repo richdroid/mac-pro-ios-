@@ -132,7 +132,7 @@ private struct HomePanorama: View {
                             }
                         }
                         // WP7's panorama stops hard at both ends.
-                        .background(alignment: .topLeading) { NoBounce() }
+                        .background(alignment: .topLeading) { NoBounce(); FastSettle() }
                         .padding(.leading, side.leading)
                         // Room after the last section so it, too, rests at the left margin.
                         .padding(.trailing, pw - sec + side.trailing)
@@ -179,13 +179,13 @@ private struct HomePanorama: View {
                 .padding(.leading, S.margin - 2)
                 .modifier(TurnstileOut(index: Home.order(key), count: Home.count))
                 .accessibilityAddTraits(.isHeader)
-            ScrollView(.vertical) {
+            WPScroll {
                 content()
                     .padding(.leading, S.margin)
                     .padding(.bottom, max(S.section, 34))
                     .frame(width: w, alignment: .topLeading)
             }
-            .scrollIndicators(.hidden)
+            .scrollIndicators(.automatic)
             .onScrollPhaseChange { _, p in Store.shared.scrolling = p != .idle }
         }
         .frame(width: w, height: h, alignment: .topLeading)

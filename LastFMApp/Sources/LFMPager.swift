@@ -135,6 +135,7 @@ struct Pager: View {
                         }
                     }
                     .scrollTargetLayout()
+                    .background(alignment: .topLeading) { FastSettle() }
                 }
                 .scrollTargetBehavior(WPPaging(width: W, count: slots.count, release: { motion.x }, chosen: { motion.target = $0 }))
                 .scrollPosition($pos)
@@ -258,7 +259,7 @@ struct Pager: View {
     // Each section scrolls on its own, starting under the names and cut at the line under them.
     private func panel(_ p: Panel, _ head: CGFloat, _ cut: CGFloat, _ foot: CGFloat, _ pw: CGFloat, _ side: (leading: CGFloat, trailing: CGFloat)) -> some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical) {
+            WPScroll {
                 Color.clear.frame(height: 0).id("top")
                 p.content
                     .padding(.top, S.head)
@@ -270,7 +271,7 @@ struct Pager: View {
             .contentMargins(.top, head - cut, for: .scrollContent)
             .padding(.top, cut)
             .contentMargins(.bottom, foot, for: .scrollContent)
-            .scrollIndicators(.hidden)
+            .scrollIndicators(.automatic)
             .turnstile(0)
             .environment(\.pageWidth, pw)
             .environment(\.pageBleed, EdgeInsets(top: 0, leading: side.leading, bottom: 0, trailing: side.trailing))

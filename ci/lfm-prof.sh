@@ -78,6 +78,14 @@ films_all() {
   # The detail pages' tops, opened from the charts and left at rest (the tray band only once scrolled).
   STEPS="tap=0.4,0.62:7 shot:3 slow:2 shot:2" film tap-album$x $d 16 -tab 1 -kind 1
 }
+# Scrolling as Richard named it (2026-11-25: "the side scrolling and scrolling in general is wayyy off"): a pivot and the
+# panorama dragged slowly and thrown short, and a long list scrolled, flung to its foot, pulled past both ends.
+films_scroll() {
+  local x=$1 d=$2
+  Y=0.6 STEPS="side:6 shot:2 sideslow:2 shot:2 flick:2 shot:2 flick:2 shot:2" film swipe-pivot$x $d 22 -hub profile
+  Y=0.6 STEPS="sideslow:6 shot:2 flick:2 shot:2 sideback:2 shot:2" film swipe-home$x $d 20 -hub home
+  STEPS="pull:6 shot:1 slow:2 fling:1 fling:1 fling:1 fling:1 push:2 shot:1 flingback:2 flingback:1 shot:2" film scroll-long$x $d 26 -hub history
+}
 # The folded wrap-back swipe that sprang back once (run 63 gate, blocker 1), three more times.
 films_wrap() {
   for r in 1 2 3; do

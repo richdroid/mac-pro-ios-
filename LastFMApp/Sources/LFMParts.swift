@@ -387,7 +387,7 @@ struct Page<C: View>: View {
                 ? TopBar.caps(top: g.safeAreaInsets.top, height: PageCaps.height, pushed: true).y
                 : TopBar.across().map { $0.maxY - 4 } ?? (TopBar.caps(top: g.safeAreaInsets.top, height: 0, pushed: true).y - 4)
             ScrollViewReader { proxy in
-                ScrollView {
+                WPScroll {
                     Color.clear.frame(height: 0).id("top")
                     content().padding(.bottom, S.section)
                         .frame(width: g.size.width)
@@ -398,7 +398,7 @@ struct Page<C: View>: View {
                 .contentMargins(.bottom, Win.foot(g), for: .scrollContent)
                 .ignoresSafeArea(.container, edges: [.horizontal, .top])
                 .padding(.bottom, -Win.foot(g))
-                .scrollIndicators(.hidden)
+                .scrollIndicators(.automatic)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
                 .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 2 } action: { _, v in
                     if let scrolled, scrolled.wrappedValue != v { scrolled.wrappedValue = v }
