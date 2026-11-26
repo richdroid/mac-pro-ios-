@@ -86,11 +86,11 @@ jobs:
             sleep 10
             shot $d $n-1page
             echo "$n partial at $(date +%s.%N | cut -c1-14)"
-            $D "$DEVICE" drag 0.01 0.5 0.33 0.5 2.0 & DR=$!
+            $D "$DEVICE" drag 0.01 ${DRAGY:-0.5} 0.33 ${DRAGY:-0.5} 2.0 & DR=$!
             sleep 1.6; shot $d $n-2partial-mid; wait $DR
             sleep 2; shot $d $n-3partial-after
             echo "$n swipe at $(date +%s.%N | cut -c1-14)"
-            $D "$DEVICE" drag 0.01 0.5 0.92 0.5 2.6 & DR=$!
+            $D "$DEVICE" drag 0.01 ${DRAGY:-0.5} 0.92 ${DRAGY:-0.5} 2.6 & DR=$!
             # The tool finds the display before the finger lands (about a second), so stills at three moments.
             sleep 1.9; shot $d $n-4swipe-mid1; sleep 0.6; shot $d $n-4swipe-mid2; sleep 0.6; shot $d $n-4swipe-mid3; wait $DR
             sleep 2.5; shot $d $n-5swipe-after
@@ -156,7 +156,9 @@ jobs:
             tabshots $TV $d $x "3 0 6"
           }
           date
-          FALLBACK="0.895 0.292"; posture 1 -folded
+          # Folded and upright the swipe starts below the history chart: the drag tool rests the finger about a second
+          # before it moves, which the chart takes as a hold to read a value (CI 5a48486); a real swipe moves at once.
+          DRAGY=0.85; FALLBACK="0.895 0.292"; posture 1 -folded
           # Folded and turned on its side, each way (the strip stays with the camera's edge).
           $D "$DEVICE" rotate 3 || true; sleep 5
           tabshots $MAC 1 -foldedside3 "0 6"
@@ -180,13 +182,10 @@ jobs:
           FALLBACK="0.065 0.049"; posture 3 -upright
           date
           $D "$DEVICE" rotate 3 || true; sleep 5
-          FALLBACK="0.948 0.222"; posture 3 -flat
+          DRAGY=0.5; FALLBACK="0.948 0.222"; posture 3 -flat
           # Chumby and Mint Remote share the hold: a page swiped and tapped back open flat.
           navfilm chumby-back-flat 3 $CH -tab 2 -pose calsettings
           navfilm tv-back-flat 3 $TV -tab 9 -pose tvsettings
-          # The same two Mac Pro pages with the hold off (-noHold YES), as the system alone moves them, to compare.
-          navfilm macpro-nohold-tx-flat 3 $MAC -tab 0 -openHistory tx -noHold YES
-          navfilm macpro-nohold-processes-flat 3 $MAC -tab 0 -openProcesses cpu -noHold YES
           # A shorter window, as a taller island or status leaves: every tab still in the bar.
           tabshots $MAC 3 -flat-859x604 "0 6" -windowSize 859x604
           date

@@ -123,77 +123,34 @@ extension UIViewController {
 }
 #endif
 
-// A pushed page laid out from what it reads at rest while a push or pop moves it: the same size and safe area from the
-// first frame of the slide to the last, so it goes off whole, rows and cards as they were. At rest it reads the system as
-// usual (a turn, a fold, the keyboard), since nothing then is moving it.
+// What a page reads of itself (its size and safe area) through every push, pop and edge swipe, for the build's swipe log
+// (-swipeLog). It changes nothing in the layout. It used to: under the finger it put back a size read at rest, to stop
+// pages squeezing as they slid (Richard, 2026-11-09). With the system's own bars and navigation (11-23) a sliding page's
+// size and safe area never change, as the build's films with the hold off showed, open flat, upright and folded (CI
+// 5a48486, -noHold: not one reading changed in a swipe). What the hold did was the squeeze itself: it framed the page at
+// its safe area's size and padded it by the safe area again, so under the finger every page lost the side strip's width
+// and its top and foot (84 x 58 pt open flat) and sprang back on release (Richard's recording of TestFlight 317,
+// 2026-11-26: "the sizing swiping issue"); framed at its whole area instead, it was centred and jumped 42 pt left (CI
+// f7ab4fa). What re-flowed in a swipe was a FoldSplit following the crease as the page carried it; FoldSplit takes no
+// reading while a move is in flight (NavTransit), which still watches every move.
 struct HoldsWhileMoving: ViewModifier {
     let name: String
     private var transit = NavTransit.shared
-    @State private var box = Box()
     struct Reading: Equatable { var size: CGSize; var insets: EdgeInsets }
-    // `settled` once the page has been still on screen: after the move that brought it ends, or 0.6 s after it appears
-    // with nothing moving. Until then it holds nothing. A page's very first reading can come before its push has a
-    // coordinator, laid out before the bars and margins it will have; held through the push, that put its first open's
-    // text against the edges, right only from the second open on.
-    // `shown` while the page is the one in front. Covered by another page it still takes readings, of wherever the
-    // system parks it, and those are no rest to hold it at when it comes back.
-    @MainActor final class Box { var rest: Reading?; var latest: Reading?; var settled = false; var shown = true; var turned = false }
     init(name: String) { self.name = name }
     func body(content: Content) -> some View {
-        // Only under the finger (NavTransit.underFinger). Held for a pop from Back too, the page was laid out again as
-        // the pop began and again as it ended, for a size that never changed: work on the main thread at the very moment
-        // the pop should start moving.
-        let hold = transit.active && transit.underFinger && box.settled ? box.rest : nil
-        // A reading's size is the page's safe area (867 x 611 open flat with insets t24 b34 r84, in a 951 x 669 window),
-        // not its whole area. Held, the page is framed at its whole area (that size plus the insets) and given the insets
-        // back as padding, the very layout it had at rest. It was framed at the safe area's size and padded by the insets
-        // again, so under the finger every page lost the side strip's width and the top and foot (84 and 58 pt open flat)
-        // and sprang back as the finger let go (Richard's recording, 2026-11-26, Upload open flat: "the sizing swiping issue").
-        // Pinned to the top leading corner of that whole area: a fixed frame bigger than the safe area it was offered was
-        // centred in it before the safe area was let go, which moved the page 42 pt left and 17 pt up the moment the finger
-        // landed, folded (CI f7ab4fa, Processes). The flexible frame fills the whole area once the safe area is ignored,
-        // and puts the page at its corner. At rest every frame is nil: nothing changes.
-        let w: CGFloat? = hold.map { $0.size.width + $0.insets.leading + $0.insets.trailing }
-        let h: CGFloat? = hold.map { $0.size.height + $0.insets.top + $0.insets.bottom }
-        let fill: CGFloat? = hold == nil ? nil : .infinity
         content
-            .safeAreaPadding(hold?.insets ?? EdgeInsets())
-            .frame(width: w, height: h, alignment: .topLeading)
-            .frame(maxWidth: fill, maxHeight: fill, alignment: .topLeading)
-            .ignoresSafeArea(.all, edges: hold == nil ? [] : .all)
-            // The page's whole area and its safe area, as the system gives them.
             .background {
-                Color.clear.ignoresSafeArea()
-                    .onGeometryChange(for: Reading.self) { Reading(size: $0.size, insets: $0.safeAreaInsets) } action: { r in
-                        box.latest = r
-                        let moving = NavTransit.shared.moving()
-                        if !moving, box.settled, box.shown { box.rest = r }
-                        // Covered (a tab's root under a pushed page) and turned or folded meanwhile: what it held at rest is
-                        // another posture's, wrong for the whole swipe back. Held no more until it is still in front again
-                        // (the move's end, or coming back to the front with nothing moving, settles it afresh). A posture's change only, not an
-                        // inset's wobble while it's parked.
-                        else if !moving, !box.shown, let rest = box.rest,
-                                abs(r.size.width - rest.size.width) > 40 || abs(r.size.height - rest.size.height) > 40 { box.settled = false; box.turned = true }
-                        SwipeLog.note("\(name) \(moving ? "moving" : "rest") size \(Int(r.size.width))x\(Int(r.size.height)) insets t\(Int(r.insets.top)) l\(Int(r.insets.leading)) b\(Int(r.insets.bottom)) r\(Int(r.insets.trailing))")
-                    }
+                if SwipeLog.on {
+                    Color.clear.ignoresSafeArea()
+                        .onGeometryChange(for: Reading.self) { Reading(size: $0.size, insets: $0.safeAreaInsets) } action: { r in
+                            let moving = NavTransit.shared.moving()
+                            SwipeLog.note("\(name) \(moving ? "moving" : "rest") size \(Int(r.size.width))x\(Int(r.size.height)) insets t\(Int(r.insets.top)) l\(Int(r.insets.leading)) b\(Int(r.insets.bottom)) r\(Int(r.insets.trailing))")
+                        }
+                }
             }
-            // Pushed in mid-move, it had no reading at rest yet: the last one counts once the move is over.
-            .onChange(of: transit.active) { _, now in
-                if !now, box.shown, let l = box.latest { box.rest = l; box.settled = true; box.turned = false }
-                let held = now && transit.underFinger && box.settled ? box.rest.map { r in
-                    " held \(Int(r.size.width + r.insets.leading + r.insets.trailing))x\(Int(r.size.height + r.insets.top + r.insets.bottom)) (safe area \(Int(r.size.width))x\(Int(r.size.height)))" } ?? "" : ""
-                SwipeLog.note("\(name) transit \(now ? "began" : "ended")\(held)")
-            }
-            .onAppear {
-                box.shown = true
-                // Back in front, unsettled by a turn while covered: its latest reading counts once nothing is moving.
-                if box.turned, !NavTransit.shared.moving(), let l = box.latest { box.rest = l; box.settled = true; box.turned = false }
-            }
-            .onDisappear { box.shown = false }
-            .task {
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                if !NavTransit.shared.moving(), let l = box.latest { box.rest = l; box.settled = true; SwipeLog.note("\(name) settled") }
-            }
+            // Read only with the log on, so no page is worked out again as a move begins and ends on the phone.
+            .onChange(of: SwipeLog.on ? transit.active : false) { _, now in SwipeLog.note("\(name) transit \(now ? "began" : "ended")\(now && transit.underFinger ? " under the finger" : "")") }
     }
 }
 extension View {
@@ -602,13 +559,22 @@ struct DuoTabs<Content: View>: View {
     // open flat, about as much folded), on the trailing edge, or the leading one folded and turned on its side with the
     // camera there; none open upright, where its bars run across.
     @State private var strip = Strip()
-    struct Strip: Equatable { var leading: CGFloat = 0; var trailing: CGFloat = 0 }
+    struct Strip: Equatable { var leading: CGFloat = 0; var trailing: CGFloat = 0; var height: CGFloat = 0 }
     @State private var keyboardUp = false
     @Environment(\.colorScheme) private var scheme
     private var onLeading: Bool { strip.leading > 30 && strip.leading > strip.trailing }
     private var side: Bool { strip.trailing > 30 || onLeading }
     private var footRoom: CGFloat { side || keyboardUp ? 0 : Self.barHeight + Self.barInset * 2 + 6 }
     private var railColumn: CGFloat { side ? Self.centre + Self.width / 2 + 10 : 0 }
+    // Folded and turned on its side the display is 466 pt tall, and the strip's top holds the camera and the gear or Back
+    // above the capsule (about 150 pt on his phone; 49 pt cells met the gear, CI 5a48486). The cells give up height there,
+    // never below the HIG's 44 pt; everywhere else they're the system's 49.
+    private var cellHeight: CGFloat {
+        guard strip.height > 0, !items.isEmpty else { return Self.cellHeight }
+        let room = strip.height - Self.foot - Self.inset * 2 - Self.topReserve
+        return min(Self.cellHeight, max(44, room / CGFloat(items.count)))
+    }
+    static var topReserve: CGFloat { 150 }
     // The system's own strip, measured on its shots (CI 6d22d62 open flat and folded, his recording of 317): its icons on
     // the clock's and gear's centre line 48 pt in from the display's edge, a capsule 26 pt clear of the foot, an icon
     // every 49 to 52 pt; each cell the HIG's least tap target, 44 pt wide.
@@ -639,7 +605,7 @@ struct DuoTabs<Content: View>: View {
         .environment(\.tabBarRoom, footRoom)
         .environment(\.tabRailColumn, railColumn)
         .environment(\.tabRailLeading, onLeading)
-        .onGeometryChange(for: Strip.self) { Strip(leading: $0.safeAreaInsets.leading, trailing: $0.safeAreaInsets.trailing) } action: { strip = $0 }
+        .onGeometryChange(for: Strip.self) { Strip(leading: $0.safeAreaInsets.leading, trailing: $0.safeAreaInsets.trailing, height: $0.size.height + $0.safeAreaInsets.top + $0.safeAreaInsets.bottom) } action: { strip = $0 }
         #if canImport(UIKit)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
             guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
@@ -692,7 +658,7 @@ struct DuoTabs<Content: View>: View {
                 Button { selection = it.value } label: {
                     it.icon
                         .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                        .frame(width: Self.cell, height: Self.cellHeight)
+                        .frame(width: Self.cell, height: cellHeight)
                         // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
                         .background { Capsule().fill(scheme == .dark ? Color.black.opacity(0.38) : Color.primary.opacity(0.08)).opacity(front ? 1 : 0) }
                         .overlay(alignment: .topTrailing) { badgeView(it.value).offset(x: 2, y: 1) }
