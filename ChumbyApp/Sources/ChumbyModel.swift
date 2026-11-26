@@ -308,6 +308,10 @@ final class ChumbyModel: ObservableObject {
             SwipeLog.note("sys landed")
             applySys(s, data: r.data, fresh: fresh, takenAt: readingAt)
         } catch is CancellationError {
+        } catch ChumbyError.busy {
+            // The Mac answered and its queue to the Chumby was busy: shown as struggling, and it neither switches routes nor
+            // counts toward "Not answering" or "Can't reach the Mac".
+            set(\.struggling, true)
         } catch ChumbyError.deviceDown {
             // The Mac answered and says the Chumby doesn't. Said only once that has lasted too: the Mac's own try can
             // fail once while the Chumby is fine (a busy moment on the Mac, a dropped Wi-Fi packet).
