@@ -120,7 +120,8 @@ struct Profile: Sendable, Equatable {
         if let p = profile { ArtStore.shared.warm(ArtRef(artist: p.name, album: "avatar", url: p.image), px: [240], backdrop: false) }
         shown = hero
         // The backdrops' baked looks for what's shown, off the main thread: ready before a hub is opened.
-        if let r = hero?.art { Task.detached(priority: .utility) { _ = await ArtStore.shared.treated(r, .muted); _ = await ArtStore.shared.treated(r, .duotone) } }
+        if let r = hero?.art { Task.detached(priority: .utility) { _ = await ArtStore.shared.treated(r, .muted); _ = await ArtStore.shared.treated(r, .duotone)
+            await ArtistPhotos.shared.prepare(r.artist, looks: [.muted, .tinted(Self.tint(r))]) } }
         // The covers of today's wall, decoded off the main thread while the first frame is made, so they're there in it.
         let wall = ArtWall.gather(recent)
         Task.detached(priority: .userInitiated) { for r in wall { ArtStore.shared.warm(r, px: [156], backdrop: false) } }
@@ -210,6 +211,9 @@ struct Profile: Sendable, Equatable {
         showHero()
     }
 
+    // Now playing's colour for a cover (NowBackdrop reads the same).
+    nonisolated static func tint(_ r: ArtRef) -> Palette.RGB { (ArtStore.shared.palette(r) ?? Palette.from(name: r.artist + r.album)).vivid }
+
     private func showHero() {
         let h = hero
         guard h != shown else { return }
@@ -233,6 +237,8 @@ struct Profile: Sendable, Equatable {
             async let muted = ArtStore.shared.treated(ref, .muted)
             async let duo = ArtStore.shared.treated(ref, .duotone)
             _ = await (muted, duo)
+            // The artist's photo in the same looks, on its own: the song never waits for it.
+            Task { await ArtistPhotos.shared.prepare(ref.artist, looks: [.muted, .tinted(Self.tint(ref))]) }
             guard preparing == h.id, let cur = hero, cur.art.key == ref.key else { return }
             preparing = nil
             withAnimation(.easeInOut(duration: 0.5)) { shown = cur }

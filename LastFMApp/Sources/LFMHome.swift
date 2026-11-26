@@ -37,7 +37,7 @@ struct HomeView: View {
                 HomePanorama(go: go)
             }
         }
-        .background { if pane { Backdrop(ref: store.shown?.art) } else { Color.black.ignoresSafeArea() } }
+        .background { if pane { Backdrop(ref: store.shown.flatMap { ArtistPhotos.shared.photo($0.artist) } ?? store.shown?.art) } else { Color.black.ignoresSafeArea() } }
         .toolbarBackground(.hidden, for: .navigationBar)
         .onAppear { TileClock.shared.start() }
         // Back on home finds it as it was: everything flat again (reset once the hub has covered it).
@@ -114,7 +114,7 @@ private struct HomePanorama: View {
                     // WP7's panorama background: the cover of what's on (or last played) big behind everything. The
                     // layers run title slowest, then the background, then the sections (Microsoft's panorama guidance,
                     // hh202912); no ratio is documented, so the background sits between the two.
-                    PanoramaBackground(ref: store.shown?.art, motion: motion, rate: min(0.85, rate + (1 - rate) * 0.4), travel: travel)
+                    PanoramaBackground(ref: store.shown.flatMap { ArtistPhotos.shared.plain($0.artist) } ?? store.shown?.art, motion: motion, rate: min(0.85, rate + (1 - rate) * 0.4), travel: travel)
                     PanoramaTitle(text: "rotation", size: T, motion: motion, rate: rate)
                         .padding(.leading, side.leading + S.margin - 6)
                         .offset(y: titleTop)

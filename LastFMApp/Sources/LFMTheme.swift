@@ -242,8 +242,11 @@ struct NowBackdrop: View {
                     // The duotone in the cover's own vivid colour, bright (Zune desktop's is a saturated single colour).
                     let vivid = (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.art.artist + s.art.album)).vivid.color
                     let side = max(g.height, g.width) * 1.05
-                    // The duotone baked into the picture (no filter on a screen-sized layer).
-                    TreatedArt(s.art, .duotone)
+                    // The duotone baked into the picture (no filter on a screen-sized layer). Zune desktop's is of the
+                    // artist's photo: that, in the cover's colour, once it's ready; the cover's own until then.
+                    let tint = (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.art.artist + s.art.album)).vivid
+                    let photo = ArtistPhotos.shared.photo(s.artist, .tinted(tint))
+                    TreatedArt(photo ?? s.art, photo == nil ? .duotone : .tinted(tint))
                         .frame(width: side, height: side)
                         .clipped()
                         // Never short of the left edge: open flat the screen is wider than tall and 0.85 of the side

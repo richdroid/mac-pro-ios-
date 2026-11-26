@@ -10,6 +10,9 @@ struct ArtRef: Hashable, Sendable {
     let album: String
     let url: String?
     var key: String { "\(artist.lowercased())|\(album.lowercased())" }
+    // An artist's photo (ArtistPhotos), carried as a picture of its own under this album name.
+    static let photoAlbum = "#photo"
+    var isPhoto: Bool { album == Self.photoAlbum }
 }
 
 // The colours a cover gives the page around it.
@@ -17,7 +20,7 @@ struct Palette: Sendable, Equatable, Codable {
     var vivid: RGB
     var deep: RGB
     var average: RGB
-    struct RGB: Sendable, Equatable, Codable { var r: Double, g: Double, b: Double
+    struct RGB: Sendable, Hashable, Codable { var r: Double, g: Double, b: Double
         var color: Color { Color(red: r, green: g, blue: b) }
         func scaled(_ k: Double) -> RGB { RGB(r: r * k, g: g * k, b: b * k) }
     }
@@ -142,6 +145,8 @@ final class ArtStore: @unchecked Sendable {
 
     // Apple's store, by artist and album, once per album ever, no more than one look every second and a half.
     private func storeArt(_ ref: ArtRef) async -> String? {
+        // A photo has its own address; the store's albums are no stand-in for it (the cover is the caller's fallback).
+        if ref.isPhoto { return nil }
         let known = lock.withLock { itunes[ref.key] }
         if let known { return known.isEmpty ? nil : known }
         guard !LastFM.shared.mock else { return nil }
@@ -230,7 +235,14 @@ final class ArtStore: @unchecked Sendable {
     enum Treat: Hashable, Sendable {
         case muted                       // the hubs' and pages' backdrop: the cover at 0.6 saturation
         case duotone                     // now playing: the cover in one colour, its own (vivid, a little lighter)
-        var tag: String { self == .muted ? "muted" : "duo" }
+        case tinted(Palette.RGB)         // now playing over the artist's photo: the photo in the cover's colour
+        var tag: String {
+            switch self {
+            case .muted: return "muted"
+            case .duotone: return "duo"
+            case .tinted(let c): return String(format: "duo-%02x%02x%02x", Int(c.r * 255), Int(c.g * 255), Int(c.b * 255))
+            }
+        }
     }
     func treatedCached(_ ref: ArtRef, _ t: Treat) -> CGImage? { images.object(forKey: "\(ref.key)@\(t.tag)" as NSString)?.image }
     func treated(_ ref: ArtRef, _ t: Treat) async -> CGImage? {
@@ -246,8 +258,9 @@ final class ArtStore: @unchecked Sendable {
         switch t {
         case .muted:
             ci = ci.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.6])
-        case .duotone:
-            let v = (palette(ref) ?? Palette.from(name: ref.artist + ref.album)).vivid
+        case .duotone, .tinted:
+            var v = (palette(ref) ?? Palette.from(name: ref.artist + ref.album)).vivid
+            if case .tinted(let given) = t { v = given }
             let c = (r: v.r + (1 - v.r) * 0.15, g: v.g + (1 - v.g) * 0.15, b: v.b + (1 - v.b) * 0.15)
             ci = ci.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0])
                 .applyingFilter("CIColorMatrix", parameters: [
@@ -292,8 +305,11 @@ struct TreatedArt: View {
     @ViewBuilder private var fallback: some View {
         switch treat {
         case .muted: ArtView(ref, px: 1000, corner: 0).saturation(0.6)
-        case .duotone:
-            let v = (ArtStore.shared.palette(ref) ?? Palette.from(name: ref.artist + ref.album)).vivid.color
+        case .duotone, .tinted:
+            let v: Color = {
+                if case .tinted(let c) = treat { return c.color }
+                return (ArtStore.shared.palette(ref) ?? Palette.from(name: ref.artist + ref.album)).vivid.color
+            }()
             ArtView(ref, px: 1000, corner: 0).grayscale(1).colorMultiply(v.mix(with: .white, by: 0.15))
         }
     }
@@ -383,5 +399,90 @@ struct ArtView: View {
                 }
             }
         }
+    }
+}
+
+
+// Artists' photos (Richard, 2026-11-25: "use whatever is best for artist photos"; Zune HD's artist pages and WP7's music
+// hub and now playing set a big photo of the artist behind everything). Last.fm has served no artist pictures since 2019.
+// Apple Music's artist artwork needs MusicKit (the App ID's MusicKit service and his "Media & Apple Music" permission) or a
+// developer token signed with a MusicKit key, neither of which this build has; Deezer's public catalogue gives a 1000 px
+// photo with no key. A name is looked up once, paced; only an exact match (letters and digits, accents and "the" aside)
+// with a real picture counts, the most followed if there are several. Nothing found is remembered for two weeks. The
+// pictures are kept on disk with the covers (ArtStore). Never in the build's mock (CI): the cover stands in, as it does
+// for any artist without a photo.
+@MainActor @Observable final class ArtistPhotos {
+    static let shared = ArtistPhotos()
+    // Bumped when a photo's picture is decoded and its look baked: the backdrops that asked read it again.
+    private var baked = 0
+    // Name (normalised) → picture address, or "" when there's none.
+    @ObservationIgnored private var found: [String: String] = [:]
+    @ObservationIgnored private var checked: [String: Double] = [:]
+    @ObservationIgnored private var asking: Set<String> = []
+    @ObservationIgnored private var next = Date.distantPast
+    @ObservationIgnored private let file = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("artist-photos.json")
+    private init() {
+        if let d = try? Data(contentsOf: file), let all = try? JSONDecoder().decode([String: [String]].self, from: d) {
+            for (k, v) in all where v.count == 2 { found[k] = v[0]; checked[k] = Double(v[1]) ?? 0 }
+        }
+    }
+    private func ref(_ artist: String) -> ArtRef? {
+        guard let u = found[Self.norm(artist)], !u.isEmpty else { return nil }
+        return ArtRef(artist: artist, album: ArtRef.photoAlbum, url: u)
+    }
+    // For a view's body: the photo only once it's ready to draw in that look (else nil, and the cover stands in), so a
+    // page never opens on a photo still loading. A view that asks is drawn again when one is baked.
+    func photo(_ artist: String, _ look: ArtStore.Treat = .muted) -> ArtRef? {
+        _ = baked
+        guard let r = ref(artist), ArtStore.shared.treatedCached(r, look) != nil else { return nil }
+        return r
+    }
+    // As a plain picture (home's panorama draws it untreated).
+    func plain(_ artist: String) -> ArtRef? {
+        _ = baked
+        guard let r = ref(artist), ArtStore.shared.cached(r, px: 1000) != nil else { return nil }
+        return r
+    }
+    // Found (once, paced) and made ready in these looks, off the main thread.
+    func prepare(_ artist: String, looks: [ArtStore.Treat] = [.muted]) async {
+        await resolve(artist)
+        guard let r = ref(artist) else { return }
+        let ready = await Task.detached(priority: .utility) { () -> Bool in
+            guard await ArtStore.shared.image(r, px: 1000) != nil else { return false }
+            for l in looks { _ = await ArtStore.shared.treated(r, l) }
+            return true
+        }.value
+        if ready { baked += 1 }
+    }
+    // Looked up if it never was (or found nothing over two weeks ago).
+    private func resolve(_ artist: String) async {
+        let k = Self.norm(artist)
+        guard !k.isEmpty, !LastFM.shared.mock, !asking.contains(k) else { return }
+        if let f = found[k], !f.isEmpty || Date().timeIntervalSince1970 - (checked[k] ?? 0) < 14 * 86_400 { return }
+        asking.insert(k); defer { asking.remove(k) }
+        let slot = max(Date(), next); next = slot.addingTimeInterval(0.4)
+        let wait = slot.timeIntervalSinceNow
+        if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+        var c = URLComponents(string: "https://api.deezer.com/search/artist")!
+        c.queryItems = [URLQueryItem(name: "q", value: artist), URLQueryItem(name: "limit", value: "10")]
+        guard let (d, r) = try? await URLSession.shared.data(from: c.url!), (r as? HTTPURLResponse)?.statusCode == 200,
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let list = o["data"] as? [[String: Any]] else { return }
+        let best = list
+            .filter { Self.norm($0["name"] as? String ?? "") == k }
+            .compactMap { a -> (String, Int)? in
+                guard let u = a["picture_xl"] as? String, u.hasPrefix("https://"), !u.contains("/artist//") else { return nil }
+                return (u, a["nb_fan"] as? Int ?? 0)
+            }
+            .max { $0.1 < $1.1 }
+        found[k] = best?.0 ?? ""
+        checked[k] = Date().timeIntervalSince1970
+        let all = found.reduce(into: [String: [String]]()) { $0[$1.key] = [$1.value, String(checked[$1.key] ?? 0)] }
+        if let data = try? JSONEncoder().encode(all) { try? data.write(to: file, options: .atomic) }
+    }
+    nonisolated static func norm(_ s: String) -> String {
+        var t = s.folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive], locale: nil).lowercased()
+        t = t.replacingOccurrences(of: "&", with: " and ")
+        if t.hasPrefix("the ") { t.removeFirst(4) }
+        return String(t.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
     }
 }

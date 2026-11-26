@@ -243,7 +243,9 @@ struct ArtistPage: View {
     @State private var which = 0
     var body: some View {
         let ref = cover ?? ArtRef(artist: name, album: "", url: nil)
-        PageLayout(ref: cover) { wide in
+        // Zune HD's artist page: the artist's photo behind the whole page (the album cover until one is ready, or if
+        // there's none).
+        PageLayout(ref: ArtistPhotos.shared.photo(name) ?? cover) { wide in
             PageHead(title: name, ref: ref, wide: wide, story: story, noun: "artists", extra: [
                 info?.listeners.map { (compact($0), "listeners") },
                 info?.plays.map { (compact($0), "plays on Last.fm") },
@@ -260,6 +262,7 @@ struct ArtistPage: View {
             WaysOut(apple: apple, lastfm: info?.url.flatMap(URL.init(string:))).padding(.horizontal, S.margin)
         }
         .task(id: name) { await load() }
+        .task(id: name) { await ArtistPhotos.shared.prepare(name) }
     }
     @ViewBuilder private var topTracks: some View {
         let mine = story?.top ?? []
