@@ -457,7 +457,7 @@ final class ChumbyModel: ObservableObject {
         deviceState = s
         if !stateKnown { stateKnown = true }
         // The phone's own backup alarm for each ring coming up (ChumbyBackupAlarm).
-        ChumbyBackupAlarm.shared.sync(rings: BackupPlan.rings(in: s, now: Date()), escalation: BackupPlan.Escalation(s.escalate))
+        ChumbyBackupAlarm.shared.sync(state: s)
         if let d = doubted, Self.skipAgrees(s.skipped, d) { doubted = nil; letGo("skip") }
         // A change that didn't get through, which the Chumby now matches anyway (put right on the Chumby, say), is done.
         pending.removeAll { p in
@@ -548,7 +548,7 @@ final class ChumbyModel: ObservableObject {
     // Notes about whether tonight's alarm is as he left it (a skip or an undo the Chumby didn't confirm), and one that
     // arrives up to a minute after the tap (a station looked up), stay until he puts them away or the Chumby agrees:
     // one that cleared itself after six seconds was gone before a locked phone was looked at again.
-    static let keptNotes: Set<String> = ["skip", "pandora", "macmusic", "calsound"]
+    static let keptNotes: Set<String> = ["skip", "pandora", "macmusic", "calsound", "pplay"]
     @Published private(set) var kept: [String: String] = [:]
     func letGo(_ id: String) {
         if kept[id] != nil { withAnimation(.snappy) { kept[id] = nil } }
@@ -1225,6 +1225,11 @@ final class ChumbyModel: ObservableObject {
     // A song just chosen, until the Mac says the Chumby has it (about a quarter of a minute): the Now card shows it as
     // starting, with no Stop yet.
     @Published var macStarting: MacPlaying?
+    // A Pandora station asked for from Sounds (a=play), until the Chumby's player says it has it: about 7 s, or about
+    // 25 s on the first play after the Chumby's panel restarts (Pandora only logs in then, and the Chumby asks again).
+    @Published var pandoraStarting: NamedID?
+    // Which ask the start under way belongs to: a Stop, then the same station again, is a new ask (gate 11-25).
+    var pandoraAsk = 0
     @Published var addingStation = false
     @Published var stationAdded: String?
     func addPandora(_ link: String) async {

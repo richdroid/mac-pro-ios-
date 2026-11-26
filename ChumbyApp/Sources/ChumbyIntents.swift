@@ -349,6 +349,7 @@ enum ChumbyRingCard {
     // Stop or Snooze pressed on this phone and taken: the Mac is told, so it doesn't put a "Snoozed" or "over" notice in
     // place of the one this phone has already put away (push.js, ringRestate). Only a signed build knows the Mac.
     static func handled() async { await post(["kind": "ring-handled"]) }
+    static func pressing() async { await post(["kind": "ring-press"]) }
     static func diag(_ fields: [String: Any]) async { await post(fields.merging(["kind": "ring-diag"]) { a, _ in a }) }
     private static func post(_ fields: [String: Any]) async {
         guard let bundle = Bundle.main.bundleIdentifier, let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String,
@@ -389,6 +390,7 @@ enum ChumbyRingCard {
     static var again: Date? { nil }
     static var snooze: Int? { nil }
     static func handled() async {}
+    static func pressing() async {}
     static func diag(_ fields: [String: Any]) async {}
     static func over() async {}
     static func show(_ s: ChumbyRingAttributes.ContentState) async {}
@@ -466,6 +468,9 @@ actor RingDesk {
         }
         let send = send ?? { c in try await chumbyTry { try await $0.ring(c) } }
         let read = read ?? { try await chumbyTry { try await RingDesk.ringLine($0) } }
+        // The Mac is told a press is on its way, so its minute's "Ringing again" doesn't sound under his thumb while the
+        // Chumby answers (11-25; push.js holds it 20 s). Never waited for: the press goes at once.
+        Task.detached { await ChumbyRingCard.pressing() }
         let id = UUID(), task = Task { await Self.run(kind, send: send, read: read) }
         running = (kind, Date(), id, task)
         let (out, how) = await task.value

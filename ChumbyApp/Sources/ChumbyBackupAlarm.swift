@@ -89,11 +89,23 @@ final class ChumbyBackupAlarm: ObservableObject {
         tail = Task { await before?.value; await work() }
     }
 
-    // After every successful read of the Chumby's list: the rings coming up (BackupPlan.rings).
-    func sync(rings: [BackupPlan.Ring], escalation: BackupPlan.Escalation = .standard) {
+    // After every successful read of the Chumby's list: the rings coming up (BackupPlan.rings), and how the newest rings
+    // ended there (a Stop or Snooze on the Chumby reaches the backup with any read, not only by the Mac's quiet push).
+    func sync(rings: [BackupPlan.Ring], escalation: BackupPlan.Escalation = .standard, ends: [RingEnd] = [], length: @escaping (String) -> Int = { _ in 30 }) {
         wanted = rings
         if self.escalation != escalation { self.escalation = escalation }
-        queue { [self] in await apply() }
+        queue { [self] in
+            await apply()
+            guard !ends.isEmpty, enabled, Kit.state == .authorized else { return }
+            let r = BackupPlan.fromEnds(entries, ends: ends, now: Date(), delay: delay, length: length)
+            if !r.cancel.isEmpty || !r.add.isEmpty { await commit(r, keepOldOnFail: true) }
+        }
+    }
+    // From the state just read: everything sync needs.
+    func sync(state s: ChumbyState) {
+        let lengths = Dictionary(s.alarms.map { ($0.name, Int($0.duration) ?? 30) }, uniquingKeysWith: { a, _ in a })
+        sync(rings: BackupPlan.rings(in: s, now: Date()), escalation: BackupPlan.Escalation(s.escalate), ends: s.ends,
+             length: { n in lengths[n].map { $0 > 0 ? $0 : 30 } ?? 30 })
     }
     // The setting changed: start or stop at once, from the rings last read.
     func settingsChanged() { queue { [self] in await apply() } }

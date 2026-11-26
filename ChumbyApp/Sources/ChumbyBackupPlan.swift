@@ -115,6 +115,38 @@ enum BackupPlan {
         return Result(entries: entries.filter { $0.id != e.id }, cancel: [e], add: [])
     }
 
+    // What the Chumby's own record of ring ends (a=state "ends", newest first) says about each ring in progress here, the
+    // same rule as the Mac's (push.js ringStopRow): the newest row for that alarm since it began is a "stop", made before
+    // its full length played out, with no "played" back to the latest snooze: his Stop, and the backup goes. A newest
+    // "snooze" moves it. Anything else (no row, "played", "replaced", a stop at the end of its length: the auto dismiss)
+    // keeps it. 11-24/25: the backup rang after he woke to the Chumby, because only the Mac's quiet push told the phone of
+    // a Stop on the Chumby, and iOS hands those over when it pleases.
+    // `length`: the alarm's minutes (duration; 30 when unknown).
+    static func fromEnds(_ entries: [Entry], ends: [RingEnd], now: Date, delay: Int, length: (String) -> Int = { _ in 30 }, makeID: () -> UUID = UUID.init) -> Result {
+        var r = Result(entries: entries, cancel: [], add: [])
+        for e in entries where e.ringAt <= now && e.fireAt > now {
+            let began = e.ringAt.timeIntervalSince1970
+            let rows = ends.filter { same($0.name, e.name) && $0.t >= began - 5 }.sorted { $0.t > $1.t }
+            guard let top = rows.first else { continue }
+            if top.kind == "snooze", let u = top.until, u > 0 {
+                let fire = Date(timeIntervalSince1970: u).addingTimeInterval((e.again ?? 60) + Double(delay) * 60)
+                guard fire != e.fireAt, fire > now else { continue }
+                var n = e; n.id = makeID(); n.fireAt = fire
+                r.entries = r.entries.map { $0.id == e.id ? n : $0 }; r.cancel.append(e); r.add.append(n)
+                continue
+            }
+            guard top.kind == "stop" else { continue }
+            var from = began, played = false
+            for x in rows.dropFirst() {
+                if x.kind == "snooze" { from = (x.until ?? 0) > 0 ? x.until! : x.t; break }
+                if x.kind == "played" { played = true; break }
+            }
+            guard !played, top.t < from + Double(length(e.name)) * 60 - 45 else { continue }
+            r.entries.removeAll { $0.id == e.id }; r.cancel.append(e)
+        }
+        return r
+    }
+
     // He snoozed it until `until`: its backup moves to then plus the delay.
     static func snoozed(_ entries: [Entry], now: Date, name: String?, until: Date, delay: Int, makeID: () -> UUID = UUID.init) -> Result {
         guard let e = current(entries, now: now, name: name) else { return Result(entries: entries, cancel: [], add: []) }

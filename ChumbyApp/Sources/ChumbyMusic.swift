@@ -144,6 +144,60 @@ extension ChumbyModel {
     }
 }
 
+// A Pandora station played now (Richard, 11-25: "see what u can do abt pandora stations from app"). The Chumby plays it
+// through its station player's own start, at the listening volume, and its Music screen and the app's Stop end it. It
+// keeps clear of his alarms: it won't start within 20 minutes of a ring, it ends 2 minutes before one, and a ring takes
+// over (chumby hook "listen", 2767a9a).
+extension ChumbyModel {
+    // Asked for: shown on the Now card at once as starting, then as playing when the Chumby's player names this station.
+    // If it doesn't within a minute, the card goes back and a note says so.
+    func playPandora(_ st: NamedID) {
+        letGo("pplay")
+        if let why = alarmBusy { fail("pplay", "Not while \(why)."); return }
+        if let n = state.nextRing(), n.at.timeIntervalSinceNow < 20 * 60 {
+            fail("pplay", "The \(n.at.formatted(date: .omitted, time: .shortened)) alarm is less than 20 minutes away. Stations can play again once it has rung.")
+            return
+        }
+        guard let api else { return }
+        tick()
+        pandoraAsk += 1
+        let ask = pandoraAsk
+        withAnimation(.snappy) { pandoraStarting = st }
+        Task {
+            // Only the newest pick counts: a station chosen while another was starting must not be called failed, or
+            // playing, by the first one's answer.
+            do { try await api.post("play", extra: "&s=" + ChumbyAPI.enc(st.id), timeout: 20) }
+            catch {
+                guard pandoraAsk == ask, pandoraStarting == st else { return }
+                withAnimation(.snappy) { pandoraStarting = nil }
+                fail("pplay", "“\(st.name)” didn’t start. \(AlarmWriter.explain(error))")
+                return
+            }
+            let asked = Date()
+            while Date().timeIntervalSince(asked) < 60 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard pandoraAsk == ask, pandoraStarting == st else { return }
+                _ = await loadState()
+                if state.music?.pandoraStation == st.id {
+                    withAnimation(.snappy) { pandoraStarting = nil }
+                    await loadSongs(force: true)
+                    return
+                }
+            }
+            guard pandoraAsk == ask, pandoraStarting == st else { return }
+            withAnimation(.snappy) { pandoraStarting = nil }
+            fail("pplay", "“\(st.name)” didn’t start on the Chumby. Try again in a minute.")
+        }
+    }
+    // The Chumby's own music stopped, a station still starting included (the Chumby ends that too).
+    func stopChumbyMusic(id: String) {
+        letGo("pplay")
+        pandoraAsk += 1
+        withAnimation(.snappy) { pandoraStarting = nil }
+        cmd("stopmusic", id: id)
+    }
+}
+
 // The build's poses of all this (ci branch films), driven from here so the views carry one line each. Never on his phone:
 // only with a -pose at launch.
 @MainActor enum MacMusicPose {

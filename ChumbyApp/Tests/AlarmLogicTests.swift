@@ -467,6 +467,41 @@ do {
     expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: at(2026, 11, 11, 12, 50)).cancel.isEmpty, "a late push for an earlier ring takes no other ring's backup")
     expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 1), at: nil).cancel.isEmpty, "and with no time it takes nothing")
     expect(BackupPlan.stoppedRing(r1.entries, now: at(2026, 11, 11, 13, 6), at: dentist).cancel.isEmpty, "nor one that has already rung")
+    // 11-25: the Chumby's own record of ring ends, read with any state (a=state "ends"), not only the Mac's quiet push.
+    func end(_ kind: String, _ d: Date, _ name: String = "Calendar: Dentist", until: Date? = nil) -> RingEnd { RingEnd(t: d.timeIntervalSince1970, kind: kind, name: name, until: until?.timeIntervalSince1970) }
+    let t1 = at(2026, 11, 11, 13, 1)
+    let fe = BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50))], now: t1.addingTimeInterval(20), delay: 5, makeID: mk)
+    expect(fe.cancel.map(\.ringAt) == [dentist] && fe.entries.count == r1.entries.count - 1, "a Stop row on the Chumby takes the ring's backup at the next state read")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50), "Dentist")], now: t1, delay: 5, makeID: mk).cancel.count == 1, "the name with or without its Calendar: prefix")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", at(2026, 11, 11, 12, 40))], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "an earlier ring's Stop takes nothing")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50), "Work")], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "nor another alarm's")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50)), end("played", dentist.addingTimeInterval(40))], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "a Stop after it played out isn't his in time")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50))], now: t1, delay: 5, length: { _ in 1 }, makeID: mk).cancel.isEmpty, "nor one at the end of its length (the auto dismiss)")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("replaced", dentist.addingTimeInterval(50))], now: t1, delay: 5, makeID: mk).cancel.isEmpty && BackupPlan.fromEnds(r1.entries, ends: [], now: t1, delay: 5, makeID: mk).cancel.isEmpty, "no Stop row, no change")
+    expect(BackupPlan.fromEnds(r1.entries, ends: [end("stop", dentist.addingTimeInterval(50))], now: at(2026, 11, 11, 12, 59), delay: 5, makeID: mk).cancel.isEmpty, "a ring not begun yet is left alone")
+    let fs = BackupPlan.fromEnds(r1.entries, ends: [end("snooze", dentist.addingTimeInterval(50), until: at(2026, 11, 11, 13, 10))], now: t1, delay: 5, makeID: mk)
+    expect(fs.add.map(\.fireAt) == [at(2026, 11, 11, 13, 10).addingTimeInterval(300)] && fs.cancel.count == 1, "a Snooze row moves it to the snooze's end, its beep and the delay")
+    expect(BackupPlan.fromEnds(fs.entries, ends: [end("snooze", dentist.addingTimeInterval(50), until: at(2026, 11, 11, 13, 10))], now: t1, delay: 5, makeID: mk).add.isEmpty, "read again, nothing changes")
+    let fss = BackupPlan.fromEnds(fs.entries, ends: [end("stop", at(2026, 11, 11, 13, 11)), end("snooze", dentist.addingTimeInterval(50), until: at(2026, 11, 11, 13, 10))], now: at(2026, 11, 11, 13, 11), delay: 5, makeID: mk)
+    expect(fss.cancel.count == 1 && fss.add.isEmpty, "snooze, then Stop on the re-ring: the backup goes")
+}
+
+section("the Chumby's own calendar days (a=state caldays)")
+do {
+    // The 11-24 case once the calendar alarm has left the list (a save drops one-offs two hours past): only the Chumby's
+    // record says today was a calendar day.
+    let omg = alarm("omg", "daily", "660")
+    var s = state([omg]); s.calDays = ["20261111"]
+    expect(s.ring(of: omg, after: now) == at(2026, 11, 12, 11), "a day in caldays keeps the daily quiet that day")
+    expect(BackupPlan.rings(in: s, now: now, horizon: 36 * 3600).map(\.at) == [at(2026, 11, 12, 11)], "and gives it no backup")
+    s.calOverride = 0
+    expect(s.ring(of: omg, after: now) == at(2026, 11, 11, 11), "unless calendar days are set not to override")
+    var s2 = state([omg]); s2.calDays = ["20261110", "bad", "2026111"]
+    expect(s2.ring(of: omg, after: now) == at(2026, 11, 11, 11), "yesterday's day or a malformed one changes nothing")
+    let j = #"{"ok":true,"alarms":[],"caldays":["20261124","20261125"],"ends":[{"t":1795638367,"kind":"stop","name":"Calendar: CR Shift","until":0}]}"#
+    let d = try! JSONDecoder().decode(ChumbyState.self, from: Data(j.utf8))
+    expect(d.calDays == ["20261124", "20261125"] && d.ends.first?.kind == "stop" && d.ends.first?.until == 0, "a=state's caldays and ends are read")
+    expect(try! JSONDecoder().decode(ChumbyState.self, from: Data(#"{"ok":true,"alarms":[]}"#.utf8)).calDays.isEmpty, "an older Chumby without them reads as none")
 }
 
 section("The backup rings after the Chumby's loud beep")
@@ -560,6 +595,140 @@ do {
     expect(RingAnswer(["ok": true, "done": true, "how": "tap", "ring": snoozed]).read(stop: true) == .wait, "nor a Stop that left it snoozing")
     expect(RingAnswer(["ok": true, "done": true]).read(stop: true) == .confirmed(until: nil), "done with no line is taken at its word")
     expect(RingAnswer.stillRinging(ChumbyError.message("still ringing")) && !RingAnswer.stillRinging(ChumbyError.message("bad token")) && !RingAnswer.stillRinging(ChumbyError.deviceDown), "only \"still ringing\" is asked again")
+}
+
+
+// MARK: The backup ledger (11-25)
+// A week of the Chumby's rings against the phone's backup alarm, one to one (Richard, 11-25: "notifs and alarms being one
+// to one"). The phone holds exactly one backup for every ring the Chumby will really make, none for a ring a calendar day
+// keeps quiet; a Stop on either side takes it away before it rings whenever the phone hears of it (the Mac's quiet push,
+// its shown notice, or any read of the Chumby's state), a Snooze moves it, and a ring that dies or plays out unheard keeps
+// it: those are the ones it is for. The phone's own end, the same rules the app runs (BackupPlan), with AlarmKit as a list.
+section("backup ledger: a week of rings")
+do {
+    let delay = 1, esc = BackupPlan.Escalation.standard
+    func day(_ d: Int, _ h: Int, _ m: Int = 0) -> Date { at(2026, 11, 30, h, m).addingTimeInterval(Double(d) * 86400) }
+    func key(_ d: Date) -> String { let c = ny.dateComponents([.year, .month, .day], from: d); return String(format: "%04d%02d%02d", c.year!, c.month!, c.day!) }
+    func music(_ name: String, _ when: String, _ time: String) -> Alarm { var a = alarm(name, when, time); a.type = "audio"; a.arg = "pandora"; a.duration = "30"; return a }
+    // the Chumby: its list, its calendar days and its ring ends, as a=state carries them
+    var list = [music("omg", "daily", "660"), music("Calendar: CR Shift", "once", mins(day(1, 15, 25))), music("Calendar: CR Early", "once", mins(day(3, 8, 40))),
+                music("Calendar: CR Backup", "once", mins(day(5, 15, 25))), music("Nap", "once", mins(day(2, 16)))]
+    var calDays = Set<String>(), ends: [RingEnd] = []
+    func chumby(_ t: Date) -> ChumbyState { var s = state(list, clock: t); s.calDays = calDays; s.ends = ends; s.escalate = [esc.first, esc.again]; return s }
+    // the phone: its kept entries and what AlarmKit holds
+    var entries: [BackupPlan.Entry] = [], kit: [UUID: (fire: Date, name: String, ring: Date)] = [:], rang: [(name: String, ring: Date, at: Date)] = []
+    func commit(_ r: BackupPlan.Result) {
+        for e in r.cancel { kit[e.id] = nil }
+        for e in r.add { kit[e.id] = (e.fireAt, e.name, e.ringAt) }
+        entries = r.entries
+    }
+    func fire(upTo t: Date) {
+        for (id, k) in kit where k.fire <= t { rang.append((k.name, k.ring, k.fire)); kit[id] = nil; entries.removeAll { $0.id == id } }
+    }
+    func read(_ t: Date) {
+        fire(upTo: t)
+        let s = chumby(t)
+        commit(BackupPlan.reconcile(kept: entries, wanted: BackupPlan.rings(in: s, now: t), delay: delay, now: t))
+        commit(BackupPlan.fromEnds(entries, ends: s.ends, now: t, delay: delay))
+    }
+    func push(_ info: [AnyHashable: Any], _ t: Date) {
+        fire(upTo: t)
+        switch BackupPlan.signal(info, now: t) {
+        case .stopped(_, let a)?: commit(BackupPlan.stoppedRing(entries, now: t, at: a))
+        case .snoozed(let n, let u)?: commit(BackupPlan.snoozed(entries, now: t, name: n, until: u, delay: delay))
+        default: break
+        }
+    }
+    func began(_ name: String, _ t: Date) {
+        if let i = list.firstIndex(where: { $0.name == name }), list[i].when == "once" {
+            list[i].enabled = "0"; if name.hasPrefix(Alarm.calendarPrefix) { calDays.insert(key(t)) }
+        }
+    }
+    func row(_ kind: String, _ name: String, _ t: Date, until: Date? = nil) { ends.insert(RingEnd(t: t.timeIntervalSince1970, kind: kind, name: name, until: until?.timeIntervalSince1970), at: 0) }
+    func armed(_ name: String, _ ring: Date) -> Int { entries.filter { $0.name == name && $0.ringAt == ring }.count }
+    func wantFire(_ ring: Date) -> Date { ring.addingTimeInterval(Double(esc.first + delay * 60)) }
+
+    // Sunday evening: the app is opened once; every ring of the week is armed, once each, and none on a calendar day.
+    read(day(-1, 20))
+    let week: [(String, Date)] = [("omg", day(0, 11)), ("Calendar: CR Shift", day(1, 15, 25)), ("omg", day(2, 11)), ("Nap", day(2, 16)),
+                                  ("Calendar: CR Early", day(3, 8, 40)), ("omg", day(4, 11)), ("Calendar: CR Backup", day(5, 15, 25)), ("omg", day(6, 11))]
+    for (n, r) in week { expect(armed(n, r) == 1, "armed once: \(n) \(r)") }
+    expect(entries.count == week.count, "nothing else armed (no daily on Tue, Thu or Sat): \(entries.map { "\($0.name) \($0.ringAt)" })")
+    expect(entries.first { $0.name == "omg" && $0.ringAt == day(0, 11) }?.fireAt == wantFire(day(0, 11)), "the music ring's backup: its loud beep (4 min) plus the minute")
+
+    // Mon 11:00: Stop pressed on the phone at +58 s (the app's own press: its backup goes at once).
+    var r = day(0, 11); began("omg", r)
+    commit(BackupPlan.handled(entries, now: r.addingTimeInterval(60), name: "omg")); row("stop", "omg", r.addingTimeInterval(60))
+    expect(armed("omg", r) == 0, "Mon: a phone Stop takes its backup")
+    // Tue 15:25: snoozed on the Chumby at +15 (the Mac's push 20 s late), rang again 9 min on, stopped from the phone.
+    r = day(1, 15, 25); began("Calendar: CR Shift", r)
+    var until = r.addingTimeInterval(15 + 540)
+    row("snooze", "Calendar: CR Shift", r.addingTimeInterval(15), until: until)
+    push(["ring": ["snoozed": true, "name": "Calendar: CR Shift", "until": until.timeIntervalSince1970]], r.addingTimeInterval(35))
+    expect(entries.first { $0.ringAt == r }?.fireAt == until.addingTimeInterval(60 + 60), "Tue: the snooze moved it to the ring after, its beep (1 min) and the minute")
+    read(r.addingTimeInterval(120))     // a read during the snooze changes nothing
+    expect(armed("Calendar: CR Shift", r) == 1, "Tue: still one backup through the snooze")
+    commit(BackupPlan.handled(entries, now: until.addingTimeInterval(20), name: "Calendar: CR Shift")); row("stop", "Calendar: CR Shift", until.addingTimeInterval(20))
+    // Wed 11:00: stopped on the Chumby at +70 s; the Mac's push with the Stop arrives 40 s later.
+    r = day(2, 11); began("omg", r); row("stop", "omg", r.addingTimeInterval(70))
+    push(["ring": ["over": true, "stopped": true, "name": "omg", "at": r.timeIntervalSince1970]], r.addingTimeInterval(110))
+    expect(armed("omg", r) == 0, "Wed: a Stop on the Chumby, told by the Mac, takes its backup")
+    // Wed 16:00: the Nap's ring dies 8 s in: no Stop row, a plain "over": the backup stays and rings.
+    r = day(2, 16); began("Nap", r)
+    push(["ring": ["over": true]], r.addingTimeInterval(20)); read(r.addingTimeInterval(30))
+    expect(armed("Nap", r) == 1, "Wed: a ring that died keeps its backup")
+    // Thu 08:40: the app force-quit (no pushes reach it, no reads): stopped on the Chumby at +200 s. The phone hears
+    // nothing, so its backup rings: the one case the phone can't know (said in the report).
+    r = day(3, 8, 40); began("Calendar: CR Early", r); row("stop", "Calendar: CR Early", r.addingTimeInterval(200))
+    // Thu 10:50: the app is opened; the calendar alarm has since left the Chumby's list (a save dropped it), so only the
+    // Chumby's own calendar days say today is one: no backup for the daily at 11:00.
+    list.removeAll { $0.name == "Calendar: CR Early" }
+    read(day(3, 10, 50))
+    expect(!entries.contains { $0.name == "omg" && ny.isDate($0.ringAt, inSameDayAs: day(3, 0)) }, "Thu: no backup for the daily on a calendar day, from the Chumby's own record")
+    // Fri 11:00: stopped on the Chumby at +30 s, the Mac's push lost; the app reads the state 2 minutes in (opened, or
+    // a background refresh): its ends say Stop, the backup goes.
+    r = day(4, 11); began("omg", r); row("stop", "omg", r.addingTimeInterval(30))
+    read(r.addingTimeInterval(120))
+    expect(armed("omg", r) == 0, "Fri: a read of the Chumby's ends takes the backup when no push came")
+    // Sat 15:25: snoozed from the phone at +25 (moves it), rang again, stopped on the Chumby 45 s in; the app, killed by
+    // iOS (not by him), is woken by the Mac's push a minute late: still before the moved backup (2 min after the ring
+    // after the snooze: its beep at 1 min, then the minute).
+    r = day(5, 15, 25); began("Calendar: CR Backup", r)
+    until = r.addingTimeInterval(25 + 540)
+    commit(BackupPlan.snoozed(entries, now: r.addingTimeInterval(27), name: "Calendar: CR Backup", until: until, delay: delay))
+    row("snooze", "Calendar: CR Backup", r.addingTimeInterval(27), until: until)
+    row("stop", "Calendar: CR Backup", until.addingTimeInterval(45))
+    push(["ring": ["over": true, "stopped": true, "name": "Calendar: CR Backup", "at": r.timeIntervalSince1970]], until.addingTimeInterval(45 + 60))
+    expect(armed("Calendar: CR Backup", r) == 0, "Sat: a late push still lands before the moved backup")
+    // Sun 11:00: nobody there; it plays its 30 min (a "played" row): the backup rings, as it should.
+    r = day(6, 11); began("omg", r); row("played", "omg", r.addingTimeInterval(1800))
+    read(r.addingTimeInterval(1800 + 60))
+    fire(upTo: day(7, 0))
+
+    let rangFor = rang.map { "\($0.name) \(ny.component(.weekday, from: $0.ring))" }
+    expect(rang.count == 3, "three backups rang: the Nap that died, Thursday's (the app force-quit), Sunday's played out: \(rangFor)")
+    expect(rang.contains { $0.name == "Nap" } && rang.contains { $0.name == "omg" && $0.ring == day(6, 11) } && rang.contains { $0.ring == day(3, 8, 40) }, "and only those: \(rangFor)")
+    expect(Set(rang.map { "\($0.name)\($0.ring)" }).count == rang.count, "never two for one ring")
+    for x in rang { expect(x.at == wantFire(x.ring), "\(x.name): rang at its beep plus the minute, \(x.at)") }
+    expect(kit.isEmpty || kit.values.allSatisfy { $0.ring > day(7, 0) }, "nothing left armed for the week gone by")
+}
+
+section("what the Chumby plays (a=state music)")
+do {
+    func music(_ j: String) -> MusicReport? {
+        let x = try? JSONDecoder().decode(ChumbyState.self, from: Data(("{\"music\":" + j + "}").utf8))
+        return x?.music
+    }
+    // As the Chumby says it (11-25), a station played from the app (the player's own source: its name, its number).
+    let own = music(#"{"source":"pandora","label":"Morning Mix","state":"4100000000000001","playing":true}"#)
+    expect(own?.pandoraStation == "4100000000000001" && own?.label == "Morning Mix", "a Pandora station playing is known by its number")
+    // The hook's first form (11-25): "NUMBER##NAME".
+    expect(music(#"{"source":"pandora","label":"Pandora Radio","state":"4100000000000002##Shoegaze Radio","playing":true}"#)?.pandoraStation == "4100000000000002", "and from NUMBER##NAME")
+    expect(music(#"{"source":"pandora","label":"Shoegaze Radio","state":"4100000000000002","playing":false}"#)?.pandoraStation == nil, "a station held but stopped isn't playing")
+    expect(music(#"{"source":"shoutcast","label":"Indie Pop Rocks","state":"x","playing":1}"#)?.pandoraStation == nil, "a radio stream isn't a station")
+    expect(music("null") == nil, "nothing held, nothing named")
+    let old = try? JSONDecoder().decode(ChumbyState.self, from: Data(#"{"music":{"playing":true}}"#.utf8))
+    expect(old?.musicPlaying == true && old?.music?.pandoraStation == nil, "an older Chumby's bare playing still reads as playing")
 }
 
 print(failures == 0 ? "ok: \(checks) checks" : "\(failures) of \(checks) checks failed")
