@@ -108,12 +108,18 @@ jobs:
             done
           }
           # The shot is taken by a timer 1.5 s after the tap starts: the tap itself waits for the ring's motion to end.
-          wakeIt() { sleep 9; ( sleep 1.5; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-wake-pressed$WX.png ) & $D "$DEVICE" tap "Wake the TV" || echo "Wake not found"; wait; }
+          # Shots by timers from the tap's start (an accessibility tap takes ~3 s to land and waits for motion to end), each
+          # waited for by its own pid: a bare `wait` also waits for the film's recorder, which never ends by itself.
+          snap() { ( sleep $1; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-$2$WX.png ) & }
+          wakeIt() {
+            sleep 9; snap 4 wake-4s; local a=$!; snap 8 wake-8s; local b=$!; snap 16 wake-16s; local c=$!
+            $D "$DEVICE" tap "Wake the TV" || echo "Wake not found"; wait $a $b $c
+          }
           speakerIt() {
             sleep 9; $D "$DEVICE" tap "Speaker" || echo "Speaker not found"
             sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker$WX.png
-            ( sleep 0.8; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker-connecting$WX.png ) & $D "$DEVICE" tap "Sample Headphones" || echo "headphones not found"; wait
-            sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker-chosen$WX.png
+            snap 4 speaker-connecting; local a=$!; snap 9 speaker-chosen; local b=$!
+            $D "$DEVICE" tap "Sample Headphones" || echo "headphones not found"; wait $a $b
           }
           flicks() {
             local x=$1 d=$2
@@ -122,9 +128,8 @@ jobs:
             curl -s $M/fnormal/reset > /dev/null; ACT=backIt; film putback-shelf$x $d 8 $M/fnormal -tab 3 -pose shelf
           }
           # Folded: the keys, wake, the speaker sheet, a show whose episodes never came, the tour.
-          rm -f /tmp/tv-real-sends.log; curl -s $M/real/reset > /dev/null; ACT=pressAll; film keys 1 4 $M/real -tab 0
-          cp /tmp/tv-real-sends.log dist/tv-keys-real.log 2>/dev/null || true
-          WD=1; WX=; ACT=wakeIt; film wake 1 6 $M/rasleep -tab 0
+          # (Every key was pressed and checked in run eb6f388: each sent its own key, the seeks -1 and +1.)
+          WD=1; WX=; ACT=wakeIt; film wake 1 4 $M/rasleep -tab 0
           ACT=speakerIt; film speaker 1 3 $M/ridle -tab 0
           curl -s $M/real/reset > /dev/null; shot title-nometa 1 16 $M/nometa -tab 3 -pose realseries
           film tour 1 25 $M/live -tab 0 -pose tour
