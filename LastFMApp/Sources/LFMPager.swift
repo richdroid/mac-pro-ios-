@@ -43,8 +43,11 @@ struct Panel: Identifiable {
     // For the build's swipe log: where a swipe began, how far the finger took it and how fast it let go.
     @ObservationIgnored private var startX: CGFloat?
     @ObservationIgnored private var release: (drag: CGFloat, v: CGFloat, at: Double)?
-    func began() { startX = offset; release = nil }
+    // This touch's release has chosen its page (reset as the next touch begins).
+    @ObservationIgnored private(set) var decided = false
+    func began() { startX = offset; release = nil; decided = false }
     func released(slot: Int, x: CGFloat, v: CGFloat, w: CGFloat) {
+        decided = true
         target = slot
         release = ((x - (startX ?? x)) / w, v / w, Date().timeIntervalSinceReferenceDate)
     }
@@ -208,7 +211,7 @@ struct Pager: View {
                 // the landing's frames (§26: nothing heavy in a landing).
                 .onScrollPhaseChange { old, new in
                     motion.phase = new
-                    if old == .idle, new != .idle { motion.began() }
+                    if new == .interacting, old != .interacting { motion.began() }
                     if new == .interacting { motion.lander.stop(); if !placed { placed = true } }
                     guard new == .idle, placed else { return }
                     if let t = motion.target {

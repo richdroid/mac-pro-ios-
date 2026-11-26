@@ -54,6 +54,12 @@ struct Totals: View {
     // Last.fm's (gate on build 71: tracks 5,108 then 5,056 after a wrap).
     @MainActor private static var kept: (artists: Int, albums: Int, tracks: Int)?
     @State private var own: (artists: Int, albums: Int, tracks: Int)? = Totals.kept
+    // Worked out before the profile is first opened (home at rest), so it opens on these figures.
+    static func warm() async {
+        guard kept == nil, HistorySync.shared.complete else { return }
+        let c = await HistoryDB.reader.distinct(from: 0, to: Int(Int32.max))
+        if c.artists > 0 { kept = c }
+    }
     var body: some View {
         let p = store.profile
         VStack(alignment: .leading, spacing: S.inner) {

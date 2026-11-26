@@ -367,10 +367,12 @@ struct WPPaging: ScrollTargetBehavior {
         // A finger let go: the scroll stops where it is and the lander takes it to the page (when it can reach the scroll).
         if motion.phase == .interacting, motion.lander.ready {
             target.rect.origin.x = x
-            motion.released(slot: Int(to), x: x, v: v, w: w)
+            // Only the release itself decides: asked again before the phase moves on, the target is the stopped one and
+            // reads as no velocity at all (profile run 10: folded flicks recorded at 0 page/s and sprang back).
+            if !motion.decided { motion.released(slot: Int(to), x: x, v: v, w: w) }
         } else {
             target.rect.origin.x = to * w
-            if motion.phase == .interacting { motion.released(slot: Int(to), x: x, v: v, w: w) }
+            if motion.phase == .interacting, !motion.decided { motion.released(slot: Int(to), x: x, v: v, w: w) }
         }
         return target
     }
