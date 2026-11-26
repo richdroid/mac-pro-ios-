@@ -34,6 +34,54 @@ folded() { $D "$DEVICE" pose closed || true; sleep 4; orient portrait 1; }
 upright() { $D "$DEVICE" pose open || true; sleep 8; orient portrait 3; sleep 4; }
 flat() { $D "$DEVICE" pose open || true; sleep 6; orient landscape 3; sleep 4; }
 
+# Touches checked, not assumed (gate on build 70: closed after the open-flat films, the outer display came up portrait but
+# upside down, so its shape passed orient and every swipe arrived turned 180 degrees). One test swipe toward the next page
+# on the profile pivot; the app logs where it landed ("land 1"); otherwise the phone is turned (Device Hub's numbers are
+# UIDeviceOrientation's: 1 portrait, 2 upside down, 3 and 4 landscape) until a swipe lands on the next page. Needs a build
+# that logs its landings (lastfm b7+, after 637c0a0). want: portrait|landscape.
+calibrate() {
+  local want=$1 display=$2 r l c w h
+  for r in - 2 1 3 4 2 1; do
+    if [ $r != - ]; then
+      $D "$DEVICE" rotate $r || true; sleep 4
+      xcrun simctl io "$DEVICE" screenshot --display=$display /tmp/o.png > /dev/null 2>&1
+      w=$(sips -g pixelWidth /tmp/o.png 2>/dev/null | awk '/pixelWidth/{print $2}'); h=$(sips -g pixelHeight /tmp/o.png 2>/dev/null | awk '/pixelHeight/{print $2}')
+      if [ -z "$w" ] || { [ $want = portrait ] && [ "$w" -gt "$h" ]; } || { [ $want = landscape ] && [ "$w" -lt "$h" ]; }; then continue; fi
+    fi
+    hitches clear
+    xcrun simctl launch "$DEVICE" $APP -hitchLog YES -hub profile > /dev/null
+    sleep 7
+    $D "$DEVICE" drag 0.8 0.6 0.2 0.6 0.25 || true
+    sleep 3
+    c=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null)
+    l=$(grep -o 'land -*[0-9]*' "$c/Library/Caches/hitches.txt" 2>/dev/null | head -1 | awk '{print $2}')
+    xcrun simctl terminate "$DEVICE" $APP || true
+    echo "calibrate $want $display (rotate $r): land ${l:-none}"
+    if [ "$l" = 1 ]; then echo "calibrated $want $display (rotate $r)" >> dist/lands.txt; return 0; fi
+  done
+  echo "::error::CALIBRATION FAILED: $want display $display, a swipe never landed on the next page"
+  echo "CALIBRATION FAILED $want $display" >> dist/lands.txt
+  return 1
+}
+
+# Where each horizontal swipe of a film landed (the app's "land N" lines), checked: EXPECT="1 0 1 1" the whole
+# sequence; otherwise a film whose first step is a side swipe must land its first on the next page. Written to
+# dist/lands.txt (published) and as an error in the log; never silent.
+lands() {
+  local name=$1 got first
+  got=$(grep -o 'land -*[0-9]*' dist/hitches-$name.txt 2>/dev/null | awk '{print $2}' | tr '\n' ' ' | sed 's/ *$//')
+  first=${STEPS%% *}; first=${first%%:*}
+  case "$STEPS" in *side*|*flick*) ;; *) return 0;; esac
+  if [ -z "$got" ]; then echo "LANDS NONE $name (no landings logged)" >> dist/lands.txt; echo "::warning::LANDS NONE $name"; return 0; fi
+  if [ -n "${EXPECT:-}" ]; then
+    if [ "$got" = "$EXPECT" ]; then echo "LANDS OK $name: $got" >> dist/lands.txt
+    else echo "LANDS WRONG $name: got [$got] want [$EXPECT]" >> dist/lands.txt; echo "::error::LANDS WRONG $name: got [$got] want [$EXPECT]"; fi
+  elif [ "$first" = side ]; then
+    if [ "${got%% *}" = 1 ]; then echo "LANDS OK $name: $got" >> dist/lands.txt
+    else echo "LANDS WRONG $name: first side swipe landed ${got%% *}, not 1 ($got)" >> dist/lands.txt; echo "::error::LANDS WRONG $name: first side swipe landed ${got%% *}"; fi
+  else echo "LANDS $name: $got" >> dist/lands.txt; fi
+}
+
 # One shot: name, display, wait, then the app's own arguments. A shot is checked for having rendered: a frame taken
 # before the app drew (run 10's lfm-now-portrait.png was the bare ground) compresses to almost nothing, so one under
 # 250 KB is taken again, up to three times, and named in the log if it never fills.
@@ -122,6 +170,7 @@ film() {
   xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-end.png
   stop_rec $name
   hitches $name
+  lands $name
   xcrun simctl terminate "$DEVICE" $APP || true
   if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
 }

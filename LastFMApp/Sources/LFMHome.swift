@@ -142,7 +142,8 @@ private struct HomePanorama: View {
                     .scrollPosition($pos)
                     .scrollIndicators(.hidden)
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in motion.x = x }
-                    .onScrollPhaseChange { _, p in
+                    .onScrollPhaseChange { old, p in
+                        motion.swiped(old, p, at: Int((motion.x / max(sec, 1)).rounded()))
                         Store.shared.scrolling = p != .idle
                         if p == .decelerating, let t = motion.target { motion.target = nil; if t != rest.section { rest.section = t; motion.landed += 1 } }
                         if p == .idle { rest.section = Int((motion.x / max(sec, 1)).rounded()) }

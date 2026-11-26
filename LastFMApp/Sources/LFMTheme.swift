@@ -408,6 +408,12 @@ enum Diag {
         // And what the main thread was doing in each stall (LFMStalls.swift).
         StallSampler.shared.start()
     }
+    // Where a horizontal swipe came to rest, relative to where it began ("land 1" a page on, "land 0" sprung back), for
+    // the films' check that a swipe turned the page it should (ci/lfm-sim.sh lands).
+    func note(_ s: String) {
+        guard link != nil else { return }
+        lines.append(String(format: "t %5.1f ", last - began) + s)
+    }
     @objc private func tick(_ l: CADisplayLink) {
         let now = l.timestamp
         let interval = max(l.targetTimestamp - l.timestamp, 1.0 / 120)

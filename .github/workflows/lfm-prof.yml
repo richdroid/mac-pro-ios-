@@ -28,9 +28,12 @@ jobs:
           xcodegen generate
           xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
-          git worktree add /tmp/before c0ae38f39052de6393a4a79f5e78293237804b87
-          (cd /tmp/before && xcodegen generate && xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
-            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1)
+          # The before build (63) only when its films are wanted: its films from run 8 are kept (BEFORE=1 films them again).
+          if [ "${BEFORE:-0}" = 1 ]; then
+            git worktree add /tmp/before c0ae38f39052de6393a4a79f5e78293237804b87
+            (cd /tmp/before && xcodegen generate && xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1)
+          fi
       - name: Films
         continue-on-error: true
         timeout-minutes: 100
@@ -38,26 +41,21 @@ jobs:
           set +e
           exec > >(tee dist/films.log) 2>&1
           . ci/lfm-sim.sh; . ci/lfm-prof.sh
-          sim_setup /tmp/before/build-sim/Build/Products/Release-iphonesimulator/LastFM.app
+          touch dist/lands.txt
+          sim_setup build-sim/Build/Products/Release-iphonesimulator/LastFM.app
           # The mock's history read once, so every launch after is a warm one.
           xcrun simctl launch "$DEVICE" $APP -hub home; sleep 40; xcrun simctl terminate "$DEVICE" $APP
+          # The flick pass (gate on build 70): the paging films in every posture, each posture's touches calibrated first
+          # (a swipe must land on the next page before anything is filmed), folded's other motions for regressions.
           folded
-          films_before "-before" 1
-          films_scroll "-before" 1
-          upright
-          films_scroll "-before-portrait" 3
-          flat
-          films_scroll "-before-open" 3
-          xcrun simctl install "$DEVICE" build-sim/Build/Products/Release-iphonesimulator/LastFM.app
-          xcrun simctl launch "$DEVICE" $APP -hub home; sleep 20; xcrun simctl terminate "$DEVICE" $APP
-          folded
-          films_all "" 1
+          calibrate portrait 1
           films_scroll "" 1
+          films_all "" 1
           upright
-          # Back is at the top left open upright (the side strip's place folded).
-          BACKAT=0.063,0.052 films_all "-portrait" 3
+          calibrate portrait 3
           films_scroll "-portrait" 3
           flat
+          calibrate landscape 3
           films_scroll "-open" 3
           xcrun simctl shutdown "$DEVICE"
       - name: Publish
@@ -71,17 +69,19 @@ jobs:
           gh release view lastfm-prof >/dev/null 2>&1 || gh release create lastfm-prof --prerelease --title "Rotation profile" --notes "Rotation's motions filmed (branch lastfm-prof)." --target lastfm-prof
           for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > dist/hitches.txt
           echo "$GITHUB_SHA run $GITHUB_RUN_NUMBER" > status.txt
+          # Where every swipe landed, and any posture whose touches never calibrated: read with the status.
+          cat dist/lands.txt >> status.txt 2>/dev/null
           # The stalls' stacks named against this build (LFMStalls.swift samples, atos for the app's frames).
           APPD=build-sim/Build/Products/Release-iphonesimulator/LastFM.app
           ls dist/stalls-*.txt 2>/dev/null | grep -v -- -before > /tmp/sl.txt
           python3 ci/lfm-stall-stacks.py $APPD $(cat /tmp/sl.txt) > dist/stall-stacks.txt 2>&1 || echo "stall stacks failed" >> dist/stall-stacks.txt
           for f in $(cat /tmp/sl.txt); do n=$(basename $f .txt | sed 's/^stalls-//'); python3 ci/lfm-stall-stacks.py $APPD $f > dist/stacks-$n.txt 2>&1; done
           (cd dist && zip -q ../logs.zip films.log build.log hitches*.txt stalls-*.txt stacks-*.txt stall-stacks.txt 2>/dev/null)
-          gh release upload lastfm-prof logs.zip dist/hitches.txt dist/stall-stacks.txt --clobber
-          (cd dist && zip -qr ../film-shots.zip . -i 'lfm-*.png' 2>/dev/null) && gh release upload lastfm-prof film-shots.zip --clobber
+          gh release upload lastfm-prof logs.zip dist/hitches.txt dist/stall-stacks.txt dist/lands.txt --clobber
+          (cd dist && zip -qr ../film-shots-flick.zip . -i 'lfm-*.png' 2>/dev/null) && gh release upload lastfm-prof film-shots-flick.zip --clobber
           swiftc -O -o /tmp/lfm-shrink ci/lfm-shrink.swift 2>&1 | tail -3
           bash ci/lfm-shrink-all.sh dist small 900 2 > dist/publish.log 2>&1
-          (cd small && zip -q0 ../films.zip *.mp4 2>/dev/null || zip -q ../films.zip /dev/null)
-          gh release upload lastfm-prof films.zip --clobber
+          (cd small && zip -q0 ../films-flick.zip *.mp4 2>/dev/null || zip -q ../films-flick.zip /dev/null)
+          gh release upload lastfm-prof films-flick.zip --clobber
           # Last, so a waiter knows everything of this run is up.
           gh release upload lastfm-prof status.txt --clobber

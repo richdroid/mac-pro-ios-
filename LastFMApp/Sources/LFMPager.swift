@@ -32,6 +32,14 @@ struct Panel: Identifiable {
     // A page turned: the tick, felt as the finger lifts. Read only by the tick's own small view.
     var landed = 0
     @ObservationIgnored var ticked: Int?
+    // The section a swipe began on (for the build's swipe log).
+    @ObservationIgnored var from: Int?
+    func swiped(_ old: ScrollPhase, _ new: ScrollPhase, at: Int) {
+        #if canImport(UIKit)
+        if old == .idle, new != .idle { from = at }
+        if new == .idle, let f = from { from = nil; HitchLog.shared.note("land \(at - f)") }
+        #endif
+    }
 }
 
 // The landing's haptic, alone in a view of its own, so a tick redraws nothing else.
@@ -148,7 +156,8 @@ struct Pager: View {
                 // The landing is decided as his finger lifts: the tick then (the lit name follows the scroll itself). The
                 // page is said at rest, so nothing is worked out again in the settle's frames (§26: nothing heavy in a
                 // landing). At rest, checked; a rest on a copy is put on its real page.
-                .onScrollPhaseChange { _, new in
+                .onScrollPhaseChange { old, new in
+                    motion.swiped(old, new, at: Int(motion.f.rounded()))
                     motion.phase = new
                     if new == .decelerating, let t = motion.target {
                         motion.target = nil

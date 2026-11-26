@@ -320,22 +320,29 @@ enum TopBar {
     }
 }
 
-// WP7's pivot and panorama paging: the page follows the finger 1:1; let go, a flick (any throw that would carry the
-// page a quarter of the way on) turns one page in its direction, otherwise the nearer page wins; never more than one
-// page per swipe. The settle is the scroll's own deceleration, an exponential ease out like WP7's.
+// WP7's pivot and panorama paging: the page follows the finger 1:1; let go, the release VELOCITY decides (WP7's
+// pivot): a flick faster than `flick` pages per second turns one page in its direction, however short; anything slower
+// lands on the nearer page (a drag must pass half a page). Half a page a second is the throw build 63 turned on (a
+// quarter page carried at the normal 0.998 rate), so the decisions are 63's and only the settle is quicker. Never more
+// than one page per swipe. The settle stays the scroll's own quick deceleration (FastSettle). The velocity is read back from the projected carry: UIKit projects a throw by
+// v * r / (1 - r) / 1000 (r the deceleration rate per ms), so with `.fast` (0.99) the carry is about a tenth of a second
+// of the throw. Deciding by the carry itself, as the build before did, needed a 1,000 pt/s throw at the fast rate, so
+// ordinary flicks sprang back (gate on build 70).
 struct WPPaging: ScrollTargetBehavior {
     let width: CGFloat
     let count: Int
     let release: () -> CGFloat
     let chosen: (Int) -> Void
+    // Pages per second at release that count as a flick.
+    var flick: CGFloat = 0.5
     func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
         let w = max(width, 1)
         let from = (context.originalTarget.rect.minX / w).rounded()
-        let at = release() / w
-        let natural = target.rect.minX / w
-        let carry = natural - at
+        let x = release()
+        let at = x / w
+        let v = (target.rect.minX - x) / FastSettle.projection
         var to: CGFloat
-        if abs(carry) > 0.25 { to = carry > 0 ? at.rounded(.down) + 1 : at.rounded(.up) - 1 } else { to = at.rounded() }
+        if abs(v) > flick * w { to = v > 0 ? at.rounded(.down) + 1 : at.rounded(.up) - 1 } else { to = at.rounded() }
         to = max(from - 1, min(from + 1, to))
         to = max(0, min(CGFloat(count - 1), to))
         target.rect.origin.x = to * w
@@ -651,6 +658,9 @@ private struct Compressed: ViewModifier {
 // as every Silverlight toolkit transition is, [S4]) rather than drifting in on iOS's long default deceleration. The
 // scroll's own deceleration, set to the system's fast rate: its decay is exponential, the same family, and short.
 struct FastSettle: View {
+    // Seconds of release velocity the scroll projects at the rate set here (UIKit: r / (1 - r) / 1000, r per ms).
+    static let rate: CGFloat = 0.99
+    static let projection: CGFloat = rate / (1 - rate) / 1000
     var body: some View {
         #if canImport(UIKit)
         FastSettleProbe().frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
@@ -667,7 +677,7 @@ private struct FastSettleProbe: UIViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 var v = self?.superview
                 while let s = v {
-                    if let sv = s as? UIScrollView { sv.decelerationRate = .fast; return }
+                    if let sv = s as? UIScrollView { sv.decelerationRate = UIScrollView.DecelerationRate(rawValue: FastSettle.rate); return }
                     v = s.superview
                 }
             }
