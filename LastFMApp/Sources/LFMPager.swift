@@ -33,8 +33,39 @@ struct Panel: Identifiable {
     // A page turned: the tick, felt as the finger lifts. Read only by the tick's own small view.
     var landed = 0
     @ObservationIgnored var ticked: Int?
-    // Lands the pages itself (WP7's 0.35 s ease out), handed the scroll by FastSettle.
+    // Lands the pages itself (WP7's 0.35 s ease out, in Core Animation), handed the scroll by FastSettle.
     @ObservationIgnored let lander = PageLander()
+    // A landing runs: the scroll's own reports are ignored (it reports its target at once), and the names keep the page
+    // they were counted from, so the landing only slides and fades them (no name changes place in its frames).
+    @ObservationIgnored private(set) var landing = false
+    var heldBase: Int?
+    // How a pager works out its names' position from an offset (set by the pager; the panorama has no names).
+    @ObservationIgnored var fAt: ((CGFloat) -> CGFloat)?
+    init() {
+        lander.starts = { [weak self] x in self?.landingStarts(x) }
+        lander.ends = { [weak self] in self?.landingEnds() }
+    }
+    private func landingStarts(_ x: CGFloat) {
+        landing = true
+        let target = fAt?(x)
+        // Held only for a landing of a page or less (a name tapped two along is laid out round it, as before).
+        if let t = target, abs(t - f) <= 1.0001 { heldBase = Int(min(f, t).rounded(.down)) }
+        withAnimation(Z.easeOut(PageLander.duration)) {
+            self.x = x
+            if let t = target { self.f = t }
+        }
+    }
+    private func landingEnds() {
+        guard landing else { return }
+        landing = false
+        let now = lander.offset ?? x
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) {
+            heldBase = nil
+            if x != now { x = now }
+            if let g = fAt { let v = g(now); if f != v { f = v } }
+        }
+    }
     // The carousel's page in its middle slot, and that slot (a pivot that wraps rests on slot 1).
     @ObservationIgnored var basePage = 0
     @ObservationIgnored var mid = 0
@@ -216,7 +247,7 @@ struct Pager: View {
                         }
                     }
                     .scrollTargetLayout()
-                    .background(alignment: .topLeading) { FastSettle(lander: motion.lander) }
+                    .background(alignment: .topLeading) { FastSettle(lander: motion.lander, pivot: true) }
                 }
                 .scrollTargetBehavior(WPPaging(width: W, count: slotCount, motion: motion))
                 .scrollPosition($pos)
@@ -224,6 +255,8 @@ struct Pager: View {
                 .scrollIndicators(.hidden)
                 .scrollDisabled(locked)
                 .onScrollGeometryChange(for: CGSize.self) { CGSize(width: $0.contentOffset.x, height: $0.containerSize.width) } action: { _, v in
+                    // A landing's own report (its target, at once): the names are already animating there.
+                    if motion.landing { return }
                     motion.x = v.width
                     motion.sample(v.width)
                     motion.f = CGFloat(motion.basePage) + v.width / max(v.height, 1) - CGFloat(motion.mid)
@@ -334,9 +367,16 @@ struct Pager: View {
         let p = order.indices.contains(s) ? order[s].page : index
         if p != index, placed { motion.ticked = p; motion.landed += 1 }
         let x = CGFloat(s) * W
+        prime(W)
         if !motion.lander.land(to: x, done: { settle(W) }) {
             withAnimation(Z.easeOut(0.35)) { pos.scrollTo(x: x) } completion: { settle(W) }
         }
+    }
+
+    // How the names read an offset, for a landing told only its target.
+    private func prime(_ W: CGFloat) {
+        let m = motion
+        m.fAt = { [weak m] x in guard let m else { return 0 }; return CGFloat(m.basePage) + x / max(W, 1) - CGFloat(m.mid) }
     }
 
     // At rest: off a slot's edge (a drag let go with nothing chosen), landed first; on a slot, the swipe logged, the slots
@@ -346,6 +386,7 @@ struct Pager: View {
         let x = motion.offset
         let r = max(0, min(slotCount - 1, Int((x / W).rounded())))
         if abs(x - CGFloat(r) * W) > 1, placed {
+            prime(W)
             if motion.lander.land(to: CGFloat(r) * W, done: { settle(W) }) { return }
         }
         motion.rested(w: W, slots: slotCount)
@@ -444,7 +485,8 @@ private struct PivotHeaders: View {
     var body: some View {
         let n = names.count
         let f = n > 1 ? motion.f : 0
-        let base = Int(f.rounded(.down)), frac = f - f.rounded(.down)
+        // Held through a landing: the row slides to the next name rather than being laid out again round it.
+        let base = motion.heldBase ?? Int(f.rounded(.down)), frac = max(0, min(1, f - CGFloat(base)))
         let widths = Self.widths(names, size)
         let first = n > 0 ? ((base % n) + n) % n : 0
         let shift = n > 1 ? frac * (widths[first] + Self.gap) : 0

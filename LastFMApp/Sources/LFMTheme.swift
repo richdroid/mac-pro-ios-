@@ -208,11 +208,14 @@ struct Backdrop: View {
                 if let ref {
                     let side = max(g.height, g.width) * 1.08
                     // Dim and desaturated, as WP7.5's artist pages set their photo behind the pivot.
-                    // The desaturation baked into the picture (no filter on a screen-sized layer).
+                    // The desaturation baked into the picture (no filter on a screen-sized layer). A new picture is a new
+                    // layer faded over the old (Ground's slow cross-fade), never swapped in one frame.
                     TreatedArt(ref, .muted)
                         .frame(width: side, height: side)
                         .clipped()
                         .offset(x: g.width - side * 0.82, y: -side * 0.06)
+                        .id(ref.key)
+                        .transition(.opacity)
                     // Darkest across the top, where the small capitals and names sit over the cover's own lettering.
                     // The top tenth nearly black: a cover's own title, cropped by the screen's top edge, read as stray
                     // letters over the capitals ("…rizons", run 63 gate).
@@ -230,6 +233,65 @@ struct Backdrop: View {
     }
 }
 
+// One ground per visit (WP7 study §2; Richard, 11-26: "i dont like how background cover changes so quickly"). WP7's hub
+// set ONE picture behind the panorama, the photo of the artist last played, and kept it for the whole visit ("only one
+// image displayed at any given time"; "the Panorama is not designed to have a dynamic background", its author). So home,
+// every hub and the pages that borrow it paint `Ground.hubs`: the artist's photo (Deezer, ArtistPhotos), else the cover,
+// chosen once; it moves only for a new artist, never sooner than 30 s after the last change, and only once the new picture
+// is baked, by a slow 1.2 s cross-fade. Now playing paints `Ground.now`: the same rule per artist with no hold, as WP7 held
+// one photo per artist and faded the next in once it had loaded.
+@MainActor @Observable final class Ground {
+    static let hubs = Ground(now: false)
+    static let now = Ground(now: true)
+    struct Pick: Equatable { let ref: ArtRef; let treat: ArtStore.Treat; let artist: String }
+    private(set) var pick: Pick?
+    @ObservationIgnored private let forNow: Bool
+    @ObservationIgnored private var since = Date.distantPast
+    @ObservationIgnored private var job: Task<Void, Never>?
+    @ObservationIgnored private var aim: String?
+    static let fade = 1.2
+    private var hold: Double { forNow ? 0 : 30 }
+    private init(now: Bool) { forNow = now }
+    func follow(_ s: Scrobble?) {
+        guard let s else { return }
+        let a = ArtistPhotos.norm(s.artist)
+        if aim == a { return }
+        // This artist's photo already: nothing changes (his next song by the same artist keeps the same ground).
+        if let p = pick, ArtistPhotos.norm(p.artist) == a, p.ref.isPhoto { return }
+        job?.cancel()
+        aim = a
+        // The very first: at once, from what's ready now (the cover stands in for a photo not yet found).
+        if pick == nil {
+            let lp = look(s, photo: true)
+            if let r = ArtistPhotos.shared.photo(s.artist, lp) { pick = Pick(ref: r, treat: lp, artist: s.artist); since = Date(); aim = nil; return }
+            pick = Pick(ref: s.art, treat: look(s, photo: false), artist: s.artist); since = Date()
+        }
+        job = Task { [weak self] in
+            guard let self else { return }
+            let lp = self.look(s, photo: true)
+            await ArtistPhotos.shared.prepare(s.artist, looks: [lp])
+            guard !Task.isCancelled else { return }
+            var next: Pick
+            if let r = ArtistPhotos.shared.photo(s.artist, lp) { next = Pick(ref: r, treat: lp, artist: s.artist) }
+            else {
+                // No photo: a cover already showing for this artist stays; else the cover, baked first.
+                if let p = self.pick, ArtistPhotos.norm(p.artist) == a { self.aim = nil; return }
+                let t = self.look(s, photo: false)
+                _ = await ArtStore.shared.treated(s.art, t)
+                next = Pick(ref: s.art, treat: t, artist: s.artist)
+            }
+            let wait = self.hold - Date().timeIntervalSince(self.since)
+            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+            guard !Task.isCancelled, self.aim == a else { return }
+            self.aim = nil
+            guard next != self.pick else { return }
+            self.since = Date()
+            withAnimation(.easeInOut(duration: Self.fade)) { self.pick = next }
+        }
+    }
+    private func look(_ s: Scrobble, photo: Bool) -> ArtStore.Treat { forNow ? (photo ? .tinted(Store.tint(s.art)) : .duotone) : .muted }
+}
+
 // Zune desktop's Now Playing: the picture of what's on across the whole screen in one colour (a duotone in the cover's
 // own colour, no blur), and over it the artist and album in giant capitals running off the right edge.
 struct NowBackdrop: View {
@@ -242,20 +304,23 @@ struct NowBackdrop: View {
                     // The duotone in the cover's own vivid colour, bright (Zune desktop's is a saturated single colour).
                     let vivid = (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.art.artist + s.art.album)).vivid.color
                     let side = max(g.height, g.width) * 1.05
-                    // The duotone baked into the picture (no filter on a screen-sized layer). Zune desktop's is of the
-                    // artist's photo: that, in the cover's colour, once it's ready; the cover's own until then.
-                    let tint = (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.art.artist + s.art.album)).vivid
-                    let photo = ArtistPhotos.shared.photo(s.artist, .tinted(tint))
-                    TreatedArt(photo ?? s.art, photo == nil ? .duotone : .tinted(tint))
-                        .frame(width: side, height: side)
-                        .clipped()
-                        // Never short of the left edge: open flat the screen is wider than tall and 0.85 of the side
-                        // left a black strip down the left pane.
-                        .offset(x: min(0, g.width - side * 0.85), y: g.height - side)
+                    // WP7's now playing (study §2): the artist's photo, one per artist, held while his songs play and
+                    // faded to the next artist's once it's ready (Ground.now), never a cover per song. Baked look, no filter.
+                    if let pick = Ground.now.pick {
+                        TreatedArt(pick.ref, pick.treat)
+                            .frame(width: side, height: side)
+                            .clipped()
+                            // Never short of the left edge: open flat the screen is wider than tall and 0.85 of the side
+                            // left a black strip down the left pane.
+                            .offset(x: min(0, g.width - side * 0.85), y: g.height - side)
+                            .id(pick.ref.key + pick.treat.tag)
+                            .transition(.opacity)
+                    }
                     // Darker down the lower half, where the page's figures sit over the giant capitals and the cover's
                     // own lettering (run 64 shots: "Friday" over "ENDLESS" over the cover's title).
-                    LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.22), location: 0.42),
-                                           .init(color: .black.opacity(0.5), location: 0.68), .init(color: .black.opacity(0.7), location: 1)],
+                    // Darker again under the body text (build 76 notes: hard to read over the capitals folded).
+                    LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.25), location: 0.38),
+                                           .init(color: .black.opacity(0.62), location: 0.6), .init(color: .black.opacity(0.8), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                     // The giant capitals in a band at the foot, clear of the cover above (run 61 gate).
                     VStack(alignment: .leading, spacing: -24) {
@@ -264,7 +329,7 @@ struct NowBackdrop: View {
                     }
                     .textCase(.uppercase).lineLimit(1).fixedSize()
                     // Quieter than the type over it: open upright the page's "about" lay over them and was hard to read (run 63 gate).
-                    .foregroundStyle(vivid.mix(with: .white, by: 0.5).opacity(0.26))
+                    .foregroundStyle(vivid.mix(with: .white, by: 0.5).opacity(0.17))
                     .padding(.leading, S.margin - 4)
                     .offset(y: g.height - (s.album.isEmpty ? 1 : 2) * 92 - 60)
                 }

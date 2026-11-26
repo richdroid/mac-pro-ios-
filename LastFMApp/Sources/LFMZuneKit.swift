@@ -169,7 +169,9 @@ struct TurnstileIn: ViewModifier {
         let period = max(l.targetTimestamp - l.timestamp, 1.0 / 120)
         if last > 0 { onTime = l.timestamp - last < period * 1.5 ? onTime + 1 : 0 }
         last = l.timestamp
-        guard onTime >= 1 || CACurrentMediaTime() - began > 0.12 else { return }
+        // Two frames on time in a row (the hub's first build over), or half a second at most: a turnstile begun inside a
+        // stall shows only its last few frames (gate on build 76: about 5 frames of a 0.35 s turn-in).
+        guard onTime >= 2 || CACurrentMediaTime() - began > 0.5 else { return }
         l.invalidate(); link = nil
         let ready = waiting; waiting = []
         ready.forEach { $0() }
@@ -201,16 +203,30 @@ struct TurnstileOut: ViewModifier {
     func body(content: Content) -> some View {
         let chosen = HomeLeave.shared.chosen
         let gone = chosen != nil && !still
-        // The order of leaving: everything else from the top, the chosen word last.
+        let word = chosen.map(HomeLeave.isWord) ?? false
+        let me = chosen == index
+        // Tiles (WP7's start screen, guide p.65): the others turn away, the tapped one last. A menu word (WP7's music hub,
+        // study §3, measured): the tapped word lifts away first, up and to the right, in about 0.1 s; then the title,
+        // background and headers turn out; the other words go last.
         let order = chosen.map { index == $0 ? count : (index < $0 ? index : index - 1) } ?? 0
+        let delay = word ? HomeLeave.wordLead + Double(index) / Double(max(count, 1)) * HomeLeave.wordSpread
+                         : Double(order) / Double(max(count, 1)) * Z.leaveSpread
+        let lift = gone && word && me
         content
-            .rotation3DEffect(.degrees(gone ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: gone ? 0.55 : 0)
+            .rotation3DEffect(.degrees(gone && !lift ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: gone && !lift ? 0.55 : 0)
+            .offset(x: lift ? 36 : 0, y: lift ? -22 : 0)
             .opacity(gone ? 0 : 1)
-            // The cascade fitted inside home's wait before the push (0.15 s of feather, the tapped one last, each swing
-            // 0.25 s): at 20 ms apart over home's 20 parts the tapped tile and the menu words were still on screen when
-            // the push came, and the screen held half of home through the hub's first frames (profile films, run 5).
-            .animation(gone ? Z.easeIn(0.25).delay(Double(order) / Double(max(count, 1)) * Z.leaveSpread) : nil, value: gone)
+            .animation(gone ? (lift ? Z.easeIn(HomeLeave.liftTime) : Z.easeIn(0.25).delay(delay)) : nil, value: gone)
     }
+}
+extension HomeLeave {
+    nonisolated static let liftTime = 0.12
+    nonisolated static let wordLead = 0.06
+    nonisolated static let wordSpread = 0.12
+    nonisolated static func isWord(_ i: Int) -> Bool { Home.keys.indices.contains(i) && Home.keys[i].hasPrefix("w-") }
+    // From the tap to the push: everything gone (a word's leave: its lead, the spread, a swing; a tile's: the spread and
+    // its swing), so nothing on screen freezes while the hub is made.
+    nonisolated static func wait(_ i: Int) -> Double { isWord(i) ? wordLead + wordSpread + 0.25 + 0.01 : Z.leaveSpread + 0.25 + 0.01 }
 }
 
 // Windows Phone's tilt [S4, S5]: what's pressed tips toward the finger (up to 0.3 rad at a corner) and sinks (25 px of
@@ -382,15 +398,21 @@ struct WPPaging: ScrollTargetBehavior {
 }
 
 // The landing, WP7's way: from where the finger left the page to the page chosen in 0.35 s, ExponentialEase (exponent 6)
-// EaseOut as the Silverlight toolkit's transitions [S4], set frame by frame on the scroll itself so the names, the
-// panorama's title and its background follow every frame. A finger that starts dragging again takes over at once.
+// EaseOut as the Silverlight toolkit's transitions [S4]. Since build 77 (Richard, 11-26: "the animations rn r very rough")
+// it is Core Animation's: the scroll's offset is animated by a property animator in the render server, on the cubic that
+// matches WP7's curve (Z.easeOut's), so no frame of a landing waits on the main thread. What follows the scroll (a pivot's
+// names, the panorama's title and background) is told the target once, as the landing starts, and animated by SwiftUI on
+// the same curve and duration: nothing is laid out again in the landing's frames. A finger that starts dragging again
+// stops it where it is on screen and takes over at once.
 @MainActor final class PageLander: NSObject {
     #if canImport(UIKit)
     weak var scroll: UIScrollView?
-    private var link: CADisplayLink?
+    private var anim: UIViewPropertyAnimator?
     #endif
-    private var from: CGFloat = 0, to: CGFloat = 0, began: Double = 0
     private var done: (() -> Void)?
+    // Told as a landing starts (its target offset), and as it ends or is stopped (its owner syncs what follows the scroll).
+    var starts: ((CGFloat) -> Void)?
+    var ends: (() -> Void)?
     static let duration = 0.35
     var ready: Bool {
         #if canImport(UIKit)
@@ -401,12 +423,12 @@ struct WPPaging: ScrollTargetBehavior {
     }
     var active: Bool {
         #if canImport(UIKit)
-        return link != nil
+        return anim != nil
         #else
         return false
         #endif
     }
-    // Where the scroll is now, exactly (nil when it isn't known).
+    // Where the scroll is now (the landing's target while one runs: the model value).
     var offset: CGFloat? {
         #if canImport(UIKit)
         return scroll?.contentOffset.x
@@ -419,18 +441,28 @@ struct WPPaging: ScrollTargetBehavior {
     @discardableResult func land(to x: CGFloat, done: @escaping () -> Void) -> Bool {
         #if canImport(UIKit)
         guard let sv = scroll else { return false }
-        link?.invalidate(); link = nil
-        from = sv.contentOffset.x; to = x
+        if let a = anim { anim = nil; a.stopAnimation(false); a.finishAnimation(at: .current) }
+        let from = sv.contentOffset.x
         self.done = done
-        began = CACurrentMediaTime()
-        if abs(to - from) < 0.5 {
-            sv.setContentOffset(CGPoint(x: to, y: sv.contentOffset.y), animated: false)
+        if abs(x - from) < 0.5 {
+            sv.setContentOffset(CGPoint(x: x, y: sv.contentOffset.y), animated: false)
             finish(); return true
         }
-        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
-        l.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
-        l.add(to: .main, forMode: .common)
-        link = l
+        let a = UIViewPropertyAnimator(duration: Self.duration,
+                                       timingParameters: UICubicTimingParameters(controlPoint1: CGPoint(x: 0.16, y: 1), controlPoint2: CGPoint(x: 0.3, y: 1)))
+        a.isInterruptible = true
+        a.isUserInteractionEnabled = true
+        a.addAnimations { sv.contentOffset = CGPoint(x: x, y: sv.contentOffset.y) }
+        a.addCompletion { [weak self] pos in
+            MainActor.assumeIsolated {
+                guard let self, self.anim === a else { return }
+                self.anim = nil
+                if pos == .end { self.finish() }
+            }
+        }
+        anim = a
+        starts?(x)
+        a.startAnimation()
         return true
         #else
         return false
@@ -443,27 +475,15 @@ struct WPPaging: ScrollTargetBehavior {
         sv.setContentOffset(CGPoint(x: x, y: sv.contentOffset.y), animated: false)
         #endif
     }
-    // A finger on it again: the landing stops where it is (the next release lands from there).
+    // A finger on it again: the landing stops where it is on screen (the next release lands from there).
     func stop() {
         #if canImport(UIKit)
-        link?.invalidate(); link = nil
+        if let a = anim { anim = nil; a.stopAnimation(false); a.finishAnimation(at: .current); ends?() }
         #endif
         done = nil
     }
-    #if canImport(UIKit)
-    @objc private func tick(_ l: CADisplayLink) {
-        guard let sv = scroll, !sv.isDragging else { stop(); return }
-        // The position for the frame about to be shown.
-        let t = min(1, (l.targetTimestamp - began) / Self.duration)
-        let x = from + (to - from) * CGFloat(Self.ease(t))
-        sv.setContentOffset(CGPoint(x: t >= 1 ? to : x, y: sv.contentOffset.y), animated: false)
-        if t >= 1 { finish() }
-    }
-    #endif
     private func finish() {
-        #if canImport(UIKit)
-        link?.invalidate(); link = nil
-        #endif
+        ends?()
         let d = done; done = nil
         d?()
     }
@@ -782,9 +802,12 @@ struct FastSettle: View {
     static let projection: CGFloat = rate / (1 - rate) / 1000
     // Handed the scroll, to land its pages itself.
     var lander: PageLander? = nil
+    // A pivot: iOS 26's back swipe from anywhere on the page waits for the pivot's own drag to fail (build 76: a rightward
+    // drag in a pivot open flat popped to home). The system's edge swipe is untouched.
+    var pivot = false
     var body: some View {
         #if canImport(UIKit)
-        FastSettleProbe(lander: lander).frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
+        FastSettleProbe(lander: lander, pivot: pivot).frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
         #else
         Color.clear.frame(width: 0, height: 0)
         #endif
@@ -793,24 +816,34 @@ struct FastSettle: View {
 #if canImport(UIKit)
 private struct FastSettleProbe: UIViewRepresentable {
     let lander: PageLander?
+    let pivot: Bool
     final class Probe: UIView {
         weak var lander: PageLander?
+        var pivot = false
         override func didMoveToWindow() {
             super.didMoveToWindow()
+            guard window != nil else { return }
             DispatchQueue.main.async { [weak self] in
                 var v = self?.superview
                 while let s = v {
                     if let sv = s as? UIScrollView {
                         sv.decelerationRate = UIScrollView.DecelerationRate(rawValue: FastSettle.rate)
                         self?.lander?.scroll = sv
+                        if self?.pivot == true { Self.yield(sv) }
                         return
                     }
                     v = s.superview
                 }
             }
         }
+        private static func yield(_ sv: UIScrollView) {
+            var r: UIResponder? = sv
+            while let n = r, !(n is UINavigationController) { r = n.next }
+            guard let nav = r as? UINavigationController else { return }
+            if #available(iOS 26.0, *) { nav.interactiveContentPopGestureRecognizer?.require(toFail: sv.panGestureRecognizer) }
+        }
     }
-    func makeUIView(context: Context) -> Probe { let p = Probe(); p.lander = lander; return p }
+    func makeUIView(context: Context) -> Probe { let p = Probe(); p.lander = lander; p.pivot = pivot; return p }
     func updateUIView(_ v: Probe, context: Context) {}
 }
 #endif

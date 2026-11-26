@@ -37,7 +37,7 @@ struct HomeView: View {
                 HomePanorama(go: go)
             }
         }
-        .background { if pane { Backdrop(ref: store.shown.flatMap { ArtistPhotos.shared.photo($0.artist) } ?? store.shown?.art) } else { Color.black.ignoresSafeArea() } }
+        .background { if pane { Backdrop(ref: Ground.hubs.pick?.ref) } else { Color.black.ignoresSafeArea() } }
         .toolbarBackground(.hidden, for: .navigationBar)
         .onAppear { TileClock.shared.start(); HomeSwipe.moving = false; TouchTravel.swiped = false }
         // Back on home finds it as it was: everything flat again (reset once the hub has covered it).
@@ -79,7 +79,7 @@ struct HomeView: View {
         Task { @MainActor in
             // The parts all but gone (the last starts at 0.06 s and swings 0.25 s, ease in), then the hub, whose own
             // turnstile starts on its first frame: out and in chained, with no bare frames between (gate on build 71).
-            try? await Task.sleep(nanoseconds: UInt64(Z.leaveWait * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(HomeLeave.wait(Home.order(key)) * 1_000_000_000))
             open.hub(hub, panel)
         }
     }
@@ -140,26 +140,31 @@ private struct HomePanorama: View {
                 // no wider than a phone's, so more of the next section shows (never stretched tiles).
                 let sec = min(pw - 48, 440)
                 let count = 4
-                // WP7's panorama title: 186.667 px Light on a 480 px screen, so about 0.36 of the width.
-                let T0 = min(150, max(112, pw * 0.36)) * min(max(k, 0.9), 1.1)
-                // Always wider than the screen, as WP7's panorama title is: open upright the capped size fitted whole
-                // inside it (run 63 gate, Zune gap 3). Grown until it runs 12 % past the edge.
+                // WP7's panorama title (study §1): FontSize 187 on a 480 px screen (0.39 of the width), Light, plain white,
+                // Margin 10,-76,0,9 in its row under the 32 px tray: the letters' x-height starts 0.18 of the size below
+                // the tray and the items begin 0.97 of the size below it. Placed here from the face's own metrics.
+                let T0 = min(300, max(112, pw * 0.39)) * min(max(k, 0.9), 1.1)
+                // Always wider than the screen, as WP7's panorama title is (open upright a short name fitted inside it).
                 let w0 = textWidth("rotation", size: T0, tracking: -3, weight: -0.4, face: Z.lower())
                 let T = w0 > 0 && w0 < pw * 1.12 ? T0 * pw * 1.12 / w0 : T0
+                let m = Self.metrics(T)
                 let across = TopBar.across()
-                let titleTop = across.map { $0.maxY - T * 0.22 } ?? max(0, insets.top - 10) - T * 0.18
-                let titleH = ceil(T * 1.2)
-                let sectionsTop = titleTop + titleH - T * 0.08
+                let tray = across?.maxY ?? insets.top
+                let titleTop = tray + T * 0.18 - (m.ascender - m.xHeight)
+                let sectionsTop = tray + T * 0.97
                 let titleW = textWidth("rotation", size: T, tracking: -3, weight: -0.4, face: Z.lower())
                 let travel = max(1, sec * CGFloat(count - 1))
-                let rate = min(0.6, max(0.2, (titleW + S.margin - pw * 0.8) / travel))
+                // The layers' rates from their widths (study §2: "the speed relates to the ratio of the content's width to
+                // the background's"): each crosses its own overhang once over the panorama's travel. The title, shorter,
+                // is the slowest; the background (as tall as the screen, square) next; the sections 1:1.
+                let titleRate = max(0.05, (titleW + 10 - pw) / travel)
+                let bgSide = max(H * 1.02, pw + 40)
+                let bgRate = max(titleRate + 0.05, min(0.9, (bgSide - pw) / travel))
                 ZStack(alignment: .topLeading) {
-                    // WP7's panorama background: the cover of what's on (or last played) big behind everything. The
-                    // layers run title slowest, then the background, then the sections (Microsoft's panorama guidance,
-                    // hh202912); no ratio is documented, so the background sits between the two.
-                    PanoramaBackground(ref: store.shown.flatMap { ArtistPhotos.shared.plain($0.artist) } ?? store.shown?.art, motion: motion, rate: min(0.85, rate + (1 - rate) * 0.4), travel: travel)
-                    PanoramaTitle(text: "rotation", size: T, motion: motion, rate: rate)
-                        .padding(.leading, side.leading + S.margin - 6)
+                    PanoramaBackground(ref: Ground.hubs.pick?.ref, motion: motion, rate: bgRate, side: bgSide)
+                        .modifier(TurnstileOut(index: 0, count: Home.count))
+                    PanoramaTitle(text: "rotation", size: T, motion: motion, rate: titleRate)
+                        .padding(.leading, side.leading + 10)
                         .offset(y: titleTop)
                         .modifier(TurnstileOut(index: 0, count: Home.count))
                         .turnstile(0)
@@ -184,7 +189,7 @@ private struct HomePanorama: View {
                     .scrollTargetBehavior(WPPaging(width: sec, count: count, motion: motion))
                     .scrollPosition($pos)
                     .scrollIndicators(.hidden)
-                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in motion.x = x; motion.sample(x) }
+                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in if !motion.landing { motion.x = x; motion.sample(x) } }
                     // Let go: the section chosen (WPPaging) is reached by the lander in 0.35 s, the tick as it starts.
                     .onScrollPhaseChange { old, p in
                         motion.phase = p
@@ -266,6 +271,7 @@ private struct HomePanorama: View {
 }
 
 // The panorama's title, the only thing that reads where the panorama is, so a swipe redraws the title and nothing else.
+// Plain white (Richard, 11-26: "no color on topmost text saying rotation"; WP7.0's music+videos title was white).
 private struct PanoramaTitle: View {
     let text: String
     let size: CGFloat
@@ -274,34 +280,53 @@ private struct PanoramaTitle: View {
     var body: some View {
         Text(text)
             .font(.zuneLower(size: size)).tracking(-3)
-            // As WP7.5's "music+videos": the title in Zune's magenta running into violet across its width.
-            .foregroundStyle(LinearGradient(colors: [Z.magenta, Color(red: 0.62, green: 0.16, blue: 0.78)], startPoint: .leading, endPoint: .trailing))
+            .foregroundStyle(.white)
             .lineLimit(1).fixedSize()
             .offset(x: -motion.x * rate)
             .accessibilityAddTraits(.isHeader)
     }
 }
 
-// The panorama's picture: square, as tall as the screen or as wide as the travel needs, darkened, sliding slowest.
+extension HomePanorama {
+    // The title face's ascender and x-height at a size, measured once per size.
+    @MainActor private static var kept: [CGFloat: (ascender: CGFloat, xHeight: CGFloat)] = [:]
+    @MainActor static func metrics(_ size: CGFloat) -> (ascender: CGFloat, xHeight: CGFloat) {
+        if let k = kept[size] { return k }
+        #if canImport(UIKit)
+        let f = UIFont(name: Z.lower(), size: size) ?? Z.uiFont(size, weight: -0.4)
+        let v = (f.ascender, f.xHeight)
+        #else
+        let v = (size * 1.08, size * 0.5)
+        #endif
+        kept[size] = v
+        return v
+    }
+}
+
+// The panorama's picture (the ground: one per visit, Ground.hubs), square, as tall as the screen, darkened, sliding at
+// its width's rate. A new artist's picture fades in over the old one (1.2 s), never cut.
 private struct PanoramaBackground: View {
     let ref: ArtRef?
     let motion: PagerMotion
     let rate: CGFloat
-    let travel: CGFloat
+    let side: CGFloat
     var body: some View {
         GeometryReader { g in
-            if let ref {
-                let side = max(g.size.height * 1.02, g.size.width + travel * rate + 40)
-                ZStack {
-                    ArtView(ref, px: 1000, corner: 0).frame(width: side, height: side)
-                    LinearGradient(stops: [.init(color: .black.opacity(0.42), location: 0), .init(color: .black.opacity(0.6), location: 0.4),
-                                           .init(color: .black.opacity(0.82), location: 1)], startPoint: .top, endPoint: .bottom)
-                }
-                .frame(width: side, height: side)
-                .offset(x: -motion.x * rate, y: (g.size.height - side) / 2)
-            } else {
+            ZStack(alignment: .topLeading) {
                 Color.black
+                if let ref {
+                    ArtView(ref, px: 1000, corner: 0).frame(width: side, height: side)
+                        .offset(y: (g.size.height - side) / 2)
+                        .id(ref.key)
+                        .transition(.opacity)
+                }
+                // WP7: "dark, soft, low-contrast… a semi-transparent black filter".
+                LinearGradient(stops: [.init(color: .black.opacity(0.42), location: 0), .init(color: .black.opacity(0.6), location: 0.4),
+                                       .init(color: .black.opacity(0.82), location: 1)], startPoint: .top, endPoint: .bottom)
+                    .frame(width: side, height: g.size.height)
             }
+            .frame(width: side, height: g.size.height, alignment: .topLeading)
+            .offset(x: -motion.x * rate)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)

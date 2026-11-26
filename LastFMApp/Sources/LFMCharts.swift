@@ -655,7 +655,7 @@ struct WeekPicker: View {
                 }
             }
             .modifier(BarFade())
-            .background { Backdrop(ref: Store.shared.shown?.art, dim: 0.2) }
+            .background { Backdrop(ref: Ground.hubs.pick?.ref, dim: 0.2) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Close", systemImage: "xmark") } }
             }

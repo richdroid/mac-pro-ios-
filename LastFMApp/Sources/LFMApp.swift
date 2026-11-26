@@ -163,7 +163,7 @@ struct HubView: View {
             }
         }
         .environment(\.hubName, hub == .nowPlaying ? nil : hub.word)
-        .background { if hub == .nowPlaying { NowBackdrop(song: Store.shared.shown) } else { Backdrop(ref: Store.shared.shown?.art) } }
+        .background { if hub == .nowPlaying { NowBackdrop(song: Store.shared.shown) } else { Backdrop(ref: Ground.hubs.pick?.ref) } }
         // Under the edge swipe UIKit re-insets the page in every frame, and both pages were laid out again and their type
         // redrawn each frame of the drag (profile films: 41-48 fps through the swipe). Held at rest size while it moves.
         .holdsWhileMoving("hub")

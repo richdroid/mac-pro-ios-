@@ -71,7 +71,7 @@ struct Profile: Sendable, Equatable {
     // The song the screens show (the hero, the strip, the ground behind every tab). It follows `hero`, but moves to a
     // song with a new cover only once that cover and its backdrop are ready, so cover, ground and words change together
     // in one crossfade (run 39: the ground cut to black for half a second and the cover showed its stand-in).
-    private(set) var shown: Scrobble?
+    private(set) var shown: Scrobble? { didSet { Ground.hubs.follow(shown); Ground.now.follow(shown) } }
     @ObservationIgnored private var preparing: String?
     // Polls in a row that said nothing is on while a song was: one is let pass before the song is called over (Last.fm
     // often says nothing between two songs), so "now playing" and the hero don't flip and back.
