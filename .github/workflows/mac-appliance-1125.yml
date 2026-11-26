@@ -1,0 +1,76 @@
+name: Mac appliance shots (branch only)
+# Branch-only: the Dashboard tab with the Music section, in every posture. Delete at merge.
+  push:
+    branches: [mac-appliance-1125]
+permissions:
+  contents: write
+concurrency:
+  group: mac-appliance-1125-shots
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 82
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          D=/tmp/dh/.build/release/devicehubctl
+          # name, display, scroll x, port (9001 lyrics off, 9061 lyrics on): the Dashboard at the top, then scrolled to its end (Music is last).
+          dash() {
+            local name=$1 display=$2 x=$3 port=$4
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$port -tab 6
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-top.png
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x 0.85 $x 0.1 0.15 || echo "drag failed"; sleep 1; done
+            sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-music.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # Open upright (portrait), open flat (landscape), folded (outer display).
+          dash dash-lyrics-off-portrait 3 0.5 9001
+          dash dash-lyrics-on-portrait 3 0.5 9061
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          dash dash-lyrics-off-flat 3 0.75 9001
+          dash dash-lyrics-on-flat 3 0.75 9061
+          $D "$DEVICE" pose closed || true; sleep 5
+          dash dash-lyrics-off-folded 1 0.45 9001
+          dash dash-lyrics-on-folded 1 0.45 9061
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view mac-appliance-1125 >/dev/null 2>&1 || gh release create mac-appliance-1125 --prerelease --title "Mac appliance shots" --notes "Branch-only shots; delete at merge."
+          for f in shots.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload mac-appliance-1125 "$f" --clobber && break; sleep 15; done
+          done
