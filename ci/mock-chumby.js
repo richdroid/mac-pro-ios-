@@ -584,7 +584,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow|soundsplay)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow|soundsplay|soundsrefused)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
@@ -667,6 +667,9 @@ function chumbyScene(q, s) {
         if (a === 'play') {
           const id = qs.get('s') || '', st = (live.state.pandora || []).find(p => p.id === id);
           if (!st) return json({ ok: false, error: 'bad station' });
+          // soundsrefused (11-26): the Chumby's own no, as its hook gives it when an alarm is under 20 minutes away by its
+          // list (chalarm 468fcc73: "started": false, "why")
+          if (scene === 'soundsrefused') return json({ ok: true, pending: false, station: st.name, started: false, why: 'an alarm rings in 12 min' });
           clearTimeout(live.playing);
           live.playing = setTimeout(() => {
             live.state.music = { source: 'pandora', label: st.name, state: id, playing: true };

@@ -282,6 +282,33 @@ struct ChumbyCalendarIntent: AppIntent {
 }
 
 // Non-breaking spaces, so "2 h 40 min" never splits across lines.
+// How long before an event: a menu of the usual lengths, as iOS's own Calendar asks for an alert or travel time (Richard,
+// 11-24: "changing calendar time doesn't feel stock"; a 5-minute Stepper took dozens of taps to go from 30 min to 2 h).
+// A length saved before that isn't one of them stays on the menu, in its place.
+enum LeadChoices {
+    static let usual = [15, 20, 30, 45, 60, 75, 90, 105, 120, 150, 180, 240, 300, 360]
+    static func with(_ v: Int) -> [Int] { usual.contains(v) ? usual : (usual + [v]).sorted() }
+}
+struct LeadPicker: View {
+    let title: String
+    var note: String? = nil
+    var suffix = ""
+    @Binding var value: Int
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 12) {
+                Text(title).lineLimit(1).fixedSize().layoutPriority(2)
+                Spacer(minLength: 8)
+                Picker(title, selection: $value.ticking()) {
+                    ForEach(LeadChoices.with(value), id: \.self) { Text(leadText($0) + suffix).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).monospacedDigit().layoutPriority(1)
+            }
+            if let note { Text(note).font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
+        }
+        .padding(.vertical, 2)
+    }
+}
 func leadText(_ m: Int) -> String { m % 60 == 0 ? "\(m / 60)\u{00A0}h" : m < 60 ? "\(m)\u{00A0}min" : "\(m / 60)\u{00A0}h\u{00A0}\(m % 60)\u{00A0}min" }
 
 // For Calendars access turned off in Settings: the one place it can be turned back on.
@@ -302,15 +329,7 @@ struct CalendarSettingsSections: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
     @State private var showCalendars = false
-    // The value on the left under its name, well clear of the − and +.
-    func leadRow(_ label: String, _ value: Binding<Int>) -> some View {
-        Stepper(value: value, in: 15...360, step: 5) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                Text(leadText(value.wrappedValue)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
-            }
-        }
-    }
+    func leadRow(_ label: String, _ value: Binding<Int>) -> some View { LeadPicker(title: label, value: value) }
     var included: Int { wake.calendars.filter { !wake.rules.excludedCalendars.contains($0.title) }.count }
     var body: some View {
         Group {
@@ -557,12 +576,8 @@ struct CalendarDaySheet: View {
                         }
                     }
                 } else {
-                    Stepper(value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = $0 }), in: 15...360, step: 5) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Wake \(leadText(item.lead)) before")
-                            Text("Rings at \(item.wake.formatted(date: .omitted, time: .shortened))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
-                        }
-                    }
+                    LeadPicker(title: "Wake", note: "Rings at \(item.wake.formatted(date: .omitted, time: .shortened))", suffix: " before",
+                               value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = $0 }))
                 }
                 if let problem { FailNote(text: problem) }
                 HStack {

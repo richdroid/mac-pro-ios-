@@ -166,11 +166,20 @@ extension ChumbyModel {
         Task {
             // Only the newest pick counts: a station chosen while another was starting must not be called failed, or
             // playing, by the first one's answer.
-            do { try await api.post("play", extra: "&s=" + ChumbyAPI.enc(st.id), timeout: 20) }
+            let answer: [String: Any]
+            do { answer = try await api.post("play", extra: "&s=" + ChumbyAPI.enc(st.id), timeout: 20) }
             catch {
                 guard pandoraAsk == ask, pandoraStarting == st else { return }
                 withAnimation(.snappy) { pandoraStarting = nil }
                 fail("pplay", "“\(st.name)” didn’t start. \(AlarmWriter.explain(error))")
+                return
+            }
+            // 11-26: the Chumby's own word when it won't (it keeps clear of his alarms by its own list, which can know
+            // more than this phone's), said at once rather than after a minute of "starting"
+            if let why = Self.playRefusal(answer) {
+                guard pandoraAsk == ask, pandoraStarting == st else { return }
+                withAnimation(.snappy) { pandoraStarting = nil }
+                fail("pplay", why)
                 return
             }
             let asked = Date()
@@ -188,6 +197,14 @@ extension ChumbyModel {
             withAnimation(.snappy) { pandoraStarting = nil }
             fail("pplay", "“\(st.name)” didn’t start on the Chumby. Try again in a minute.")
         }
+    }
+    // The Chumby's a=play answer when it refused (chalarm 468fcc73: "started": false, "why"), as a sentence; nil otherwise.
+    nonisolated static func playRefusal(_ answer: [String: Any]) -> String? {
+        guard (answer["started"] as? Bool) == false || (answer["started"] as? NSNumber)?.boolValue == false else { return nil }
+        let why = (answer["why"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        if why.hasPrefix("an alarm rings in ") { return "Not now: the Chumby has an alarm in \(why.dropFirst("an alarm rings in ".count)). Stations can play again once it has rung." }
+        if why == "an alarm rings or snoozes" || why == "an alarm is being watched" { return "Not while an alarm is ringing or snoozing." }
+        return why.isEmpty ? "The Chumby didn’t start it." : "The Chumby didn’t start it: \(why)."
     }
     // The Chumby's own music stopped, a station still starting included (the Chumby ends that too).
     func stopChumbyMusic(id: String) {

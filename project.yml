@@ -90,6 +90,7 @@ targets:
     sources: [ChumbyApp/Sources, Shared, ChumbyApp/Assets.xcassets]
     dependencies:
       - target: ChumbyWidget
+      - target: ChumbyNotify
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.Chumby
@@ -137,6 +138,30 @@ targets:
           NSAllowsArbitraryLoads: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  # 11-26: cancels the backup alarm for a ring stopped on the Chumby itself, even with the app force-quit
+  # (ChumbyNotify/NotificationService.swift). TestFlight needs an App Store profile for local.macpro.Chumby.<team>.Notify.
+  ChumbyNotify:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ChumbyNotify
+      - path: ChumbyApp/Sources/ChumbyAPI.swift
+      - path: ChumbyApp/Sources/ChumbyBackupPlan.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.Chumby.Notify
+    info:
+      path: ChumbyNotify/Info.plist
+      properties:
+        CFBundleDisplayName: Chumby Notifications
+        NSAlarmKitUsageDescription: So your iPhone can wake you if the Chumby alarm doesn't.
+        # baked in at signing, like the app's
+        MacAddress: ""
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
   TV:
     type: application
     platform: iOS

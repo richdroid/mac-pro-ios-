@@ -67,6 +67,51 @@ enum BackupPlan {
 
     struct Result: Equatable { var entries: [Entry]; var cancel: [Entry]; var add: [Entry] }
 
+    // 11-26, gap: with the app force-quit, iOS hands the app neither the Mac's quiet push nor its shown notice, so a Stop on
+    // the Chumby never reached the backup and it rang anyway. The notification extension does run then (the Stop notice
+    // carries mutable-content), but it can't read this app's list. So each backup's AlarmKit id is made from its ring's
+    // minute and a small number (a new one each time that ring's backup moves): from the notice's `at` alone the extension
+    // knows every id that ring's backup can have, and cancels those.
+    static let idGens = 16
+    private static let idMagic: [UInt8] = [0x43, 0x48, 0x42, 0x4B]           // "CHBK"
+    static func stableID(ringAt: Date, gen: Int) -> UUID {
+        let m = UInt32(clamping: Int((ringAt.timeIntervalSince1970 / 60).rounded(.down)))
+        var b = idMagic + [0, 0, 0x80, 0, 0x80, 0, 0, 0, 0, 0, 0, 0]          // version 8 (custom), RFC variant
+        b[9] = UInt8(m >> 24); b[10] = UInt8((m >> 16) & 0xFF); b[11] = UInt8((m >> 8) & 0xFF); b[12] = UInt8(m & 0xFF)
+        b[13] = UInt8(gen & 0xFF)
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
+    // The ring minute (minutes since 1970) and number a stable id was made from; nil for any other id.
+    static func decode(_ id: UUID) -> (minute: Int, gen: Int)? {
+        let u = id.uuid
+        let b = [u.0, u.1, u.2, u.3, u.4, u.5, u.6, u.7, u.8, u.9, u.10, u.11, u.12, u.13, u.14, u.15]
+        guard Array(b[0..<4]) == idMagic, b[6] == 0x80, b[8] == 0x80 else { return nil }
+        return (Int(b[9]) << 24 | Int(b[10]) << 16 | Int(b[11]) << 8 | Int(b[12]), Int(b[13]))
+    }
+    // New backups take the first stable id of their ring not in use (an old one being replaced stays scheduled until its
+    // replacement is), else a random one.
+    static func rekeyed(_ r: Result, inUse: Set<UUID>) -> Result {
+        var used = inUse.union(r.entries.filter { e in !r.add.contains { $0.id == e.id } }.map(\.id)).union(r.cancel.map(\.id))
+        var map: [UUID: UUID] = [:]
+        for e in r.add {
+            guard let g = (0..<idGens).first(where: { !used.contains(stableID(ringAt: e.ringAt, gen: $0)) }) else { continue }
+            let n = stableID(ringAt: e.ringAt, gen: g)
+            used.insert(n); map[e.id] = n
+        }
+        func re(_ e: Entry) -> Entry { var x = e; if let n = map[e.id] { x.id = n }; return x }
+        return Result(entries: r.entries.map(re), cancel: r.cancel, add: r.add.map(re))
+    }
+    // Every id the backup of a ring that began at `at` (as the Mac saw it: its minute, or up to 2 minutes into it) can have.
+    static func stopCandidates(at: Date) -> [UUID] {
+        let m = Int((at.timeIntervalSince1970 / 60).rounded(.down))
+        return (m - 2...m + 1).flatMap { mm in (0..<idGens).map { stableID(ringAt: Date(timeIntervalSince1970: Double(mm) * 60), gen: $0) } }
+    }
+    // Of the ids scheduled now, those of the ring that began at `at`.
+    static func stopMatches(_ ids: [UUID], at: Date) -> [UUID] {
+        let m = Int((at.timeIntervalSince1970 / 60).rounded(.down))
+        return ids.filter { id in decode(id).map { (m - 2...m + 1).contains($0.minute) } ?? false }
+    }
+
     // Keeps exactly one backup per wanted ring. A ring that has begun and isn't wanted any more (it is past) keeps its backup
     // only while that is still ahead (a snooze moved it); anything else unwanted or already past is cancelled.
     static func reconcile(kept: [Entry], wanted: [Ring], delay: Int, now: Date, makeID: () -> UUID = UUID.init) -> Result {

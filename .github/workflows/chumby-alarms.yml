@@ -1,0 +1,109 @@
+name: Chumby alarms checks
+# For the chumby-alarms-1126 branch only, never main, in its own group so it never waits behind or cancels the main build.
+# 1. The iPhone Release build with the new notification extension (ChumbyNotify): it must compile for iphoneos (AlarmKit in
+#    an extension) and land in Chumby.app/PlugIns.
+# 2. Shots of the calendar's "Awake before it starts" menus (settings and one day), and a film of a Pandora play the
+#    Chumby refuses near an alarm. Published to the chumby-alarms release.
+on:
+  push:
+    branches: [chumby-alarms-1126]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chumby-alarms-1126
+  cancel-in-progress: true
+jobs:
+  checks:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Alarm rules
+        run: bash ci/chumby-tests.sh
+      - name: iPhone Release build with the notification extension
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Release -sdk iphoneos -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee dist/build.log | tail -3
+          ls build/Build/Products/Release-iphoneos/Chumby.app/PlugIns | tee dist/plugins.txt
+          test -d build/Build/Products/Release-iphoneos/Chumby.app/PlugIns/ChumbyNotify.appex
+          plutil -p build/Build/Products/Release-iphoneos/Chumby.app/PlugIns/ChumbyNotify.appex/Info.plist | tee dist/notify-info.txt
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          node ci/mock-chumby.js & MOCK=$!
+          sleep 2
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          ensure() {
+            xcrun simctl list devices | grep "$DEVICE" | grep -q Booted && return 0
+            echo "simulator was down, booting again"; xcrun simctl boot "$DEVICE"; xcrun simctl bootstatus "$DEVICE" -b; sleep 5
+          }
+          restart_mock() {
+            kill $MOCK 2>/dev/null; sleep 1; node ci/mock-chumby.js & MOCK=$!; sleep 2; ensure
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && rm -f "$C"/Library/Caches/chumby-*
+          }
+          stills() { # display, suffix
+            for V in "calsettings 2 - -pose calsettings" "calday 2 - -pose calday" "caldayown 2 - -pose caldayown" "calonce 2 - -pose calonce"; do
+              set -- "$1" "$2" $V
+              ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
+              restart_mock
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
+              sleep 9
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$3$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              set -- "$1" "$2"
+            done
+            # a Pandora station tapped 3 s in, the Chumby saying no (an alarm in 12 min): the note at once
+            restart_mock
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-refused$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/soundsrefused -tab 3 -pose pandoraplay
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-refused$2.png
+            sleep 6
+            kill -INT $REC; wait $REC; echo "film refused$2 exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          ensure
+          stills 1 ""
+          ensure; $D "$DEVICE" pose open; sleep 6; ensure
+          stills 3 "-open"
+          $D "$DEVICE" rotate 1; sleep 6; ensure
+          stills 3 "-portrait"
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../alarms.zip . -i '*.png' '*.log' '*.mp4' '*.txt' || zip -q ../alarms.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-alarms >/dev/null 2>&1 || gh release create chumby-alarms --prerelease --title "Chumby alarms checks" --notes "Chumby alarms (11-26): shots, films and the Release build with the notification extension, from the chumby-alarms-1126 branch (mock data)."
+          for f in alarms.zip status.txt; do
+            for i in 1 2 3; do gh release upload chumby-alarms "$f" --clobber && break; sleep 15; done
+          done

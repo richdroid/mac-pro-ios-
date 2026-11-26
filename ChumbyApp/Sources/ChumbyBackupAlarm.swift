@@ -141,7 +141,7 @@ final class ChumbyBackupAlarm: ObservableObject {
         queue { [self] in
             let r = BackupPlan.snoozed(entries, now: Date(), name: name, until: until, delay: delay)
             await commit(r, keepOldOnFail: true)
-            if let n = r.add.first { said = entries.contains(n) ? "backup moved to " + Self.clock(n.fireAt) : "backup move refused, kept" }
+            if let n = r.add.first { said = entries.contains(where: { $0.ringAt == n.ringAt && $0.fireAt == n.fireAt }) ? "backup moved to " + Self.clock(n.fireAt) : "backup move refused, kept" }
             else { said = BackupPlan.current(entries, now: Date(), name: name).map { "backup at " + Self.clock($0.fireAt) } ?? "no backup live" }
         }
         await settle()
@@ -207,7 +207,9 @@ final class ChumbyBackupAlarm: ObservableObject {
 
     // New alarms first; an old one is cancelled only once whatever replaces it (same ring) is set, so a refusal from iOS
     // leaves the old one standing rather than no backup at all.
-    private func commit(_ r: BackupPlan.Result, keepOldOnFail: Bool = false) async {
+    private func commit(_ r0: BackupPlan.Result, keepOldOnFail: Bool = false) async {
+        // stable ids (the ring's minute and a number), so the notification extension can cancel one with the app closed
+        let r = BackupPlan.rekeyed(r0, inUse: Set(entries.map(\.id)).union(Kit.ids))
         var kept = r.entries
         var failed: [BackupPlan.Entry] = []
         for e in r.add {
