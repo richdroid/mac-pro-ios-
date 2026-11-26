@@ -2714,7 +2714,17 @@ struct SoundsTab: View {
         }
     }
 
+    // A play's note (refused, didn't start) comes under the station he tapped; one near the screen's foot is brought into
+    // view, by the least scroll (no anchor), so it is never below the fold (gate 11-26).
     var body: some View {
+        ScrollViewReader { scroll in
+            content.onChange(of: model.failed("pplay")) { _, f in
+                guard f != nil else { return }
+                Task { try? await Task.sleep(nanoseconds: 350_000_000); withAnimation(.snappy) { scroll.scrollTo("pplaynote") } }
+            }
+        }
+    }
+    var content: some View {
         // Open flat, the song picker takes the right pane (its own title row and list), with the Now card live beside it.
         TwoPane {
             PageTitle("Sounds")
@@ -2763,10 +2773,10 @@ struct SoundsTab: View {
                 Section {
                     ForEach(model.state.pandora) { st in
                         PandoraRow(station: st)
-                        if st.id == model.pplayStation, let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")) }
+                        if st.id == model.pplayStation, let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).id("pplaynote") }
                     }
                     // a station no longer on the list: the note under the list, as before
-                    if !model.state.pandora.contains(where: { $0.id == model.pplayStation }), let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")) }
+                    if !model.state.pandora.contains(where: { $0.id == model.pplayStation }), let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).id("pplaynote") }
                 } header: { SectionHead(icon: "radio", text: "Pandora") }
                     .task { await PandoraPose.run(model) }
             }
