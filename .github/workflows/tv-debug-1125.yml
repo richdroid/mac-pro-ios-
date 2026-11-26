@@ -127,12 +127,19 @@ jobs:
             curl -s $M/fnormal/reset > /dev/null; ACT=throwIt; film flick-shelf$x $d 12 $M/fnormal -tab 3 -pose shelf
             curl -s $M/fnormal/reset > /dev/null; ACT=backIt; film putback-shelf$x $d 8 $M/fnormal -tab 3 -pose shelf
           }
-          # Final check of the wake key's words after a finger's press, folded then open upright (the speaker sheet was
-          # checked in a05ac5c, every posture's flick in 91909a6 and 8260e0f).
-          WD=1; WX=; ACT=wakeIt; film wake 1 4 $M/rasleep -tab 0
+          # The wake key's words, timed from when its key reaches the stand-in Mac (an injected touch or tap lands seconds
+          # after it's asked for): 1 s after ("Waking the TV…" and the light) and 12 s after ("Still asleep. Try again").
+          afterWake() {
+            for i in $(seq 1 120); do grep -q '"key":"wake"' /tmp/tv-keys.log 2>/dev/null && break; sleep 0.25; done
+            echo "wake reached the Mac after $i polls"
+            sleep 1; xcrun simctl io "$DEVICE" screenshot --display=$WD dist/tv-wake-1s$WX.png
+            sleep 11; xcrun simctl io "$DEVICE" screenshot --display=$WD dist/tv-wake-12s$WX.png
+          }
+          wakeTouch() { sleep 9; ( $D "$DEVICE" touch 0.626 0.30 0.08 || echo "wake touch failed" ) & local t=$!; afterWake; wait $t; }
+          wakeTap() { sleep 9; ( $D "$DEVICE" tap "Wake the TV" || echo "Wake not found" ) & local t=$!; afterWake; wait $t; }
+          WD=1; WX=; ACT=wakeTouch; film wake 1 3 $M/rasleep -tab 0
           $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 1 || true; sleep 5
-          wakeUp() { sleep 9; snap 2 wake-2s; local a=$!; snap 7 wake-7s; local b=$!; snap 14 wake-14s; local c=$!; $D "$DEVICE" tap "Wake the TV" || echo "Wake not found"; wait $a $b $c; }
-          WD=3; WX=-portrait; ACT=wakeUp; film wake-portrait 3 4 $M/rasleep -tab 0
+          WD=3; WX=-portrait; ACT=wakeTap; film wake-portrait 3 3 $M/rasleep -tab 0
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist
       - name: Publish
