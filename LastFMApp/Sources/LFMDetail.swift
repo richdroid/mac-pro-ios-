@@ -16,6 +16,7 @@ struct RoutePage: View {
             case .track(let s): TrackPage(s: s)
             }
         }
+        .holdsWhileMoving("page")
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .modifier(ZoomIf(id: go.zoom, space: space))

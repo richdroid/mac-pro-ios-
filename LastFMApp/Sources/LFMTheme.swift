@@ -214,8 +214,11 @@ struct Backdrop: View {
                         .clipped()
                         .offset(x: g.width - side * 0.82, y: -side * 0.06)
                     // Darkest across the top, where the small capitals and names sit over the cover's own lettering.
-                    LinearGradient(stops: [.init(color: .black.opacity(0.78 + dim), location: 0),
-                                           .init(color: .black.opacity(0.55 + dim), location: 0.18),
+                    // The top tenth nearly black: a cover's own title, cropped by the screen's top edge, read as stray
+                    // letters over the capitals ("…rizons", run 63 gate).
+                    LinearGradient(stops: [.init(color: .black.opacity(0.92 + dim), location: 0),
+                                           .init(color: .black.opacity(0.8 + dim), location: 0.09),
+                                           .init(color: .black.opacity(0.55 + dim), location: 0.2),
                                            .init(color: .black.opacity(0.62 + dim), location: 0.45),
                                            .init(color: .black.opacity(0.86), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
@@ -252,11 +255,16 @@ struct NowBackdrop: View {
                         if !s.album.isEmpty { Text(s.album).font(.zuneCaps(size: 96, .bold)) }
                     }
                     .textCase(.uppercase).lineLimit(1).fixedSize()
-                    .foregroundStyle(vivid.mix(with: .white, by: 0.55).opacity(0.42))
+                    // Quieter than the type over it: open upright the page's "about" lay over them and was hard to read (run 63 gate).
+                    .foregroundStyle(vivid.mix(with: .white, by: 0.5).opacity(0.3))
                     .padding(.leading, S.margin - 4)
                     .offset(y: g.height - (s.album.isEmpty ? 1 : 2) * 92 - 60)
                 }
             }
+            // Pinned to the top left: the picture is larger than the screen, so the stack grew to it and was centred,
+            // which pulled everything up and left (a black column under the side strip folded, a black band at the foot,
+            // the artist's name starting off screen: "DIA SOREL").
+            .frame(width: g.width, height: g.height, alignment: .topLeading)
         }
         .accessibilityHidden(true)
         .allowsHitTesting(false)

@@ -1,14 +1,20 @@
 import SwiftUI
+import Metal
 
 @main
 struct LastFMApp: App {
     @Environment(\.scenePhase) private var phase
     init() {
         LaunchLog.mark("app init")
+        _ = FirstFrames.launching
         // The build's mock lives in an evening, so its day is full whatever hour the build runs.
         if LastFM.mockMode { Clock.pinEvening() }
         // The scrobbler's catch-up on background refresh: registered before launch ends, as BGTaskScheduler asks.
         Scrobbler.registerBackground()
+        // The first page with a chart (a Canvas) made SwiftUI load Metal and open the GPU on the main thread, inside that
+        // page's push: 693 ms of the first hub's opening in the profile films (MTLCreateSystemDefaultDevice under dyld,
+        // RenderBox's shared device). Opened here, off the main thread, while home comes up; later it is only looked up.
+        DispatchQueue.global(qos: .utility).async { _ = MTLCreateSystemDefaultDevice() }
     }
     var body: some Scene {
         WindowGroup {
@@ -79,6 +85,7 @@ struct RootView: View {
         return PaneReader {
             NavigationStack(path: $path) {
                 HomeView()
+                    .holdsWhileMoving("home")
                     .navigationDestination(for: Nav.self) { n in
                         switch n {
                         case .hub(let h, let panel): HubView(hub: h, panel: panel)
@@ -157,6 +164,9 @@ struct HubView: View {
         }
         .environment(\.hubName, hub == .nowPlaying ? nil : hub.word)
         .background { if hub == .nowPlaying { NowBackdrop(song: Store.shared.shown) } else { Backdrop(ref: Store.shared.shown?.art) } }
+        // Under the edge swipe UIKit re-insets the page in every frame, and both pages were laid out again and their type
+        // redrawn each frame of the drag (profile films: 41-48 fps through the swipe). Held at rest size while it moves.
+        .holdsWhileMoving("hub")
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
     }

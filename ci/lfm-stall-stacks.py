@@ -13,7 +13,7 @@ for f in files:
     for line in open(f, errors='replace'):
         line = line.rstrip('\n')
         if line.startswith('stall '):
-            m = re.match(r'stall t ([\d.]+) ms (\d+)', line)
+            m = re.match(r'stall t (-?[\d.]+) ms (\d+)', line)
             cur = {'file': f, 't': float(m.group(1)), 'ms': int(m.group(2)), 'samples': []}
             stalls.append(cur)
         elif cur is not None and line.startswith('  '):

@@ -122,9 +122,51 @@ struct TurnstileIn: ViewModifier {
             .rotation3DEffect(.degrees(on ? 0 : -80), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: on ? 0 : 0.55)
             .onAppear {
                 guard !shown else { return }
-                withAnimation(Z.easeOut(0.35).delay(Double(index) * Z.feather)) { shown = true }
+                // Begun once the page's first frames are on screen: begun in the same update as a hub's first build, the
+                // swing was mostly over by the time that frame landed, and the turnstile read as a cut (run 63 gate).
+                // Not at launch: there the screen must be whole in its first frame (launch-warm), as it was.
+                let swing = { withAnimation(Z.easeOut(0.35).delay(Double(index) * Z.feather)) { shown = true } }
+                if FirstFrames.launching { swing() } else { FirstFrames.shared.after(swing) }
             }
     }
+}
+
+// Runs what's waiting once the screen is drawing on time again (two frames in a row on time), or after 0.3 s at most: a
+// page's first frames are its costliest, so an entrance begun after them is seen whole. One display link for every waiter,
+// only while someone waits.
+@MainActor final class FirstFrames: NSObject {
+    static let shared = FirstFrames()
+    // The app's first seconds (read first by home's own turnstile, as the app comes up).
+    private static let born = Date()
+    static var launching: Bool { Date().timeIntervalSince(born) < 3 }
+    private var waiting: [() -> Void] = []
+    #if canImport(UIKit)
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0, began: CFTimeInterval = 0, onTime = 0
+    #endif
+    func after(_ run: @escaping () -> Void) {
+        #if canImport(UIKit)
+        waiting.append(run)
+        guard link == nil else { return }
+        began = CACurrentMediaTime(); last = 0; onTime = 0
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+        #else
+        run()
+        #endif
+    }
+    #if canImport(UIKit)
+    @objc private func tick(_ l: CADisplayLink) {
+        let period = max(l.targetTimestamp - l.timestamp, 1.0 / 120)
+        if last > 0 { onTime = l.timestamp - last < period * 1.5 ? onTime + 1 : 0 }
+        last = l.timestamp
+        guard onTime >= 2 || CACurrentMediaTime() - began > 0.3 else { return }
+        l.invalidate(); link = nil
+        let ready = waiting; waiting = []
+        ready.forEach { $0() }
+    }
+    #endif
 }
 private struct TurnstileArrivedKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
