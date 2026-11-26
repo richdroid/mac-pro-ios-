@@ -13,7 +13,12 @@ struct MacAudio: Decodable, Equatable {
         var current: Bool?
         var symbol: String {
             switch kind {
-            case "bluetooth": return "headphones"
+            // A Bluetooth speaker is a speaker: only what's named as worn gets the headphones (his Harman Kardon showed
+            // as headphones).
+            case "bluetooth":
+                let n = name.lowercased()
+                if n.contains("airpods") { return "airpods" }
+                return ["headphone", "buds", "pods", "beats", "wh-", "wf-", "headset"].contains(where: n.contains) ? "headphones" : "hifispeaker"
             case "builtin": return "macpro.gen3"
             case "hdmi": return "tv"
             default: return "hifispeaker"
@@ -122,6 +127,8 @@ struct SpeakerSheet: View {
                                 }
                                 .contentShape(Rectangle())
                             }
+                            // Plain text, as the system's own output pickers: a tinted row read as a link.
+                            .tint(.primary)
                             .disabled(store.choosing != nil)
                             .accessibilityAddTraits(o.current == true ? .isSelected : [])
                         }

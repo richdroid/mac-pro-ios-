@@ -1356,7 +1356,9 @@ struct RemoteTab: View {
             } label: {
                 // The whole ring is the key: the glyph over the words, never cut. "Waking the TV…" with the light running round
                 // it after a press; still asleep 10 s on, it says so (tv-pass-1122).
-                TimelineView(.periodic(from: .now, by: 1)) { t in
+                // Ticking only after a press, for its 40 s of words: ticking every second while the TV slept redrew the key
+                // for nothing and kept the screen from ever being still.
+                TimelineView(.periodic(from: .now, by: wakeAskedAt.map { Date().timeIntervalSince($0) < 41 } == true ? 1 : 3600)) { t in
                     let since = wakeAskedAt.map { t.date.timeIntervalSince($0) }
                     let waking = since.map { $0 < 10 } ?? false
                     let stuck = since.map { $0 >= 10 && $0 < 40 } ?? false
