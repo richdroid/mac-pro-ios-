@@ -27,7 +27,8 @@ extension Z {
     static func easeIn(_ d: Double = 0.25) -> Animation { .timingCurve(0.7, 0, 0.84, 0, duration: d) }
     static let feather = 0.05
     // Leaving is quicker than arriving: 20 ms apart, so the whole menu is gone in 0.4 s before the hub is pushed.
-    static let featherOut = 0.02
+    // How long home's turnstile out spreads its parts' starts over, first to last (the tapped one).
+    static let leaveSpread = 0.15
 
     #if canImport(UIKit)
     static func uiFont(_ size: CGFloat, weight: CGFloat) -> UIFont {
@@ -194,7 +195,10 @@ struct TurnstileOut: ViewModifier {
         content
             .rotation3DEffect(.degrees(gone ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: gone ? 0.55 : 0)
             .opacity(gone ? 0 : 1)
-            .animation(gone ? Z.easeIn(0.25).delay(Double(order) * Z.featherOut) : nil, value: gone)
+            // The cascade fitted inside home's wait before the push (0.15 s of feather, the tapped one last, each swing
+            // 0.25 s): at 20 ms apart over home's 20 parts the tapped tile and the menu words were still on screen when
+            // the push came, and the screen held half of home through the hub's first frames (profile films, run 5).
+            .animation(gone ? Z.easeIn(0.25).delay(Double(order) / Double(max(count, 1)) * Z.leaveSpread) : nil, value: gone)
     }
 }
 

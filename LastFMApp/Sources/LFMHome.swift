@@ -59,7 +59,8 @@ struct HomeView: View {
         // Read by the turnstiles alone: the tiles and words under them aren't worked out again as they leave.
         HomeLeave.shared.chosen = Home.order(key)
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            // Every part gone (the last starts at 0.15 s and swings 0.25 s), then the hub.
+            try? await Task.sleep(nanoseconds: 420_000_000)
             open.hub(hub, panel)
         }
     }
