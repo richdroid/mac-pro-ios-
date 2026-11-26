@@ -510,33 +510,49 @@ struct RailItem: Identifiable {
     }
 }
 
-// Room a page keeps at its foot for the tab bar DuoTabs draws there open upright (0 where the tabs are down the side).
+// Room a page keeps at its foot for the tab bar DuoTabs draws there open upright (0 where the tabs are down the side,
+// where the system's strip already keeps every page clear of the capsule standing inside it).
 private struct TabBarRoomKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 extension EnvironmentValues { var tabBarRoom: CGFloat { get { self[TabBarRoomKey.self] } set { self[TabBarRoomKey.self] = newValue } } }
-// And the column the capsule down the side needs from the display's edge (0 open upright), and which edge: the trailing
-// one, or the leading one where iOS put its strip there (folded and turned on its side the other way, the strip stays with
-// the camera's edge; HIG, "controls on the vertical axis stay aligned with the hardware").
-private struct TabRailColumnKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
-extension EnvironmentValues { var tabRailColumn: CGFloat { get { self[TabRailColumnKey.self] } set { self[TabRailColumnKey.self] = newValue } } }
-private struct TabRailLeadingKey: EnvironmentKey { static let defaultValue = false }
-extension EnvironmentValues { var tabRailLeading: Bool { get { self[TabRailLeadingKey.self] } set { self[TabRailLeadingKey.self] = newValue } } }
 // Each page takes the bar's room itself, a tab's root and every page pushed on it: room given from outside a navigation
 // stack never reaches the pages UIKit hosts inside it (designer gate 1, 2026-11-20: a list's last row under the bar).
-// Down the side the system's strip is the room (the capsule stands inside it); only were the strip ever narrower than the
-// capsule's column would a page take the difference, never the strip twice.
+// Only at the foot: padding the side too (were the strip narrower than the capsule's column) laid every push out first
+// with the strip counted twice, 83 pt too narrow for a frame (gate on c20a17a).
 struct TabBarRoom: ViewModifier {
     @Environment(\.tabBarRoom) private var room
-    @Environment(\.tabRailColumn) private var column
-    @Environment(\.tabRailLeading) private var leading
-    @State private var has: CGFloat = 0
-    func body(content: Content) -> some View {
-        content
-            .safeAreaPadding(leading ? .leading : .trailing, column > has ? column - has : 0)
-            .safeAreaPadding(.bottom, room)
-            .onGeometryChange(for: CGFloat.self) { leading ? $0.safeAreaInsets.leading : $0.safeAreaInsets.trailing } action: { has = $0 }
-    }
+    func body(content: Content) -> some View { content.safeAreaPadding(.bottom, room) }
 }
 extension View { func tabBarRoom() -> some View { modifier(TabBarRoom()) } }
+
+// Whether the tab a view is on is the one in front. TabView took a tab's pages out of the window when another was chosen,
+// which stopped their work (a `.task` ends as its view goes); DuoTabs keeps every tab shown once in place, unseen, so its
+// pages say so here, and their polling runs only while their tab is in front (gate on c20a17a: after a visit to every tab
+// all six polled the Mac).
+private struct DuoTabFrontKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues { var duoTabFront: Bool { get { self[DuoTabFrontKey.self] } set { self[DuoTabFrontKey.self] = newValue } } }
+// A `.task` that runs while its tab is in front: started when the page appears in front, ended when another tab comes in
+// front, started afresh when its tab comes back, as a page in the system's TabView did.
+struct TaskInFront: ViewModifier {
+    @Environment(\.duoTabFront) private var front
+    let work: @Sendable () async -> Void
+    func body(content: Content) -> some View {
+        content.task(id: front) { if front { await work() } }
+    }
+}
+// The same, started afresh also whenever `id` changes, as `.task(id:)`.
+struct TaskInFrontID<ID: Equatable>: ViewModifier {
+    @Environment(\.duoTabFront) private var front
+    let id: ID
+    let work: @Sendable () async -> Void
+    struct Key: Equatable { let front: Bool; let id: ID }
+    func body(content: Content) -> some View {
+        content.task(id: Key(front: front, id: id)) { if front { await work() } }
+    }
+}
+extension View {
+    func taskInFront(_ work: @escaping @Sendable () async -> Void) -> some View { modifier(TaskInFront(work: work)) }
+    func taskInFront<ID: Equatable>(id: ID, _ work: @escaping @Sendable () async -> Void) -> some View { modifier(TaskInFrontID(id: id, work: work)) }
+}
 
 // Every tab one tap away in every posture, never "More" (Richard, 2026-11-19 and 2026-11-26: "i expressly told u to fix
 // these ... the side bar not encompassing everything"). The system's TabView can't promise that on his phone: its side
@@ -559,13 +575,14 @@ struct DuoTabs<Content: View>: View {
     // open flat, about as much folded), on the trailing edge, or the leading one folded and turned on its side with the
     // camera there; none open upright, where its bars run across.
     @State private var strip = Strip()
-    struct Strip: Equatable { var leading: CGFloat = 0; var trailing: CGFloat = 0; var height: CGFloat = 0 }
+    struct Strip: Equatable { var leading: CGFloat = 0; var trailing: CGFloat = 0; var bottom: CGFloat = 0; var height: CGFloat = 0 }
     @State private var keyboardUp = false
     @Environment(\.colorScheme) private var scheme
     private var onLeading: Bool { strip.leading > 30 && strip.leading > strip.trailing }
     private var side: Bool { strip.trailing > 30 || onLeading }
-    private var footRoom: CGFloat { side || keyboardUp ? 0 : Self.barHeight + Self.barInset * 2 + 6 }
-    private var railColumn: CGFloat { side ? Self.centre + Self.width / 2 + 10 : 0 }
+    // The bar's top above the display's foot, less the safe area a page keeps there already: the room the system's own
+    // bar gave a page (83 pt from the foot open upright, CI 6d22d62's logs: insets b83).
+    private var footRoom: CGFloat { side || keyboardUp ? 0 : max(0, Self.barFoot + Self.barTotal - strip.bottom) }
     // Folded and turned on its side the display is 466 pt tall, and the strip's top holds the camera and the gear or Back
     // above the capsule (about 150 pt on his phone; 49 pt cells met the gear, CI 5a48486). The cells give up height there,
     // never below the HIG's 44 pt; everywhere else they're the system's 49.
@@ -584,15 +601,20 @@ struct DuoTabs<Content: View>: View {
     static var centre: CGFloat { 48 }
     static var foot: CGFloat { 26 }
     static var width: CGFloat { cell + inset * 2 }
-    // Open upright: the system's floating bar, icons over their names.
+    // Open upright: the system's floating bar, icons over their names, measured on main's shot (CI 6d22d62,
+    // macpro-tab0-portrait): 21 pt clear of the display's foot, about 374 pt wide for six, hugging its cells.
     static var barHeight: CGFloat { 54 }
     static var barInset: CGFloat { 4 }
+    static var barFoot: CGFloat { 21 }
+    static var barCell: CGFloat { 61 }
+    static var barTotal: CGFloat { barHeight + barInset * 2 }
     var body: some View {
         ZStack {
             ForEach(items) { it in
                 let front = it.value == selection
                 if front || shown.contains(it.value) {
                     content(it.value)
+                        .environment(\.duoTabFront, front)
                         .opacity(front ? 1 : 0)
                         .allowsHitTesting(front)
                         .accessibilityHidden(!front)
@@ -603,9 +625,9 @@ struct DuoTabs<Content: View>: View {
         // Down the side the strip already keeps every page clear of the capsule (it stands inside the strip's 84 pt);
         // along the foot each page keeps the bar's room, none with the keyboard up (the bar is behind it then).
         .environment(\.tabBarRoom, footRoom)
-        .environment(\.tabRailColumn, railColumn)
-        .environment(\.tabRailLeading, onLeading)
-        .onGeometryChange(for: Strip.self) { Strip(leading: $0.safeAreaInsets.leading, trailing: $0.safeAreaInsets.trailing, height: $0.size.height + $0.safeAreaInsets.top + $0.safeAreaInsets.bottom) } action: { strip = $0 }
+        .onGeometryChange(for: Strip.self) { g in
+            Strip(leading: g.safeAreaInsets.leading, trailing: g.safeAreaInsets.trailing, bottom: g.safeAreaInsets.bottom, height: g.size.height + g.safeAreaInsets.top + g.safeAreaInsets.bottom)
+        } action: { strip = $0 }
         #if canImport(UIKit)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
             guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
@@ -619,21 +641,23 @@ struct DuoTabs<Content: View>: View {
         .overlay(alignment: .bottom) { if !side, !keyboardUp { footFade } }
         .overlay(alignment: .bottom) { if !side { footBar } }
     }
-    // Under the bar the page fades into the ground, the system's soft edge, so no card's words read through the glass
-    // (Richard, 2026-11-21).
+    // Under the bar the page fades into the ground, the system's soft edge, solid by the bar's top so no card's words
+    // read through the glass or at its shoulders (Richard, 2026-11-21; gate on c20a17a: Status's dials read at its edges).
     private var footFade: some View {
         let ground: Color = scheme == .dark ? .black : .white
-        let stops: [Gradient.Stop] = [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: 0.4), .init(color: ground, location: 1)]
+        let top = Self.barFoot + Self.barTotal, fade: CGFloat = 28
+        let stops: [Gradient.Stop] = [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: fade / (top + fade)), .init(color: ground, location: 1)]
         return LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
-            .frame(height: Self.barHeight + Self.barInset * 2 + 52)
+            .frame(height: top + fade)
             .frame(maxHeight: .infinity, alignment: .bottom)
-            .ignoresSafeArea(.container, edges: .bottom)
+            .ignoresSafeArea(.all, edges: .bottom)
             .allowsHitTesting(false)
     }
+    // From the display's foot, as the system's stands, and behind the keyboard when it's up.
     private var footBar: some View {
-        bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)
+        bar.padding(.bottom, Self.barFoot)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .ignoresSafeArea(.keyboard)
+            .ignoresSafeArea(.all, edges: .bottom)
     }
     // Behind the keyboard when it's up, as the system's stays at its foot: never riding up into the clock.
     private var sideRail: some View {
@@ -659,6 +683,7 @@ struct DuoTabs<Content: View>: View {
                     it.icon
                         .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                         .frame(width: Self.cell, height: cellHeight)
+                        .reportsTabFrame(it.title)
                         // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
                         .background { Capsule().fill(scheme == .dark ? Color.black.opacity(0.38) : Color.primary.opacity(0.08)).opacity(front ? 1 : 0) }
                         .overlay(alignment: .topTrailing) { badgeView(it.value).offset(x: 2, y: 1) }
@@ -684,9 +709,9 @@ struct DuoTabs<Content: View>: View {
                         Text(it.title).font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
                     }
                     .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                    // Each cell at least its name and 8 pt of air either side, the rest shared (designer gate, 2026-11-20).
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, minHeight: Self.barHeight)
+                    // One width for every cell, the longest name ("Dashboard") with air either side, as the system's.
+                    .frame(width: Self.barCell, height: Self.barHeight)
+                    .reportsTabFrame(it.title)
                     .background { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)).opacity(front ? 1 : 0) }
                     .overlay(alignment: .top) { badgeView(it.value).offset(x: 14, y: 3) }
                     .contentShape(Capsule())
@@ -778,6 +803,19 @@ enum ShotWindow {
     }
 }
 
+// Where DuoTabs drew each tab, in the window, for the build's films (-findBack YES only; never on the phone).
+enum DuoTabFrames {
+    static let on = UserDefaults.standard.bool(forKey: "findBack")
+    @MainActor static var frames: [String: CGRect] = [:]
+}
+extension View {
+    @ViewBuilder func reportsTabFrame(_ title: String) -> some View {
+        if DuoTabFrames.on {
+            onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { DuoTabFrames.frames[title] = $0 }
+        } else { self }
+    }
+}
+
 // For the build's films of Back (-findBack YES, never on the phone): where the system put the Back button, as fractions
 // of the window, to Caches/back-at.txt every half second, so a real tap or long press lands on it in every posture
 // (iOS places it: the top of the side strip folded and open in landscape, the top bar open upright). The lines after
@@ -797,24 +835,37 @@ enum BackFinder {
               let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first, w.bounds.width > 0 else { return }
         var back: CGRect?, close: CGRect?
         var seen: [String] = []
-        func look(_ v: UIView, _ depth: Int) {
+        // Every tab's button, the app's own (DuoTabs, "tab.<name>") or the system's, so the build's films tap each tab
+        // where it really is in every posture (the tab strip's touches, later list 11-24).
+        var tabs: [(String, CGRect)] = []
+        // The app's own tab bar reports where it drew each tab (DuoTabFrames); the system's is found in its views.
+        for (t, r) in DuoTabFrames.frames.sorted(by: { ($0.value.minY, $0.value.minX) < ($1.value.minY, $1.value.minX) }) where w.bounds.intersects(r) {
+            tabs.append((t.replacingOccurrences(of: " ", with: "_"), r))
+        }
+        func look(_ v: UIView, _ depth: Int, _ inTabBar: Bool = false) {
             guard depth < 60, !v.isHidden, v.alpha > 0.01 else { return }
             let name = NSStringFromClass(type(of: v))
+            let tabBar = inTabBar || name.contains("TabBar")
             let r = v.convert(v.bounds, to: w)
             let isBack = v.accessibilityIdentifier == "BackButton" || name.contains("BackButton")
             let onScreen = r.width > 4 && r.height > 4 && w.bounds.intersects(r)
             if isBack, onScreen { back = r }
             // A sheet's own way out, the system's toolbar item (Close, Cancel or Done).
             if !isBack, onScreen, close == nil, (v is UIControl || name.contains("Button")), ["Close", "Cancel", "Done"].contains(v.accessibilityLabel ?? "") { close = r }
+            let isTab = name.contains("TabButton") || name.contains("TabBarButton") || (tabBar && v is UIControl && (v.accessibilityLabel ?? "").count > 1)
+            if isTab, onScreen, !tabs.contains(where: { $0.1.contains(CGPoint(x: r.midX, y: r.midY)) }) {
+                tabs.append(((v.accessibilityLabel ?? v.accessibilityIdentifier ?? name).replacingOccurrences(of: " ", with: "_"), r))
+            }
             if (isBack || name.contains("BarButton")) && seen.count < 40 {
                 seen.append(String(format: "%@ id=%@ label=%@ %.0f,%.0f %.0fx%.0f", name, v.accessibilityIdentifier ?? "-", v.accessibilityLabel ?? "-", r.minX, r.minY, r.width, r.height))
             }
-            for s in v.subviews { look(s, depth + 1) }
+            for s in v.subviews { look(s, depth + 1, tabBar) }
         }
         look(w, 0)
         let first = back.map { String(format: "%.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "none"
         let shut = close.map { String(format: "close %.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "close none"
-        let text = ([first, shut, String(format: "window %.0fx%.0f", w.bounds.width, w.bounds.height)] + seen).joined(separator: "\n") + "\n"
+        let tabLines = tabs.map { String(format: "tab %@ %.4f %.4f", $0.0, $0.1.midX / w.bounds.width, $0.1.midY / w.bounds.height) }
+        let text = ([first, shut, String(format: "window %.0fx%.0f", w.bounds.width, w.bounds.height)] + tabLines + seen).joined(separator: "\n") + "\n"
         try? text.write(to: dir.appendingPathComponent("back-at.txt"), atomically: true, encoding: .utf8)
     }
     #endif

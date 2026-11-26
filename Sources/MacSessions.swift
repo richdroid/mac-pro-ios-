@@ -453,7 +453,7 @@ struct SessionTerminal: View {
         .pushedTitle(session.name)
         .preferredColorScheme(.dark)
         .haptic(.tap, trigger: sends)
-        .task {
+        .taskInFront {
             while !Task.isCancelled {
                 // Not under the Mac's screen, which has the link to itself while it's open.
                 if !model.screenOpen { await load() }

@@ -331,11 +331,16 @@ final class ConsoleSummary: ObservableObject {
             g.addTask { if let p = UpgradeFeed.posed(MacConsole.pose) { await self.upgrade.set(p.feed) } else { await self.upgrade.read(api) } }
         }
     }
+    // Only while the Dashboard is the tab in front (its pages stay in place unseen behind other tabs, DuoTabs), read at
+    // once as it comes back, as the system's TabView restarted it.
     func loop(_ model: AppModel) async {
         if MacConsole.pose == "oldbridge" { return }
+        var last = Date.distantPast, wasFront = false
         while !Task.isCancelled {
-            if !model.screenOpen { await readAll(model.api) }
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            let front = model.tab == 6
+            if front, !model.screenOpen, !wasFront || Date().timeIntervalSince(last) >= 30 { await readAll(model.api); last = Date() }
+            wasFront = front
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }
 }
@@ -607,7 +612,7 @@ struct LinksView: View {
             section(groups[2].0, links(groups[2].1))
             if !others.isEmpty { section("Other", others) }
         }
-        .task { await start() }
+        .taskInFront { await start() }
         // The film: the question his tap brought up stays long enough to read, then is answered as he would.
         .onChange(of: asking?.link.id) { _, id in
             guard film, id != nil else { return }
@@ -918,11 +923,11 @@ struct FansView: View {
         } right: {
             allSections
         }
-        .task {
+        .taskInFront {
             if MacConsole.pose == "fanready" { fans.set(Self.posedReady); return }
             await fans.loop(model, every: 3)
         }
-        .task { await temps.loop(model, every: 3) }
+        .taskInFront { await temps.loop(model, every: 3) }
         .task(id: fans.value?.fans.map(\.index) ?? []) {
             for f in fans.value?.fans ?? [] where history[f.index] == nil {
                 if let p = try? await model.api.trend("fan:\(f.index)") { history[f.index] = p }
@@ -1075,7 +1080,7 @@ struct UpdatesView: View {
             oclpSection
             brewSection
         }
-        .task {
+        .taskInFront {
             if MacConsole.pose == "updateswaiting" { feed.set(Self.posed); return }
             await feed.loop(model, every: 15)
         }
@@ -1121,7 +1126,7 @@ struct FolderRow: View {
                 Text(bytes.map { MacSendSize.bytes($0) } ?? "–").foregroundStyle(.secondary).monospacedDigit()
             }
         }
-        .task(id: open) {
+        .taskInFront(id: open) {
             guard open else { return }
             while !Task.isCancelled {
                 do {
@@ -1194,7 +1199,7 @@ struct StorageView: View {
     var body: some View {
         ConsolePage(title: "Storage", place: "macstorage", away: feed.away, lastRead: feed.lastRead) { volumes } right: { home }
             .onReceive(model.statusStore.$status) { take($0) }
-            .task {
+            .taskInFront {
                 await feed.loop(model, every: 20)
             }
     }
@@ -1352,7 +1357,7 @@ struct StartupView: View {
                 }
             }
         }
-        .task {
+        .taskInFront {
             if MacConsole.pose == "startupconfirm" {
                 feed.set(Self.posed)
                 if let i = Self.posed.items.first(where: { $0.label == "local.chumby-remote" }) { asking = (i, "restart") }

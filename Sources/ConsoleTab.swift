@@ -160,10 +160,15 @@ final class ConsoleRemote: ObservableObject {
         } catch is CancellationError {
         } catch { read = true }
     }
+    // Only while the Dashboard is the tab in front (its pages stay in place unseen behind other tabs, DuoTabs), read at
+    // once as it comes back, as the system's TabView restarted it.
     func loop(_ model: AppModel) async {
+        var last = Date.distantPast, wasFront = false
         while !Task.isCancelled {
-            if busy == nil { await refresh(model) }
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            let front = model.tab == 6
+            if front, busy == nil, !wasFront || Date().timeIntervalSince(last) >= 3 { await refresh(model); last = Date() }
+            wasFront = front
+            try? await Task.sleep(nanoseconds: 500_000_000)
         }
     }
     func send(_ model: AppModel, _ key: String, _ cmd: String, _ arg: String = "") {

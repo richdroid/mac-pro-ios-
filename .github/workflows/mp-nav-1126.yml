@@ -111,9 +111,8 @@ jobs:
           # Status's detail pages, each pushed over Status and taken back (display, suffix).
           statuspages() {
             local d=$1 x=$2
-            for h in cpu mem rx tx disk; do navfilm macpro-back-$h$x $d $MAC -tab 0 -openHistory $h; done
+            for h in cpu tx; do navfilm macpro-back-$h$x $d $MAC -tab 0 -openHistory $h; done
             navfilm macpro-back-processes$x $d $MAC -tab 0 -openProcesses cpu
-            navfilm macpro-back-fans$x $d $MAC -tab 0 -pose fans
             navfilm macpro-back-storage$x $d $MAC -tab 0 -pose storage
           }
           # A push and a pop as the app makes them (pushed at 12 s, closed at 18 s, pushed again at 19.5 s), animated.
@@ -144,6 +143,31 @@ jobs:
             sleep 11; shot $d macpro-island-upload$x
             xcrun simctl terminate "$DEVICE" $MAC || true
           }
+          # Every tab tapped where the app or the system drew it (the -findBack log's "tab" lines), a shot after each; then
+          # the first tab, a fling on its page and the next tab tapped 0.15 s after the finger lifts; then a drag that starts
+          # on the strip (it must not scroll the page under it). Later list 11-24: "swipes register on rest of screen".
+          # name, display, bundle, then the app's arguments.
+          taptest() {
+            local n=$1 d=$2 b=$3 i=0 label x y; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $b -address ${TAPADDR:-$(addr $b)} -findBack YES "$@" > /dev/null
+            sleep 10
+            backlog $b | grep '^tab ' > dist/$n-tabs.log
+            echo "$n: $(wc -l < dist/$n-tabs.log) tabs found"
+            while read -r _ label x y; do
+              i=$((i + 1)); $D "$DEVICE" touch $x $y 0.08 || echo "tap failed"; sleep 1.4; shot $d $n-$i-$label
+            done < dist/$n-tabs.log
+            local t1 t2; t1=$(sed -n 1p dist/$n-tabs.log | awk '{print $3" "$4}'); t2=$(sed -n 2p dist/$n-tabs.log | awk '{print $3" "$4}')
+            if [ -n "$t2" ]; then
+              $D "$DEVICE" touch $t1 0.08; sleep 1.5
+              $D "$DEVICE" drag 0.35 0.75 0.35 0.3 0.12; sleep 0.15; $D "$DEVICE" touch $t2 0.08; sleep 1.4; shot $d $n-afterfling
+              $D "$DEVICE" touch $t1 0.08; sleep 1.5; shot $d $n-stripdrag-before
+              set -- $t1; $D "$DEVICE" drag $1 $2 $1 $(echo "$2 - 0.25" | bc -l) 0.3; sleep 1.2; shot $d $n-stripdrag-after
+            fi
+            xcrun simctl terminate "$DEVICE" $b || true
+            kill -INT $REC; wait $REC
+          }
           posture() {
             local d=$1 x=$2
             tabshots $MAC $d $x "0 1 2 4 5 6"
@@ -154,6 +178,11 @@ jobs:
             islandshots $d $x
             tabshots $CH $d $x "0 1 2 3 4"
             tabshots $TV $d $x "3 0 6"
+            navfilm chumby-back$x $d $CH -tab 2 -pose calsettings
+            navfilm tv-back$x $d $TV -tab 9 -pose tvsettings
+            taptest macpro-taps$x $d $MAC -tab 0
+            taptest chumby-taps$x $d $CH -tab 0
+            taptest tv-taps$x $d $TV -tab 3
           }
           date
           # Folded and upright the swipe starts below the history chart: the drag tool rests the finger about a second
@@ -161,8 +190,10 @@ jobs:
           DRAGY=0.85; FALLBACK="0.895 0.292"; posture 1 -folded
           # Folded and turned on its side, each way (the strip stays with the camera's edge).
           $D "$DEVICE" rotate 3 || true; sleep 5
-          tabshots $MAC 1 -foldedside3 "0 6"
-          tabshots $CH 1 -foldedside3 "0"
+          tabshots $MAC 1 -foldedside3 "0 1 2 4 5 6"
+          tabshots $CH 1 -foldedside3 "0 1 2 3 4"
+          tabshots $TV 1 -foldedside3 "3 0 6"
+          taptest macpro-taps-foldedside3 1 $MAC -tab 0
           $D "$DEVICE" rotate 4 || true; sleep 5
           tabshots $MAC 1 -foldedside4 "0 6"
           $D "$DEVICE" rotate 1 || true; sleep 5
@@ -183,9 +214,20 @@ jobs:
           date
           $D "$DEVICE" rotate 3 || true; sleep 5
           DRAGY=0.5; FALLBACK="0.948 0.222"; posture 3 -flat
-          # Chumby and Mint Remote share the hold: a page swiped and tapped back open flat.
-          navfilm chumby-back-flat 3 $CH -tab 2 -pose calsettings
-          navfilm tv-back-flat 3 $TV -tab 9 -pose tvsettings
+          # Hidden tabs do no work: through a proxy that writes every request the app makes, every Mac Pro tab is visited
+          # (its loops start), then Status is tapped and the app left on it for 40 s. The requests of those 40 s go to a log.
+          node -e "const http=require('http'),fs=require('fs');http.createServer((q,s)=>{fs.appendFileSync('/tmp/req.log',(Date.now()/1000).toFixed(2)+' '+q.url+'\\n');const p=http.request({host:'127.0.0.1',port:9001,path:q.url,method:q.method,headers:q.headers},r=>{s.writeHead(r.statusCode,r.headers);r.pipe(s)});q.pipe(p);p.on('error',()=>{s.statusCode=502;s.end()})}).listen(9061)" &
+          sleep 1
+          # Launched on Dashboard (its loops start), then Control, macOS, Claude and Apps in turn (the tab lines run top to
+          # bottom, Status first), then Status.
+          xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:9061 -findBack YES -tab 6 > /dev/null; sleep 10
+          for L in 5 4 3 2; do at=$(backlog $MAC | grep '^tab ' | sed -n "${L}p" | awk '{print $3" "$4}'); [ -n "$at" ] && $D "$DEVICE" touch $at 0.08; sleep 4; done
+          at=$(backlog $MAC | grep '^tab ' | sed -n 1p | awk '{print $3" "$4}'); $D "$DEVICE" touch $at 0.08; sleep 3
+          shot 3 macpro-reqidle-flat
+          S=$(date +%s); sleep 40; E=$(date +%s)
+          awk -v s=$S -v e=$E '$1>=s && $1<=e {print}' /tmp/req.log > dist/macpro-reqidle-flat-requests.log
+          echo "requests in 40 s idle on Status: $(wc -l < dist/macpro-reqidle-flat-requests.log)"; awk '{sub(/\?.*/,"",$2); print $2}' dist/macpro-reqidle-flat-requests.log | sort | uniq -c | sort -rn
+          xcrun simctl terminate "$DEVICE" $MAC || true
           # A shorter window, as a taller island or status leaves: every tab still in the bar.
           tabshots $MAC 3 -flat-859x604 "0 6" -windowSize 859x604
           date
