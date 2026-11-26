@@ -282,9 +282,12 @@ struct TitlePage: View {
         else if st.ref != nil {
             if let s = st.stream { chipText(StreamWords.chip(s), icon: nil, lit: false) }
             else if st.noStreams { chipText("No streams", icon: nil, lit: false) }
-            else if st.isSeries && st.meta == nil { chipText(st.episodesFailed ? "No episodes" : "Finding episodes…", icon: nil, lit: false) }
+            // The same word as the row under it: none listed, or the Mac didn't answer (gate of 80d0ecb: "No episodes" over
+            // "Couldn't get the episodes").
+            else if st.isSeries && st.meta == nil { chipText(st.episodesFailed ? (st.episodesEmpty ? "No episodes" : "Couldn’t load") : "Finding episodes…", icon: nil, lit: false) }
             else { chipText("Finding streams…", icon: nil, lit: false) }
-            if let p = st.progress, p > 0.01, p < 0.97 {
+            // Nothing to resume on a card that can't be thrown: a show whose episodes haven't come.
+            if let p = st.progress, p > 0.01, p < 0.97, !(st.isSeries && st.meta == nil) {
                 chipText(st.startOver ? "Start over" : "Resume" + (resumeClock(p).map { " " + $0 } ?? ""), icon: st.startOver ? "backward.end.fill" : "play.fill", lit: false)
             }
         }
@@ -447,7 +450,7 @@ struct TitlePage: View {
                          : st.isSeries && st.meta == nil ? "Finding episodes…" : st.video == nil ? "Choose an episode" : "Finding streams…")
                         .font(.system(size: 17, weight: failed ? .semibold : .regular)).foregroundStyle(failed ? .primary : .secondary)
                     if failed {
-                        Text(noEpisodes ? (st.episodesEmpty ? "Stremio has no episodes listed for this show." : "The Mac didn’t answer.")
+                        Text(noEpisodes ? (st.episodesEmpty ? "No episodes are listed for this show." : "The Mac didn’t answer.")
                              : st.streamsUnreachable ? "The Mac didn’t answer." : "None of your add-ons has this one.").font(.system(size: 15)).foregroundStyle(.secondary)
                     }
                 }

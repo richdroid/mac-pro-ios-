@@ -74,10 +74,13 @@ final class SpeakerStore {
         r.httpBody = try? JSONSerialization.data(withJSONObject: ["id": o.id])
         let answer = (try? await URLSession.shared.data(for: r)).flatMap { try? JSONSerialization.jsonObject(with: $0.0) as? [String: Any] }
         let ok = answer?["ok"] as? Bool == true
-        note = (answer?["say"] as? String) ?? (ok ? nil : "Couldn’t switch to \(o.name).")
+        // The list read again first, so the spinner, the tick and any words change together (gate of 80d0ecb: "plays on
+        // the headphones now" under the tick still on the old speaker). Words only when it didn't work: the tick says the
+        // rest.
+        await load()
+        note = ok ? nil : (answer?["say"] as? String) ?? "Couldn’t switch to \(o.name)."
         choosing = nil
         Haptic.fire(ok ? .tick : .thunk)
-        await load()
     }
 }
 

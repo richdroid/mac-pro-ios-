@@ -1362,8 +1362,11 @@ struct RemoteTab: View {
                 #if os(iOS)
                 HitchLog.shared.note("wake pressed")
                 #endif
+                // The television itself coming on (the box up, HDMI-CEC) takes the Sony 12 to 20 s: given 25 s before it's
+                // called still off (gate of 80d0ecb).
+                let wait: UInt64 = asleep ? 10_000_000_000 : 25_000_000_000
                 wakeTimer = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    try? await Task.sleep(nanoseconds: wait)
                     guard !Task.isCancelled else { return }
                     withAnimation(.easeOut(duration: 0.2)) { wakeWords = .stuck }
                     try? await Task.sleep(nanoseconds: 30_000_000_000)
@@ -1463,6 +1466,9 @@ struct RemoteTab: View {
     var pad: some View {
         DPad(bare: asleep || away != nil).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
             .overlay { wake }
+            // Awake, the key's words go with it: put to sleep again within 40 s, it came back saying "Still asleep. Try
+            // again" (gate of 80d0ecb).
+            .onChange(of: wakeShown) { _, shown in if !shown { wakeTimer?.cancel(); wakeWords = nil } }
             .settledAnimation(.easeInOut(duration: 0.25), value: asleep || away != nil)
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.

@@ -118,7 +118,7 @@ jobs:
           speakerIt() {
             sleep 9; $D "$DEVICE" tap "Speaker" || echo "Speaker not found"
             sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker$WX.png
-            snap 4 speaker-connecting; local a=$!; snap 9 speaker-chosen; local b=$!
+            snap 3 speaker-connecting; local a=$!; snap 9 speaker-chosen; local b=$!
             $D "$DEVICE" tap "Sample Headphones, Not connected" || $D "$DEVICE" tap "Sample Headphones" || echo "headphones not found"; wait $a $b
           }
           flicks() {
@@ -137,17 +137,15 @@ jobs:
           }
           wakeTouch() { sleep 9; ( $D "$DEVICE" touch 0.626 0.30 0.08 || echo "wake touch failed" ) & local t=$!; afterWake; wait $t; }
           wakeTap() { sleep 9; ( $D "$DEVICE" tap "Wake the TV" || echo "Wake not found" ) & local t=$!; afterWake; wait $t; }
-          # Round 2 (721c32c had the rest: every posture's flicks, pages, tours and the folded wake). The CI names were
-          # swapped: rotate 3 is open upright (portrait, the bottom bar, his main posture), rotate 1 open on its side.
-          # Wake by a real touch on the key in both open postures (an accessibility tap open on its side sent the key but
-          # the key's words never changed in 721c32c), then the upright carry and the outage the time limit cut.
-          wakeAt() { sleep 9; ( $D "$DEVICE" touch $WXY 0.08 || echo "wake touch failed" ) & local t=$!; afterWake; wait $t; }
+          # Round 3, after the gate of 80d0ecb: the speaker sheet (spinner, tick and words together; no success note) and a
+          # show whose episodes didn't come (chip and row agree, no Resume), folded, open upright and on its side.
+          ACT=speakerIt; film speaker 1 3 $M/ridle -tab 0
+          curl -s $M/real/reset > /dev/null; shot title-nometa 1 16 $M/nometa -tab 3 -pose realseries
           $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 3 || true; sleep 5
-          WD=3; WX=-upright; WXY="0.79 0.35"; ACT=wakeAt; film wake-upright 3 3 $M/rasleep -tab 0
-          curl -s $M/fnormal/reset > /dev/null; ACT=carryIt; film carry-shelf-upright 3 12 $M/fnormal -tab 3 -pose shelf
-          curl -s $M/outage/reset > /dev/null; film outage-upright 3 66 $M/outage -tab 0
+          WD=3; WX=-upright; ACT=speakerIt; film speaker-upright 3 3 $M/ridle -tab 0
+          curl -s $M/real/reset > /dev/null; shot title-nometa-upright 3 16 $M/nometa -tab 3 -pose realseries
           $D "$DEVICE" rotate 1 || true; sleep 5
-          WD=3; WX=-side; WXY="0.718 0.50"; ACT=wakeAt; film wake-side 3 3 $M/rasleep -tab 0
+          curl -s $M/real/reset > /dev/null; shot title-nometa-side 3 16 $M/nometa -tab 3 -pose realseries
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist
       - name: Publish
