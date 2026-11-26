@@ -359,7 +359,10 @@ struct WPPaging: ScrollTargetBehavior {
         let from = (original / w).rounded()
         let x = motion.offset
         let at = x / w
-        let v = (target.rect.minX - x) / FastSettle.projection
+        // The scroll's velocity at the lift, or the finger's own over the drag's last 0.1 s when that is faster.
+        let lift = (target.rect.minX - x) / FastSettle.projection
+        let drag = motion.dragVelocity(at: x)
+        let v = abs(drag) > abs(lift) ? drag : lift
         var to: CGFloat
         if abs(v) > flick * w { to = v > 0 ? at.rounded(.down) + 1 : at.rounded(.up) - 1 } else { to = at.rounded() }
         to = max(from - 1, min(from + 1, to))

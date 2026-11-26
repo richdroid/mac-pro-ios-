@@ -58,10 +58,8 @@ struct HomeView: View {
             if let photo = ArtistPhotos.shared.plain(s.artist) { _ = await ArtStore.shared.treated(photo, .tinted(tint)) }
             else { _ = await ArtStore.shared.treated(s.art, .duotone) }
         }
-        // And each hub drawn once, small and unseen, while home rests: a hub's first push spent ~280 ms working out its
-        // view types for the first time (profile run 10, home-tap: swift_conformsToProtocol under ProfileHub and Pager),
-        // with home's turnstile out frozen half way. Drawn into a bitmap, no task or appearance of theirs runs.
-        .task { await HubWarm.run() }
+        // His figures worked out before the profile is first opened, so it opens on them (never 5,108 then 5,056).
+        .task { try? await Task.sleep(nanoseconds: 3_000_000_000); await Totals.warm() }
     }
 
     private func order(_ key: String) -> TurnstileOut { TurnstileOut(index: Home.order(key), count: Home.count) }
@@ -80,27 +78,6 @@ struct HomeView: View {
             // turnstile starts on its first frame: out and in chained, with no bare frames between (gate on build 71).
             try? await Task.sleep(nanoseconds: UInt64(Z.leaveWait * 1_000_000_000))
             open.hub(hub, panel)
-        }
-    }
-}
-
-@MainActor enum HubWarm {
-    private static var done: Set<Hub> = []
-    static func run() async {
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        await Totals.warm()
-        for h in [Hub.profile, .nowPlaying] + Hub.menu where !done.contains(h) {
-            // Only while home is at rest and on screen, one hub at a time.
-            for _ in 0..<40 {
-                if !Store.shared.scrolling, !HomeSwipe.moving, HomeLeave.shared.chosen == nil, !NavTransit.shared.inFlight { break }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            guard !Task.isCancelled else { return }
-            let r = ImageRenderer(content: HubView(hub: h, panel: nil).environment(\.turnstileArrived, true).frame(width: 390, height: 844))
-            r.scale = 0.05
-            _ = r.cgImage
-            done.insert(h)
-            try? await Task.sleep(nanoseconds: 700_000_000)
         }
     }
 }
@@ -183,7 +160,7 @@ private struct HomePanorama: View {
                     .scrollTargetBehavior(WPPaging(width: sec, count: count, motion: motion))
                     .scrollPosition($pos)
                     .scrollIndicators(.hidden)
-                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in motion.x = x }
+                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in motion.x = x; motion.sample(x) }
                     // Let go: the section chosen (WPPaging) is reached by the lander in 0.35 s, the tick as it starts.
                     .onScrollPhaseChange { old, p in
                         motion.phase = p

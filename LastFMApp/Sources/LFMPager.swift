@@ -45,7 +45,23 @@ struct Panel: Identifiable {
     @ObservationIgnored private var release: (drag: CGFloat, v: CGFloat, at: Double)?
     // This touch's release has chosen its page (reset as the next touch begins).
     @ObservationIgnored private(set) var decided = false
-    func began() { startX = offset; release = nil; decided = false }
+    func began() { startX = offset; release = nil; decided = false; samples.removeAll(keepingCapacity: true) }
+    // Where the finger had the page over the last moments of the drag, for its own velocity: UIKit's at the lift is 0 when
+    // the finger pauses before it lifts (profile runs 10 and 11: the folded flick read 0 page/s and sprang back, though
+    // it moved a seventh of a page in three frames). WP7 judged a flick by the drag's speed.
+    @ObservationIgnored private var samples: [(t: Double, x: CGFloat)] = []
+    func sample(_ x: CGFloat) {
+        guard phase == .interacting else { return }
+        let now = Date().timeIntervalSinceReferenceDate
+        samples.append((now, x))
+        if samples.count > 12 { samples.removeFirst(samples.count - 12) }
+    }
+    // Points a second over the drag's last 0.1 s (0 when not known).
+    func dragVelocity(at x: CGFloat) -> CGFloat {
+        let now = Date().timeIntervalSinceReferenceDate
+        guard let old = samples.first(where: { now - $0.t <= 0.1 }), now - old.t > 0.012 else { return 0 }
+        return (x - old.x) / CGFloat(now - old.t)
+    }
     func released(slot: Int, x: CGFloat, v: CGFloat, w: CGFloat) {
         decided = true
         target = slot
@@ -203,6 +219,7 @@ struct Pager: View {
                 .scrollDisabled(locked)
                 .onScrollGeometryChange(for: CGSize.self) { CGSize(width: $0.contentOffset.x, height: $0.containerSize.width) } action: { _, v in
                     motion.x = v.width
+                    motion.sample(v.width)
                     motion.f = CGFloat(motion.basePage) + v.width / max(v.height, 1) - CGFloat(motion.mid)
                     PagerMotion.moves += 1
                 }
