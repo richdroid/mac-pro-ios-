@@ -153,6 +153,9 @@ film() {
       side) $D "$DEVICE" drag 0.8 ${Y:-0.75} 0.2 ${Y:-0.75} 0.25 || echo "drag failed";;
       sideback) $D "$DEVICE" drag 0.2 ${Y:-0.75} 0.8 ${Y:-0.75} 0.25 || echo "drag failed";;
       sideslow) $D "$DEVICE" drag 0.75 ${Y:-0.75} 0.35 ${Y:-0.75} 1.2 || echo "drag failed";;
+      # A slow drag well under half a page anywhere (a panorama section and an open-flat pane are narrower than the
+      # screen, so sideslow's 0.4 passes half of them): must spring back.
+      sideshort) $D "$DEVICE" drag 0.7 ${Y:-0.75} 0.5 ${Y:-0.75} 1.2 || echo "drag failed";;
       # A short fast throw (a fifth of the width in 60 ms): turns one page by its speed alone, as WP7's flick does.
       flick) $D "$DEVICE" drag 0.7 ${Y:-0.75} 0.5 ${Y:-0.75} 0.06 || echo "drag failed";;
       # Pulled up past a list's foot and let go (after flings have reached it): WP7's compression at the end.
