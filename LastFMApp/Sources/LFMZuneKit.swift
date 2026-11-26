@@ -169,9 +169,10 @@ struct TurnstileIn: ViewModifier {
         let period = max(l.targetTimestamp - l.timestamp, 1.0 / 120)
         if last > 0 { onTime = l.timestamp - last < period * 1.5 ? onTime + 1 : 0 }
         last = l.timestamp
-        // Two frames on time in a row (the hub's first build over), or half a second at most: a turnstile begun inside a
-        // stall shows only its last few frames (gate on build 76: about 5 frames of a 0.35 s turn-in).
-        guard onTime >= 2 || CACurrentMediaTime() - began > 0.5 else { return }
+        // A turnstile begun inside a stall shows only its last few frames (gate on build 76: about 5 frames of 0.35 s).
+        // Four on time and a tenth of a second at least: the render server draws a hub's first frame after the main
+        // thread has moved on (run 77: the turn-in showed one frame).
+        guard (onTime >= 4 && CACurrentMediaTime() - began > 0.1) || CACurrentMediaTime() - began > 0.6 else { return }
         l.invalidate(); link = nil
         let ready = waiting; waiting = []
         ready.forEach { $0() }
@@ -195,14 +196,22 @@ extension View {
 // the tapped item last, as Windows Phone leaves a list.
 // What home's tap chose (its place in Home.keys), read only by the turnstiles: as a value handed down, a tap worked out
 // every tile and word on home again in the first frame of the turnstile.
-@MainActor @Observable final class HomeLeave { static let shared = HomeLeave(); var chosen: Int? }
+@MainActor @Observable final class HomeLeave {
+    static let shared = HomeLeave()
+    var chosen: Int?
+    // Everything gone, set without animation a frame before the push: a hub's first build stalls the main thread, and
+    // SwiftUI's fades froze half-way through it (run 77 films: two words held at 15 % for 0.6 s). Black instead, WP7's own
+    // dark moment between the leave and the turn-in (study §3).
+    var cleared = false
+}
 struct TurnstileOut: ViewModifier {
     let index: Int
     let count: Int
     @Environment(\.accessibilityReduceMotion) private var still
     func body(content: Content) -> some View {
         let chosen = HomeLeave.shared.chosen
-        let gone = chosen != nil && !still
+        // A negative index takes no part (a section whose parts leave on their own).
+        let gone = chosen != nil && !still && index >= 0
         let word = chosen.map(HomeLeave.isWord) ?? false
         let me = chosen == index
         // Tiles (WP7's start screen, guide p.65): the others turn away, the tapped one last. A menu word (WP7's music hub,

@@ -29,8 +29,9 @@ jobs:
           xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
           # The before build (63) only when its films are wanted: its films from run 8 are kept (BEFORE=1 films them again).
-          if [ "${BEFORE:-0}" = 1 ]; then
-            git worktree add /tmp/before c0ae38f39052de6393a4a79f5e78293237804b87
+          # Build 76 (on his phone) beside it on the same runner: the before numbers for the WP7 study pass.
+          if [ "${BEFORE:-1}" = 1 ]; then
+            git worktree add /tmp/before 9bd29ad63c4df6be459545f4637767030a4a546b
             (cd /tmp/before && xcodegen generate && xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphonesimulator \
               -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1)
           fi
@@ -70,6 +71,26 @@ jobs:
           films_scroll "-open" 3
           STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2" film home-tap-open 3 14 -hub home
           Y=0.6 X=0.72 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap-open 3 22 -hub profile
+          # The same motions on build 76, same runner, named -76: before and after compare.
+          B=/tmp/before/build-sim/Build/Products/Release-iphonesimulator/LastFM.app
+          if [ -d "$B" ]; then
+            xcrun simctl terminate "$DEVICE" $APP 2>/dev/null; xcrun simctl install "$DEVICE" "$B"
+            xcrun simctl launch "$DEVICE" $APP -hub home; sleep 30; xcrun simctl terminate "$DEVICE" $APP
+            folded
+            calibrate portrait 1
+            STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2 tap=${BACKAT:-0.895,0.29}:2 shot:1 shot:2" film home-tap-76 1 18 -hub home
+            Y=0.6 STEPS="side:6 shot:2 tap=0.3,0.5:2 shot:1 shot:2" film home-word-76 1 16 -hub home
+            Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film home-pan-76 1 26 -hub home
+            Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap-76 1 22 -hub profile
+            Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-now-76 1 26 -hub nowPlaying
+            STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=${BACKAT:-0.895,0.29}:1 shot:1 shot:2" film tap-artist-76 1 18 -tab 1 -kind 0
+            STEPS="pull:6 shot:1 slow:2 fling:1 fling:1 fling:1 fling:1 push:2 shot:1 flingback:2 flingback:1 shot:2" film scroll-long-76 1 26 -hub history
+            upright
+            calibrate portrait 3
+            STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2" film home-tap-portrait-76 3 14 -hub home
+            Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap-portrait-76 3 22 -hub profile
+            STEPS="pull:6 shot:1 slow:2 fling:1 fling:1 fling:1 fling:1 push:2 shot:1 flingback:2 flingback:1 shot:2" film scroll-long-portrait-76 3 26 -hub history
+          fi
           xcrun simctl shutdown "$DEVICE"
       - name: Publish
         if: always()

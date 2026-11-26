@@ -37,13 +37,14 @@ struct HomeView: View {
                 HomePanorama(go: go)
             }
         }
-        .background { if pane { Backdrop(ref: Ground.hubs.pick?.ref) } else { Color.black.ignoresSafeArea() } }
+        .opacity(HomeLeave.shared.cleared ? 0 : 1)
+        .background { if pane { Backdrop(ref: Ground.hubs.pick?.ref).opacity(HomeLeave.shared.cleared ? 0 : 1) } else { Color.black.ignoresSafeArea() } }
         .toolbarBackground(.hidden, for: .navigationBar)
         .onAppear { TileClock.shared.start(); HomeSwipe.moving = false; TouchTravel.swiped = false }
         // Back on home finds it as it was: everything flat again (reset once the hub has covered it).
         .onDisappear {
             TileClock.shared.stop()
-            var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { HomeLeave.shared.chosen = nil }
+            var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { HomeLeave.shared.chosen = nil; HomeLeave.shared.cleared = false }
         }
         .task(id: store.shown?.id) { if let s = store.shown { NowStats.shared.load(s, full: false) } }
         // What the rediscover tile shows, worked out off the main thread once the screen has settled.
@@ -80,6 +81,10 @@ struct HomeView: View {
             // The parts all but gone (the last starts at 0.06 s and swings 0.25 s, ease in), then the hub, whose own
             // turnstile starts on its first frame: out and in chained, with no bare frames between (gate on build 71).
             try? await Task.sleep(nanoseconds: UInt64(HomeLeave.wait(Home.order(key)) * 1_000_000_000))
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { HomeLeave.shared.cleared = true }
+            // Two frames for the black to be on screen before the push's stall.
+            try? await Task.sleep(nanoseconds: 34_000_000)
             open.hub(hub, panel)
         }
     }
@@ -255,6 +260,8 @@ private struct HomePanorama: View {
                 .modifier(TurnstileOut(index: Home.order(key), count: Home.count))
                 .accessibilityAddTraits(.isHeader)
             let body = content()
+                // The cover sections leave whole with their names (run 77: "just played" stayed through the leave).
+                .modifier(TurnstileOut(index: key == "h-played" || key == "h-repeat" ? Home.order(key) : -1, count: Home.count))
             WPScroll {
                 body
                     .padding(.leading, S.margin)
