@@ -638,8 +638,7 @@ struct SearchPage: View {
                     }
                     draft.wantsFocus = false
                 }
-            // (-noPaste YES: the build's measure of what the paste key costs Search's first visit; never on the phone.)
-            if draft.text.isEmpty { if !UserDefaults.standard.bool(forKey: "noPaste") {
+            if draft.text.isEmpty {
                 // The system's own paste key: no "Allow Paste" question each time. A link goes to the TV, words are searched.
                 PasteButton(payloadType: String.self) { got in
                     guard let s = got.first?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return }
@@ -648,7 +647,6 @@ struct SearchPage: View {
                     }
                 }
                 .labelStyle(.iconOnly).buttonBorderShape(.circle).tint(TVLook.accent.opacity(0.25)).padding(.trailing, 4)
-            }
             } else if link {
                 Button { store.touched = true; Keyboard.dismiss(); model.flick(SearchStore.linkTarget(draft.text)); draft.text = "" } label: { Image(systemName: "arrow.right.circle.fill").font(.title2).frame(width: 44, height: 44) }
                     .buttonStyle(.plain).foregroundStyle(.white).accessibilityLabel("Open the link as a card")

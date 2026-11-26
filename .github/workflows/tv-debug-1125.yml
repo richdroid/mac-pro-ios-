@@ -137,49 +137,17 @@ jobs:
           }
           wakeTouch() { sleep 9; ( $D "$DEVICE" touch 0.626 0.30 0.08 || echo "wake touch failed" ) & local t=$!; afterWake; wait $t; }
           wakeTap() { sleep 9; ( $D "$DEVICE" tap "Wake the TV" || echo "Wake not found" ) & local t=$!; afterWake; wait $t; }
-          # First visits, clean: the tour on a quiet Remote (no live picture), with the paste key and without it (-noPaste),
-          # each a fresh launch, so every tab's first build is timed ("open tab N", then "tab settled" in -swipe.log).
-          tours() {
-            local x=$1 d=$2
-            film tour-quiet$x $d 14 $M/ridle -tab 0 -pose tour
-            film tour-nopaste$x $d 14 $M/ridle -tab 0 -pose tour -noPaste YES
-          }
-          # Folded: wake, the speaker sheet, a show whose episodes never came, the tours, the flicks.
-          WD=1; WX=; ACT=wakeTouch; film wake 1 3 $M/rasleep -tab 0
-          ACT=speakerIt; film speaker 1 3 $M/ridle -tab 0
-          curl -s $M/real/reset > /dev/null; shot title-nometa 1 16 $M/nometa -tab 3 -pose realseries
-          for S in ridle repisode roffline; do shot remote-$S 1 9 $M/$S -tab 0; done
-          shot streams 1 14 $M -tab 3 -pose streams
-          shot search 1 12 $M -tab 6 -pose search
-          shot watch 1 12 $M -tab 3
-          tours "" 1
-          flicks "" 1
-          # Open flat.
+          # Round 2 (721c32c had the rest: every posture's flicks, pages, tours and the folded wake). The CI names were
+          # swapped: rotate 3 is open upright (portrait, the bottom bar, his main posture), rotate 1 open on its side.
+          # Wake by a real touch on the key in both open postures (an accessibility tap open on its side sent the key but
+          # the key's words never changed in 721c32c), then the upright carry and the outage the time limit cut.
+          wakeAt() { sleep 9; ( $D "$DEVICE" touch $WXY 0.08 || echo "wake touch failed" ) & local t=$!; afterWake; wait $t; }
           $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 3 || true; sleep 5
-          for S in ridle repisode rasleep roffline; do shot remote-$S-flat 3 9 $M/$S -tab 0; done
-          curl -s $M/real/reset > /dev/null; shot title-series-flat 3 14 $M/real -tab 3 -pose realseries
-          shot streams-flat 3 14 $M -tab 3 -pose streams
-          shot search-flat 3 12 $M -tab 6 -pose search
-          shot watch-flat 3 12 $M -tab 3
-          tours -flat 3
-          flicks -flat 3
-          curl -s $M/fnormal/reset > /dev/null; ACT=carryIt; film carry-shelf-flat 3 12 $M/fnormal -tab 3 -pose shelf
-          # Open upright, his main posture.
+          WD=3; WX=-upright; WXY="0.79 0.35"; ACT=wakeAt; film wake-upright 3 3 $M/rasleep -tab 0
+          curl -s $M/fnormal/reset > /dev/null; ACT=carryIt; film carry-shelf-upright 3 12 $M/fnormal -tab 3 -pose shelf
+          curl -s $M/outage/reset > /dev/null; film outage-upright 3 66 $M/outage -tab 0
           $D "$DEVICE" rotate 1 || true; sleep 5
-          WD=3; WX=-portrait; ACT=wakeTap; film wake-portrait 3 3 $M/rasleep -tab 0
-          for S in ridle repisode roffline; do shot remote-$S-portrait 3 9 $M/$S -tab 0; done
-          curl -s $M/real/reset > /dev/null; shot title-series-portrait 3 14 $M/real -tab 3 -pose realseries
-          curl -s $M/real/reset > /dev/null; shot title-nometa-portrait 3 16 $M/nometa -tab 3 -pose realseries
-          shot streams-portrait 3 14 $M -tab 3 -pose streams
-          shot search-portrait 3 12 $M -tab 6 -pose search
-          shot watch-portrait 3 12 $M -tab 3
-          tours -portrait 3
-          flicks -portrait 3
-          ACT=speakerIt; film speaker-portrait 3 3 $M/ridle -tab 0
-          curl -s $M/fnormal/reset > /dev/null; ACT=carryIt; film carry-shelf-portrait 3 12 $M/fnormal -tab 3 -pose shelf
-          # The Mac gone from 10 s to 50 s after the reset: nothing said for ~25 s, then the lip's Reconnecting… with the
-          # Remote's keys dimmed in place, all cleared on return.
-          curl -s $M/outage/reset > /dev/null; film outage-portrait 3 66 $M/outage -tab 0
+          WD=3; WX=-side; WXY="0.718 0.50"; ACT=wakeAt; film wake-side 3 3 $M/rasleep -tab 0
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist
       - name: Publish
