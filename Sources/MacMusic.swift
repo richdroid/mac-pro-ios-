@@ -22,22 +22,32 @@ final class MacMusicStore: ObservableObject {
     static let shared = MacMusicStore()
     @Published private(set) var now: MacMusicNow?
     @Published private(set) var speaker: MacAudioList.Output?
-    @Published private(set) var available = false
+    // Seeded from the last launch, so the section is there when the tab opens, not a moment later.
+    @Published private(set) var available = UserDefaults.standard.bool(forKey: "macMusic.available")
     @Published private(set) var busy: String?
     @Published private(set) var say: String?
     @Published private(set) var answered = 0
     @Published private(set) var refused = 0
     // A switch shows what was asked for until the Mac answers.
     @Published var asked: [String: Bool] = [:]
+    init() {
+        let d = UserDefaults.standard
+        if let id = d.string(forKey: "macMusic.speakerID"), let name = d.string(forKey: "macMusic.speakerName") { speaker = .init(id: id, name: name, connected: nil) }
+    }
 
     func read(_ model: AppModel) async {
-        guard let n: MacMusicNow = try? await model.api.macFeed("/api/mac/music/now", timeout: 15) else { return }
+        async let n: MacMusicNow? = try? model.api.macFeed("/api/mac/music/now", timeout: 15)
+        async let a: MacAudioList? = try? model.api.macFeed("/api/mac/audio", timeout: 25)
+        let (gotNow, gotAudio) = await (n, a)
+        guard busy == nil, let gotNow else { return }   // a press began meanwhile: its own read follows
         // A bridge without the music session answers without one: nothing to drive.
-        available = n.session != nil
-        if n != now { now = n }
-        if let a: MacAudioList = try? await model.api.macFeed("/api/mac/audio", timeout: 25) {
-            let s = a.outputs.first { $0.id == a.preferred }
+        available = gotNow.session != nil
+        UserDefaults.standard.set(available, forKey: "macMusic.available")
+        if gotNow != now { now = gotNow }
+        if let gotAudio {
+            let s = gotAudio.outputs.first { $0.id == gotAudio.preferred }
             if s != speaker { speaker = s }
+            UserDefaults.standard.set(s?.id, forKey: "macMusic.speakerID"); UserDefaults.standard.set(s?.name, forKey: "macMusic.speakerName")
         }
     }
     func loop(_ model: AppModel) async {
@@ -52,12 +62,18 @@ final class MacMusicStore: ObservableObject {
         let a = try? await model.api.macDo(path, body, timeout: 45)
         say = a?.say ?? a?.error ?? "Couldn’t reach the Mac."
         if a?.done == true { answered += 1 } else { refused += 1 }
+        busy = nil
         await read(model)
-        busy = nil; asked = [:]
+        asked = [:]
+        // The Mac's answer stays a few seconds, as the card's does, then goes.
+        let said = say
+        Task { try? await Task.sleep(for: .seconds(5)); if busy == nil, say == said { say = nil } }
     }
     func lyrics(_ model: AppModel, _ on: Bool) async { await act(model, "lyrics", on, "/api/mac/music/session", ["on": on]) }
     func speaker(_ model: AppModel, _ on: Bool) async {
         guard let s = speaker else { return }
+        // The speaker off while Lyrics is on ends the music (which lets the speaker go), not Music playing to nothing.
+        if !on, now?.session?.on == true { await act(model, "speaker", false, "/api/mac/music/session", ["on": false]); return }
         await act(model, "speaker", on, on ? "/api/mac/audio/select" : "/api/mac/audio/disconnect", ["id": s.id])
     }
 }
@@ -77,8 +93,15 @@ struct MacMusicSection: View {
     private var lyricsOn: Bool { store.now?.session?.on == true }
     private var lyricsNote: String {
         if store.busy == "lyrics" { return "Asking the Mac…" }
-        if lyricsOn, let t = store.now?.title, store.now?.state == "playing" { return "\(t) · Apple Music’s lyrics, full screen" }
-        return lyricsOn ? "On, waiting for a song" : "Speaker, display and Apple Music’s lyrics, full screen"
+        guard lyricsOn else { return "Full screen on the Mac, through the speaker" }
+        if store.now?.session?.speakerConnected == false { return store.now?.session?.speakerSay ?? "The speaker didn’t connect" }
+        if let t = store.now?.title, store.now?.state == "playing" { return [t, store.now?.artist].compactMap { $0 }.joined(separator: " · ") }
+        return "AirPlay a song to Mac Pro · turns off after 2 minutes"
+    }
+    private var speakerNote: String {
+        if store.busy == "speaker" { return "Asking the Mac…" }
+        if store.speaker?.connected == true { return "Connected to the Mac" }
+        return lyricsOn ? "Not connected" : "Free for your other devices"
     }
     // "HK Invoke_C20142" → "HK Invoke": the name without the serial macOS adds.
     private var speakerName: String {
@@ -96,13 +119,11 @@ struct MacMusicSection: View {
                 .accessibilityIdentifier("switch.lyrics")
                 if store.speaker != nil {
                     Toggle(isOn: Binding(get: { store.asked["speaker"] ?? (store.speaker?.connected == true) }, set: { w in Task { await store.speaker(model, w) } })) {
-                        row(speakerName, store.busy == "speaker" ? "Asking the Mac…" : store.speaker?.connected == true ? "Connected to the Mac" : "Free for your other devices", "hifispeaker")
+                        row(speakerName, speakerNote, "hifispeaker")
                     }
                     .accessibilityIdentifier("switch.speaker")
                 }
-            } header: { Text("Music") } footer: {
-                if let s = store.say { Text(s) } else { Text("AirPlay to Mac Pro does this by itself, and lets the speaker go when the music is done.") }
-            }
+            } header: { Text("Music") } footer: { if let s = store.say { Text(s) } }
             .disabled(store.busy != nil || model.stale)
             .haptic(.done, trigger: store.answered)
             .haptic(.warn, trigger: store.refused)

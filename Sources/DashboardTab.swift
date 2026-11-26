@@ -11,6 +11,7 @@ import SwiftUI
 struct DashboardTab: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var remote = ConsoleRemote.shared
+    @ObservedObject private var music = MacMusicStore.shared
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -20,7 +21,7 @@ struct DashboardTab: View {
     var ready: Bool { remote.read && !remote.unsupported && !model.stale }
 
     // Where the dashboard is, as the Console and the bridge last said. Never a guess.
-    enum Seen { case looking, unsupported, away, off, asleep, aside, behind, on }
+    enum Seen { case looking, unsupported, away, off, asleep, aside, lyrics, behind, on }
     var seen: Seen {
         if remote.unsupported { return .unsupported }
         if !remote.read { return .looking }
@@ -28,6 +29,8 @@ struct DashboardTab: View {
         guard let st, st.running else { return .off }
         if st.display == "asleep" { return .asleep }
         if st.screenStepAside == true { return .aside }
+        // Apple Music's lyrics on the Mac's screen (the music session): the dashboard is aside on purpose.
+        if music.now?.session?.on == true, st.frontmost != true { return .lyrics }
         if st.frontmost == false { return .behind }
         return .on
     }
@@ -77,6 +80,7 @@ struct DashboardTab: View {
         case .off: return ("Not running on the Mac", .secondary, false)
         case .asleep: return ("The Mac’s display is off", .secondary, false)
         case .aside: return ("Out of the way while Screen is open", .secondary, false)
+        case .lyrics: return ("Lyrics are on the Mac’s screen", .secondary, false)
         case .behind: return ("Behind another app on the Mac", .secondary, false)
         case .on: return ("On the Mac’s screen", .green, false)
         }
@@ -163,7 +167,7 @@ struct DashboardTab: View {
                 BigKey("Next", "chevron.right", busy: remote.busy == "next", filled: false, trailingIcon: true) { step(1) }
             }
         }
-        .disabled(!ready || (seen == .on && st?.glance == true))
+        .disabled(!ready || (seen == .on && st?.glance == true) || seen == .lyrics)
     }
 
     // A wide key, one height everywhere on the remote; its wait is drawn in the glyph's place, so it never changes size.
