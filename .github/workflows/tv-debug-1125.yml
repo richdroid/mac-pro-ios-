@@ -16,7 +16,7 @@ concurrency:
 jobs:
   pass:
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +33,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 42
+        timeout-minutes: 52
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -99,44 +99,55 @@ jobs:
           }
           throwIt() { hand throw; }; backIt() { hand back; }; carryIt() { hand carry; }
           # Every key on the Remote, pressed through accessibility in turn, 0.9 s apart: what each sent is in -keys.log.
+          # Every key on the Remote, pressed through accessibility in turn: what each sent is in -keys.log (the seeks in
+          # -real.log).
           pressAll() {
             sleep 10
-            for k in "Up" "Right" "Down" "Left" "Select. Hold for a long press." "Back" "Home" "Menu" "Back 10 seconds" "Forward 10 seconds" "Pause" "Play" "Sleep or wake"; do
+            for k in "Up" "Right" "Down" "Left" "Select. Hold for a long press." "Back" "Home" "Menu" "Back 10 seconds" "Forward 10 seconds" "Pause#2" "Sleep or wake"; do
               echo "press $k"; $D "$DEVICE" tap "$k" || echo "  $k not found"; sleep 0.9
             done
           }
-          wakeIt() { sleep 9; $D "$DEVICE" tap "Wake the TV" || echo "Wake not found"; sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-wake-pressed$WX.png; }
+          # The shot is taken by a timer 1.5 s after the tap starts: the tap itself waits for the ring's motion to end.
+          wakeIt() { sleep 9; ( sleep 1.5; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-wake-pressed$WX.png ) & $D "$DEVICE" tap "Wake the TV" || echo "Wake not found"; wait; }
           speakerIt() {
             sleep 9; $D "$DEVICE" tap "Speaker" || echo "Speaker not found"
             sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker$WX.png
-            $D "$DEVICE" tap "Sample Headphones" || echo "headphones not found"
-            sleep 0.8; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker-connecting$WX.png
+            ( sleep 0.8; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker-connecting$WX.png ) & $D "$DEVICE" tap "Sample Headphones" || echo "headphones not found"; wait
             sleep 3; xcrun simctl io "$DEVICE" screenshot --display=${WD:-1} dist/tv-speaker-chosen$WX.png
           }
-          posture() {
+          flicks() {
             local x=$1 d=$2
-            for S in ridle repisode rasleep roffline; do shot remote-$S$x $d 9 $M/$S -tab 0; done
-            curl -s $M/real/reset > /dev/null; shot title-series$x $d 14 $M/real -tab 3 -pose realseries
-            shot streams$x $d 14 $M -tab 3 -pose streams
-            shot search$x $d 12 $M -tab 6 -pose search
-            shot watch$x $d 12 $M -tab 3
             curl -s $M/fnormal/reset > /dev/null; ACT=throwIt; film flick-title$x $d 12 $M/fnormal -tab 3 -pose flick-starting
             curl -s $M/fnormal/reset > /dev/null; ACT=throwIt; film flick-shelf$x $d 12 $M/fnormal -tab 3 -pose shelf
             curl -s $M/fnormal/reset > /dev/null; ACT=backIt; film putback-shelf$x $d 8 $M/fnormal -tab 3 -pose shelf
-            curl -s $M/fnormal/reset > /dev/null; ACT=carryIt; film carry-shelf$x $d 12 $M/fnormal -tab 3 -pose shelf
-            film tour$x $d 25 $M/live -tab 0 -pose tour
           }
-          posture "" 1
-          curl -s $M/real/reset > /dev/null; ACT=pressAll; film keys 1 4 $M/real -tab 0
-          WD=1; WX=; ACT=wakeIt; film wake 1 8 $M/rasleep -tab 0
-          ACT=speakerIt; film speaker 1 4 $M/ridle -tab 0
-          $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 1 || true; sleep 4
-          posture "-portrait" 3
-          WD=3; WX=-portrait; ACT=speakerIt; film speaker-portrait 3 4 $M/ridle -tab 0
-          # The Mac gone from 10 s to 50 s after the reset: nothing said for ~25 s, then calm amber, cleared on return.
+          # Folded: the keys, wake, the speaker sheet, a show whose episodes never came, the tour.
+          rm -f /tmp/tv-real-sends.log; curl -s $M/real/reset > /dev/null; ACT=pressAll; film keys 1 4 $M/real -tab 0
+          cp /tmp/tv-real-sends.log dist/tv-keys-real.log 2>/dev/null || true
+          WD=1; WX=; ACT=wakeIt; film wake 1 6 $M/rasleep -tab 0
+          ACT=speakerIt; film speaker 1 3 $M/ridle -tab 0
+          curl -s $M/real/reset > /dev/null; shot title-nometa 1 16 $M/nometa -tab 3 -pose realseries
+          film tour 1 25 $M/live -tab 0 -pose tour
+          # Open flat first (it never ran last time), then open upright.
+          $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 3 || true; sleep 5
+          for S in ridle repisode rasleep roffline; do shot remote-$S-flat 3 9 $M/$S -tab 0; done
+          curl -s $M/real/reset > /dev/null; shot title-series-flat 3 14 $M/real -tab 3 -pose realseries
+          shot streams-flat 3 14 $M -tab 3 -pose streams
+          shot search-flat 3 12 $M -tab 6 -pose search
+          shot watch-flat 3 12 $M -tab 3
+          flicks -flat 3
+          curl -s $M/fnormal/reset > /dev/null; ACT=carryIt; film carry-shelf-flat 3 12 $M/fnormal -tab 3 -pose shelf
+          film tour-flat 3 25 $M/live -tab 0 -pose tour
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          flicks -portrait 3
+          WD=3; WX=-portrait; ACT=speakerIt; film speaker-portrait 3 3 $M/ridle -tab 0
+          film tour-portrait 3 25 $M/live -tab 0 -pose tour
+          curl -s $M/real/reset > /dev/null; shot title-series-portrait 3 14 $M/real -tab 3 -pose realseries
+          curl -s $M/real/reset > /dev/null; shot title-nometa-portrait 3 16 $M/nometa -tab 3 -pose realseries
+          shot remote-roffline-portrait 3 9 $M/roffline -tab 0
+          # The Mac gone from 10 s to 50 s after the reset: nothing said for ~25 s, then the lip's Reconnecting… with the
+          # Remote's keys dimmed in place, all cleared on return.
           curl -s $M/outage/reset > /dev/null; film outage-portrait 3 66 $M/outage -tab 0
-          $D "$DEVICE" rotate 3 || true; sleep 5
-          posture "-flat" 3
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist
       - name: Publish

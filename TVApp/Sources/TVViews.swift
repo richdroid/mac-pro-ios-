@@ -2927,17 +2927,8 @@ struct DiscoverColumn: View {
         // short enough to be all on screen has no door to a page of the same few cards.
         let searched = !store.query.trimmingCharacters(in: .whitespaces).isEmpty && row.title == "Results"
         let title = searched ? (kind == "movie" ? "Films" : "Shows") : row.title
-        return VStack(alignment: .leading, spacing: 0) {
-            if searched && 20 + CGFloat(row.items.count) * 124 + CGFloat(max(row.items.count - 1, 0)) * 10 <= max(paneWidth, 1) { RowTitle(title).padding(.leading, 20) }
-            else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 10) {
-                    ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: row.title == Self.continueTitle ? leadWidth : 124) }
-                }
-                .padding(.horizontal, 20)
-            }
-            .rowEdge()
-        }
+        let doorless = searched && 20 + CGFloat(row.items.count) * 124 + CGFloat(max(row.items.count - 1, 0)) * 10 <= max(paneWidth, 1)
+        return ShelfRow(row: row, title: title, doorless: doorless, width: row.title == Self.continueTitle ? leadWidth : 124).equatable()
     }
     // Stremio's home not in yet, and there was a Continue watching last time: its room is kept, so it fills in rather than
     // arriving above the films and pushing them down (r18).
@@ -3029,6 +3020,29 @@ struct DiscoverColumn: View {
         .onChange(of: store.rows, initial: true) { _, _ in built = computeRows() }
         .onChange(of: home.rows) { _, _ in built = computeRows() }
         .onChange(of: store.query) { _, _ in built = computeRows() }
+    }
+}
+// One of Watch's shelves, redrawn only when its own cards, name or size change. The column above it re-runs on every push
+// and tab change (its Binding never compares equal), and every card on the page was drawn again with it: 89 card bodies
+// and a 556 ms frame as a title page was pushed (CI 8260e0f, open upright).
+struct ShelfRow: View, Equatable {
+    let row: MediaRow
+    let title: String
+    let doorless: Bool
+    let width: CGFloat
+    static func == (a: Self, b: Self) -> Bool { a.width == b.width && a.doorless == b.doorless && a.title == b.title && a.row == b.row }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if doorless { RowTitle(title).padding(.leading, 20) }
+            else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: width) }
+                }
+                .padding(.horizontal, 20)
+            }
+            .rowEdge()
+        }
     }
 }
 // What was last flicked from this phone, newest first. One tap has it in the hand again, episode and best stream

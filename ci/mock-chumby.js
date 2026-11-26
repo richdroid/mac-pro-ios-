@@ -302,6 +302,12 @@ function tvRoute(q, s) {
     let kb = ''; q.on('data', c => kb += c);
     q.on('end', () => { try { require('fs').appendFileSync('/tmp/tv-keys.log', JSON.stringify({ at: Date.now(), url: q.url, body: JSON.parse(kb || '{}') }) + '\n'); } catch {} });
   }
+  // /nometa: the real scene with a show's episodes never answered (the Mac out of reach for that one ask), for the show's
+  // page saying so with Try Again.
+  if (q.url.startsWith('/nometa/')) {
+    if (q.url.includes('/api/tv/stremio-meta')) { s.statusCode = 503; return s.end('{"error":"unavailable"}'); }
+    q.url = '/real' + q.url.slice(7);
+  }
   // The Mac's speakers (the bridge's /api/mac/audio), with stand-in names: the current one, a wired one, and a Bluetooth
   // pair not connected that connects after 1.5 s when chosen.
   if (/^\/(?:[a-z]+\/)?api\/mac\/audio(\/select)?$/.test(q.url.split('?')[0])) {

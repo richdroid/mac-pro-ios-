@@ -81,7 +81,9 @@ struct SpeakerKey: View {
     @State private var store = SpeakerStore.shared
     @State private var open = false
     var body: some View {
-        Group {
+        // A ZStack, not a Group: a Group with nothing in it is no view at all, so its .task never ran and the key never
+        // came (CI 8260e0f: no "Speaker" on the Remote with the bridge answering). Empty, it takes no room.
+        ZStack {
             if store.available == true {
                 Button { open = true } label: {
                     Image(systemName: "hifispeaker.2").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
