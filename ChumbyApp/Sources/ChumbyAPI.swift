@@ -212,6 +212,9 @@ struct ChumbyState: Decodable {
     var rang: Ring?
     // Whether the panel's music player is playing something, from its own report ("music": {…, playing} or null).
     var musicPlaying = false
+    // What it holds, when it holds something: for a Pandora station, its number and name (a station played from the app
+    // or from the Chumby's own Music screen, 11-25).
+    var music: MusicReport?
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
     var now: Double?
     var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
@@ -257,7 +260,8 @@ struct ChumbyState: Decodable {
         ringingNow = (try? c.decodeIfPresent(RingReport.self, forKey: .ringing)) ?? nil
         song = (try? c.decodeIfPresent(Song.self, forKey: .song)) ?? nil
         rang = (try? c.decodeIfPresent(Ring.self, forKey: .rang)) ?? nil
-        musicPlaying = ((try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil)?.playing ?? false
+        music = (try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil
+        musicPlaying = music?.playing ?? false
         escalate = (try? c.decodeIfPresent([Int].self, forKey: .escalate)) ?? nil
         calDays = Set((try? c.decodeIfPresent([String].self, forKey: .caldays)) ?? [])
         ends = (try? c.decodeIfPresent([RingEnd].self, forKey: .ends)) ?? []
@@ -278,15 +282,26 @@ struct SkippedAlarm: Decodable, Equatable {
     var date: Date { Date(timeIntervalSince1970: at) }
 }
 
-struct MusicReport: Decodable {
+struct MusicReport: Decodable, Hashable {
     var playing: Bool
+    // The panel's source: "pandora", "shoutcast", … ; its label (a Pandora station's name); and its state (a Pandora
+    // station's number, "NUMBER##NAME" from the hook before 11-25).
+    var source = "", label = "", state = ""
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         // The panel may say true/false or 1/0.
         if let b = try? c.decode(Bool.self, forKey: .playing) { playing = b }
         else { playing = ((try? c.decode(Int.self, forKey: .playing)) ?? 0) != 0 }
+        source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
+        label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? ""
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
     }
-    enum K: String, CodingKey { case playing }
+    enum K: String, CodingKey { case playing, source, label, state }
+    // The Pandora station playing, by its number; nil for anything else or nothing playing.
+    var pandoraStation: String? {
+        guard playing, source == "pandora", !state.isEmpty else { return nil }
+        return state.components(separatedBy: "##").first
+    }
 }
 // A song Pandora logged: in the history, and the newest one in the Chumby's own state. Here, so the widgets see it too.
 struct Song: Codable, Identifiable, Hashable { let t: Double; let title: String; let artist: String; let album: String; var id: String { "\(t)\(title)" } }

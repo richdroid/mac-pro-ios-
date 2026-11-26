@@ -1,0 +1,115 @@
+name: Chumby Pandora checks
+# Shots and films of Pandora play-now (Sounds' Pandora rows, the Now card starting, playing and stopping) for the
+# chumby-pandora-1125 branch only, never main, in its own group so it never waits behind or cancels the main build.
+# Published to the chumby-pandora release.
+on:
+  push:
+    branches: [chumby-pandora-1125]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chumby-pandora
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          node ci/mock-chumby.js & MOCK=$!
+          sleep 2
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # Each launch is its own copy of the scene (the mock keeps one live state per scene name): restarted per shot.
+          restart_mock() { kill $MOCK 2>/dev/null; sleep 1; node ci/mock-chumby.js & MOCK=$!; sleep 2; }
+          # Sounds: a station tapped 3 s in. +7 s: starting (spinner on its row, the Now card naming it with Stop);
+          # +20 s: playing (the row's sound, the card's song). pandoraswitch: a second station tapped once the first plays.
+          stills() { # display, suffix
+            for V in "pandoraplay 3" "pandoraswitch 3" "pandoraplay-home 0"; do
+              set -- "$1" "$2" $V
+              P=${3%-home}
+              restart_mock
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/soundsplay -tab 3 -pose $P
+              if [ "$4" = 0 ]; then
+                # Home's Playing card: the pose runs on Sounds, so Sounds first, then Home once it plays.
+                sleep 22
+                xcrun simctl terminate "$DEVICE" local.macpro.Chumby
+                xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/soundsplay -tab 0
+                sleep 9
+                xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$3$2.png
+              elif [ "$3" = pandoraswitch ]; then
+                sleep 26
+                xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pandoraswitch-starting$2.png
+                sleep 10
+                xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pandoraswitch-playing$2.png
+              else
+                sleep 10
+                xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pandora-starting$2.png
+                sleep 13
+                xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pandora-playing$2.png
+              fi
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              set -- "$1" "$2"
+            done
+          }
+          films() { # display, suffix
+            for P in pandorastop pandoraswitch; do
+              restart_mock
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-$P$2.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/soundsplay -tab 3 -pose $P
+              sleep 34
+              kill -INT $REC; wait $REC; echo "film $P$2 exit $?"
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+          }
+          $D "$DEVICE" pose closed; sleep 5
+          stills 1 ""
+          films 1 ""
+          $D "$DEVICE" pose open; sleep 6
+          stills 3 "-open"
+          $D "$DEVICE" rotate 1; sleep 6
+          stills 3 "-portrait"
+          films 3 "-portrait"
+          xcrun simctl ui "$DEVICE" appearance dark
+          stills 3 "-portrait-dark"
+          xcrun simctl ui "$DEVICE" appearance light
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../pandora.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../pandora.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-pandora >/dev/null 2>&1 || gh release create chumby-pandora --prerelease --title "Chumby Pandora checks" --notes "Pandora play-now on the Chumby app: shots and films from the chumby-pandora-1125 branch (mock data)."
+          for f in pandora.zip status.txt; do
+            for i in 1 2 3; do gh release upload chumby-pandora "$f" --clobber && break; sleep 15; done
+          done

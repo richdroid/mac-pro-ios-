@@ -555,7 +555,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow|soundsplay)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
@@ -633,6 +633,19 @@ function chumbyScene(q, s) {
           if (id) live.state.pandora = [...live.state.pandora.filter(p => p.id !== id), { id, name: 'Dream Pop Radio' }];
           return json({ ok: true, pending: true });
         }
+        // A Pandora station played now (chumby 2767a9a): the answer at once, the panel's music naming the station about
+        // 6 s later as the Chumby's does once a track plays (its first song in the state with it); Stop clears it.
+        if (a === 'play') {
+          const id = qs.get('s') || '', st = (live.state.pandora || []).find(p => p.id === id);
+          if (!st) return json({ ok: false, error: 'bad station' });
+          clearTimeout(live.playing);
+          live.playing = setTimeout(() => {
+            live.state.music = { source: 'pandora', label: st.name, state: id, playing: true };
+            live.state.song = { t: Math.floor(Date.now() / 1000), title: 'Seagull', artist: 'Slowdive', album: 'Pygmalion' };
+          }, 6000);
+          return json({ ok: true, pending: false, station: st.name });
+        }
+        if (a === 'cmd' && qs.get('c') === 'stopmusic') { clearTimeout(live.playing); live.state.music = null; }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
         // The volume, applied by the panel about two seconds after the command, as on the real Chumby (11-18).

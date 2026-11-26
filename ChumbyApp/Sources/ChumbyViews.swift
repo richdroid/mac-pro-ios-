@@ -2369,12 +2369,17 @@ struct NowPlaying: View {
         // what's playing then, and its Stop is the Mac's.
         let starting = model.macStarting
         let mac = starting ?? model.macPlaying
-        let song = mac.map { Song(t: 0, title: $0.name, artist: $0.artist, album: $0.album) } ?? nowSong
-        let playing = model.state.musicPlaying || mac != nil
-        let f = song.flatMap { art.found[SongArt.key($0)] }
+        // A Pandora station just asked for (Sounds' Pandora rows): named at once, with its Stop, until the Chumby plays it.
+        let station = mac == nil ? model.pandoraStarting : nil
+        let song = mac.map { Song(t: 0, title: $0.name, artist: $0.artist, album: $0.album) } ?? station.map { Song(t: 0, title: $0.name, artist: "", album: "") } ?? nowSong
+        let playing = model.state.musicPlaying || mac != nil || station != nil
+        // A station's name isn't a song: no cover is looked up for it.
+        let f = station == nil ? song.flatMap { art.found[SongArt.key($0)] } : nil
+        // Playing with no song known yet: the station, when the Chumby names one.
+        let held = model.state.music.flatMap { $0.playing && !$0.label.isEmpty ? $0 : nil }
         // What's named, as one thing: cover and words change together in one fade (11-12 gate: a failed start blanked the
         // cover, then printed "Nothing playing" over the song, then the note came, in three beats).
-        let identity = song.map(SongArt.key) ?? (playing ? "playing" : "none")
+        let identity = song.map(SongArt.key) ?? (playing ? "playing" + (held?.label ?? "") : "none")
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
                 ZStack(alignment: .leading) {
@@ -2395,8 +2400,11 @@ struct NowPlaying: View {
                                 Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
                                 // Chosen a moment ago and not yet sounding: said so, where its artist will be.
                                 // Two lines while starting, so the one status of the wait is never cut short beside the spinner.
-                                Text(starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(starting != nil ? 2 : 1)
+                                Text(starting != nil || station != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(starting != nil || station != nil ? 2 : 1)
                                     .contentTransition(.opacity)
+                            } else if playing, let held {
+                                Text(held.label).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
+                                Text(held.source == "pandora" ? "Pandora" : "Radio").foregroundStyle(.secondary).lineLimit(1)
                             } else {
                                 Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
                             }
@@ -2416,12 +2424,12 @@ struct NowPlaying: View {
                 } else if playing && (mac != nil || model.sys.ringing == nil) {
                     // Not under an alarm: what plays then is the alarm, and its Stop is the ringing card's. A second Stop
                     // here only cut the music off and left the alarm going, silent.
-                    Button { if mac != nil { model.stopMacMusic() } else { model.cmd("stopmusic", id: failID) } } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
+                    Button { if mac != nil { model.stopMacMusic() } else { model.stopChumbyMusic(id: failID) } } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
                         .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Stop")
                 }
             }
             // Asked again whenever the song changes: it's often nil on first appearance, before state and history arrive.
-            .task(id: song.map(SongArt.key)) { if let song { art.look(song) } }
+            .task(id: song.map(SongArt.key)) { if let song, station == nil { art.look(song) } }
             // Mute is volume 0 (the panel's MusicPlayer setMute never reaches the mixer); Unmute goes back to the last level.
             VolumeSlider(level: model.sys.vol, label: "Volume", commit: set) { shown in
                 Button {
@@ -2450,6 +2458,57 @@ struct NowPlaying: View {
                 await model.loadSongs(force: model.state.musicPlaying)
                 try? await Task.sleep(nanoseconds: 20_000_000_000)
             }
+        }
+    }
+}
+
+// A Pandora station, played on the Chumby with a tap: the one starting shows its spinner, the one playing its sound.
+struct PandoraRow: View {
+    @EnvironmentObject var model: ChumbyModel
+    let station: NamedID
+    var body: some View {
+        let starting = model.pandoraStarting == station
+        let playing = model.pandoraStarting == nil && model.state.music?.pandoraStation == station.id
+        Button { if !playing && !starting { model.playPandora(station) } } label: {
+            HStack(spacing: 10) {
+                Label {
+                    Text(station.name).lineLimit(1).foregroundStyle(.primary)
+                } icon: {
+                    Image(systemName: playing ? "speaker.wave.2.fill" : "play.fill")
+                        .symbolEffect(.variableColor.iterative, isActive: playing)
+                        .foregroundStyle(.tint)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if starting { ProgressView() }
+                else if playing { Text("Playing").font(.subheadline).foregroundStyle(.secondary) }
+            }
+            .frame(minHeight: 34).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.unreachable)
+        .animation(.snappy, value: playing)
+        .animation(.snappy, value: starting)
+        .accessibilityLabel(playing ? "\(station.name), playing" : starting ? "\(station.name), starting" : "Play \(station.name)")
+    }
+}
+// The build's films of it (soundsplay scene, never on his phone): a station tapped 3 s in, then another while it plays
+// (pandoraswitch), or Stop on the Now card once it plays (pandorastop).
+@MainActor enum PandoraPose {
+    static var posed = false
+    static func run(_ model: ChumbyModel) async {
+        let pose = ChumbyModel.pose
+        guard pose.hasPrefix("pandora"), !posed else { return }
+        posed = true
+        Task { @MainActor in
+            for _ in 0..<60 where model.state.pandora.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
+            guard model.state.pandora.count > 1 else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            model.playPandora(model.state.pandora[0])
+            guard pose == "pandoraswitch" || pose == "pandorastop" else { return }
+            for _ in 0..<200 where model.state.music?.pandoraStation == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if pose == "pandoraswitch" { model.playPandora(model.state.pandora[1]) } else { model.stopChumbyMusic(id: "sounds") }
         }
     }
 }
@@ -2692,6 +2751,15 @@ struct SoundsTab: View {
                     .task { await MacMusicPose.sounds(model) { openPicker() } }
                 }
             } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now") }
+            // His Pandora stations, each played now with a tap (11-25); the Now card above shows it starting, playing, and
+            // its Stop. The stations themselves are kept under Stations, beside the alarms that play them.
+            if !model.state.pandora.isEmpty {
+                Section {
+                    ForEach(model.state.pandora) { st in PandoraRow(station: st) }
+                    if let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")) }
+                } header: { SectionHead(icon: "radio", text: "Pandora") }
+                    .task { await PandoraPose.run(model) }
+            }
             WokeUpTo()
         } right: {
             Section {

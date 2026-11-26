@@ -713,5 +713,23 @@ do {
     expect(kit.isEmpty || kit.values.allSatisfy { $0.ring > day(7, 0) }, "nothing left armed for the week gone by")
 }
 
+section("what the Chumby plays (a=state music)")
+do {
+    func music(_ j: String) -> MusicReport? {
+        let x = try? JSONDecoder().decode(ChumbyState.self, from: Data(("{\"music\":" + j + "}").utf8))
+        return x?.music
+    }
+    // As the Chumby says it (11-25), a station played from the app (the player's own source: its name, its number).
+    let own = music(#"{"source":"pandora","label":"Morning Mix","state":"4100000000000001","playing":true}"#)
+    expect(own?.pandoraStation == "4100000000000001" && own?.label == "Morning Mix", "a Pandora station playing is known by its number")
+    // The hook's first form (11-25): "NUMBER##NAME".
+    expect(music(#"{"source":"pandora","label":"Pandora Radio","state":"4100000000000002##Shoegaze Radio","playing":true}"#)?.pandoraStation == "4100000000000002", "and from NUMBER##NAME")
+    expect(music(#"{"source":"pandora","label":"Shoegaze Radio","state":"4100000000000002","playing":false}"#)?.pandoraStation == nil, "a station held but stopped isn't playing")
+    expect(music(#"{"source":"shoutcast","label":"Indie Pop Rocks","state":"x","playing":1}"#)?.pandoraStation == nil, "a radio stream isn't a station")
+    expect(music("null") == nil, "nothing held, nothing named")
+    let old = try? JSONDecoder().decode(ChumbyState.self, from: Data(#"{"music":{"playing":true}}"#.utf8))
+    expect(old?.musicPlaying == true && old?.music?.pandoraStation == nil, "an older Chumby's bare playing still reads as playing")
+}
+
 print(failures == 0 ? "ok: \(checks) checks" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)
