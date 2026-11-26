@@ -2910,6 +2910,12 @@ struct DiscoverColumn: View {
     // left of the short ones goes together at the end, as "More to watch", once each, if there are enough of them.
     // Worked out when the lists change, not on every redraw of the column.
     @State private var built: [MediaRow]?
+    // How many of the shelves are drawn for real. The first visit drew every shelf at once, the far ones too: 157 cards
+    // and a 392 ms first frame, then a 264 ms turn (CI 91909a6, open flat). Now the ones on the first screen come in the
+    // first frame and the rest a shelf or two a frame after it, each holding its room until then, so the page is its full
+    // height from the start and whole within a fraction of a second, before any fling can reach the end (2026-11-20).
+    // Once whole it stays whole: rows that come later are drawn at once.
+    @State private var ready = 3
     var rows: [MediaRow] { built ?? computeRows() }
     func computeRows() -> [MediaRow] {
         // What a search found is shown as found, under its own name, however few: regrouped like the shelves, one show
@@ -2988,8 +2994,12 @@ struct DiscoverColumn: View {
                 // The Mac can't be asked: the rows are the ones kept from last time, said so and dimmed.
                 if part != .right, store.query.isEmpty, let since = store.keptSince ?? home.keptSince { KeptNote(since: since) }
                 // Each kind's rows are their own, so switching crossfades the rows alone.
-                ForEach(shown, id: \.title) { row in
-                    shelf(row)
+                ForEach(Array(shown.enumerated()), id: \.element.title) { n, row in
+                    Group {
+                        if n < ready { shelf(row) }
+                        // Its room only, at a shelf's height, below the first screen.
+                        else { Color.clear.frame(height: ShelfRow.height(row.title == Self.continueTitle ? leadWidth : 124)) }
+                    }
                     .opacity(store.keptSince != nil ? 0.55 : 1)
                     .id(kind + "/" + row.title)
                     .transition(.opacity)
@@ -3032,6 +3042,16 @@ struct DiscoverColumn: View {
         }
         .refreshable { await store.load(force: true) }
         .task(id: kind) { await store.load() }
+        // The rest of the shelves after the first frame, two a frame, then all of them for good.
+        .task(id: shown.count) {
+            guard ready < Int.max else { return }
+            while ready < shown.count {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                if Task.isCancelled { return }
+                ready += 2
+            }
+            if !shown.isEmpty { ready = .max }
+        }
         .onChange(of: store.rows, initial: true) { _, _ in built = computeRows() }
         .onChange(of: home.rows) { _, _ in built = computeRows() }
         .onChange(of: store.query) { _, _ in built = computeRows() }
@@ -3046,6 +3066,9 @@ struct ShelfRow: View, Equatable {
     let doorless: Bool
     let width: CGFloat
     static func == (a: Self, b: Self) -> Bool { a.width == b.width && a.doorless == b.doorless && a.title == b.title && a.row == b.row }
+    // About its height before it's drawn (off screen, and only for a few frames): the heading's line and its 8 pt, then a
+    // card.
+    static func height(_ width: CGFloat) -> CGFloat { 25 + 8 + MediaCard.height(width, .stremio) }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if doorless { RowTitle(title).padding(.leading, 20) }
