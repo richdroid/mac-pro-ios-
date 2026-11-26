@@ -157,6 +157,7 @@ final class TVModel {
         }
         // Anything else he tapped opens as its page on the tab he is on: the poster a card for his hand (brief 3.4). The
         // page is pushed by the tab's own stack, so the system's Back returns to the exact place he came from.
+        SpeedMark.begin("title")
         titleAsk = target
         titleAsks += 1
     }
@@ -610,9 +611,11 @@ final class TVModel {
             }
             s = fresh
         }
+        let wasFailing = failingSince != nil
         failingSince = nil
         if !reachable { reachedAt = Date(); reachable = true }
         #if os(iOS)
+        if wasFailing { live.retryNow() }
         // The Now Playing card follows on its own, one reading after another, never ahead of the page: awaited here, a
         // new cover's fetch and shrinking (and every update iOS takes its time over) held this reading back from the
         // screen, so what's on changed on the Lock Screen's card before it did on the Remote he was looking at.

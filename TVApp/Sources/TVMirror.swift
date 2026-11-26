@@ -117,6 +117,14 @@ final class LiveMirror: ObservableObject {
             if !self.showing { self.showing = true }
         }
     }
+    // The Mac answering again after a gap: the stream joined now rather than at the end of its back-off (up to 30 s after
+    // a long outage, while the stills had already come back).
+    func retryNow() {
+        guard wanted, feed == nil, retry != nil else { return }
+        retry?.cancel(); retry = nil
+        failures = 0
+        start(nil)
+    }
     private func ended(_ gen: Int) {
         guard gen == generation else { return }
         readying?.cancel(); readying = nil

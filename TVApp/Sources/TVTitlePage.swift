@@ -21,6 +21,11 @@ struct TitleRoute: Hashable { let id: UUID }
     var finding = false
     var noStreams = false
     var streamsUnreachable = false
+    // A show's episodes: on their way, or not had (no answer, or an answer with none in it), so the page never sits on
+    // "Choose an episode" with nothing to choose from (11-25 debug).
+    var findingEpisodes = false
+    var episodesFailed = false
+    var episodesEmpty = false
     var chosen: String?
     var failed: Set<String> = []
     var startOver = false
@@ -67,8 +72,7 @@ struct TitleRoute: Hashable { let id: UUID }
     func load(_ model: TVModel) async {
         guard let r = ref else { return }
         if r.type == "series" {
-            if let m = NextUp.cached(r.imdb) { apply(m, model) }
-            else if let m = await NextUp.meta(r.imdb) { apply(m, model) }
+            await loadEpisodes(model)
             about = meta?.about
         } else {
             await findStreams()
@@ -76,6 +80,15 @@ struct TitleRoute: Hashable { let id: UUID }
             let m = await Task.detached(priority: .userInitiated) { d.flatMap { try? JSONDecoder().decode(StremioMeta.self, from: $0) } }.value
             if let a = m?.about, !a.isEmpty { about = a } else if let a = item.about { about = a }
         }
+    }
+    func loadEpisodes(_ model: TVModel) async {
+        guard let r = ref, r.type == "series" else { return }
+        if let m = NextUp.cached(r.imdb) { apply(m, model); return }
+        findingEpisodes = true; episodesFailed = false; episodesEmpty = false
+        let m = await NextUp.meta(r.imdb)
+        findingEpisodes = false
+        if let m { apply(m, model); if about == nil { about = m.about } }
+        else { episodesFailed = true; episodesEmpty = NextUp.answeredEmpty.contains(r.imdb) }
     }
     private func apply(_ m: StremioMeta, _ model: TVModel) {
         meta = m
@@ -159,6 +172,7 @@ struct TitlePage: View {
         // The page's ground is drawn by its tab, behind the lip and the page as one piece (the lip sits above the stack,
         // so a ground of the page's own ended in a hard line under it: gates on 654ff00 and 6bf2944).
         .onAppear {
+            SpeedMark.end("title")
             model.titleGrounds.removeAll { $0.id == groundID }
             model.titleGrounds.append(.init(id: groundID, tab: model.tab, art: st.item.art))
         }
@@ -215,6 +229,7 @@ struct TitlePage: View {
             p.frame(in: .global)
         } action: { r in if carry.phase == .rest { carry.rest = r } }
         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+            .updating($touching) { _, state, _ in state = true }
             .onChanged { v in
                 if carry.phase != .held {
                     guard carry.phase == .rest else { return }
@@ -224,6 +239,16 @@ struct TitlePage: View {
                 if Hand.shared.committed, !committedOnce { committedOnce = true; committed() }
             }
             .onEnded { v in release(v) })
+        // A touch the system took away (the Home swipe, a call, Control Center) never reaches onEnded: the card stayed in
+        // the hand and the held status poll with it, so the app stopped following the TV (11-25 debug). A beat after the
+        // touch is gone, a card still held goes home; a real release has moved it on by then.
+        .onChange(of: touching) { _, now in
+            guard !now else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                if !touching, carry.phase == .held { HandLog.note("touch cancelled: home"); carry.springHome(.zero) }
+            }
+        }
         // For the build's films: where the card is, so a real touch can pick it up.
         .shotSpot("card", pose: UserDefaults.standard.string(forKey: "pose") ?? "-")
         .accessibilityElement(children: .combine)
@@ -232,6 +257,7 @@ struct TitlePage: View {
         .accessibilityAction(named: "Play on the TV") { throwIt(CGSize(width: 0, height: -2000)) }
         .frame(maxWidth: .infinity)
     }
+    @GestureState private var touching = false
     @State private var committedOnce = false
     @State private var downAt = CGPoint.zero
     // What the card wears: the stream it carries, and where it starts.
@@ -256,8 +282,12 @@ struct TitlePage: View {
         else if st.ref != nil {
             if let s = st.stream { chipText(StreamWords.chip(s), icon: nil, lit: false) }
             else if st.noStreams { chipText("No streams", icon: nil, lit: false) }
+            // The same word as the row under it: none listed, or the Mac didn't answer (gate of 80d0ecb: "No episodes" over
+            // "Couldn't get the episodes").
+            else if st.isSeries && st.meta == nil { chipText(st.episodesFailed ? (st.episodesEmpty ? "No episodes" : "Couldn’t load") : "Finding episodes…", icon: nil, lit: false) }
             else { chipText("Finding streams…", icon: nil, lit: false) }
-            if let p = st.progress, p > 0.01, p < 0.97 {
+            // Nothing to resume on a card that can't be thrown: a show whose episodes haven't come.
+            if let p = st.progress, p > 0.01, p < 0.97, !(st.isSeries && st.meta == nil) {
                 chipText(st.startOver ? "Start over" : "Resume" + (resumeClock(p).map { " " + $0 } ?? ""), icon: st.startOver ? "backward.end.fill" : "play.fill", lit: false)
             }
         }
@@ -319,7 +349,7 @@ struct TitlePage: View {
         if st.ref != nil {
             guard let s = st.stream else {
                 carry.springHome(v)
-                st.say(st.noStreams ? "No streams to play" : "Still finding streams")
+                st.say(st.isSeries && st.meta == nil ? (st.episodesFailed ? "Couldn’t get the episodes" : "Still finding episodes") : st.noStreams ? "No streams to play" : "Still finding streams")
                 return
             }
             st.sentToken = s.token; st.sentAt = Date()
@@ -408,18 +438,25 @@ struct TitlePage: View {
     @ViewBuilder var streamList: some View {
         if st.streams.isEmpty {
             HStack(spacing: 10) {
-                if st.finding || (!st.noStreams && st.video != nil) { ProgressView().controlSize(.small) }
-                else if st.noStreams { Image(systemName: st.streamsUnreachable ? "wifi.exclamationmark" : "tray").foregroundStyle(.secondary) }
+                // A show whose episodes didn't come is the same kind of trouble as a film's streams that didn't: said, with
+                // Try Again, never "Choose an episode" over an empty page.
+                let noEpisodes = st.isSeries && st.episodesFailed && st.meta == nil
+                let failed = (st.noStreams && !st.finding) || noEpisodes
+                if st.finding || st.findingEpisodes || (!st.noStreams && !noEpisodes && (st.video != nil || (st.isSeries && st.meta == nil))) { ProgressView().controlSize(.small) }
+                else if failed { Image(systemName: (noEpisodes ? !st.episodesEmpty : st.streamsUnreachable) ? "wifi.exclamationmark" : "tray").foregroundStyle(.secondary) }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(st.finding ? "Finding streams…" : st.noStreams ? (st.streamsUnreachable ? "Couldn’t get streams" : "No streams found") : st.video == nil ? "Choose an episode" : "Finding streams…")
-                        .font(.system(size: 17, weight: st.noStreams && !st.finding ? .semibold : .regular)).foregroundStyle(st.noStreams && !st.finding ? .primary : .secondary)
-                    if st.noStreams && !st.finding {
-                        Text(st.streamsUnreachable ? "The Mac didn’t answer." : "None of your add-ons has this one.").font(.system(size: 15)).foregroundStyle(.secondary)
+                    Text(noEpisodes ? (st.episodesEmpty ? "No episodes found" : "Couldn’t get the episodes")
+                         : st.finding ? "Finding streams…" : st.noStreams ? (st.streamsUnreachable ? "Couldn’t get streams" : "No streams found")
+                         : st.isSeries && st.meta == nil ? "Finding episodes…" : st.video == nil ? "Choose an episode" : "Finding streams…")
+                        .font(.system(size: 17, weight: failed ? .semibold : .regular)).foregroundStyle(failed ? .primary : .secondary)
+                    if failed {
+                        Text(noEpisodes ? (st.episodesEmpty ? "No episodes are listed for this show." : "The Mac didn’t answer.")
+                             : st.streamsUnreachable ? "The Mac didn’t answer." : "None of your add-ons has this one.").font(.system(size: 15)).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 8)
-                if st.noStreams && !st.finding {
-                    Button("Try Again") { model.tick(); Task { await st.findStreams(again: true) } }
+                if failed {
+                    Button("Try Again") { model.tick(); Task { if noEpisodes { await st.loadEpisodes(model) } else { await st.findStreams(again: true) } } }
                         .buttonStyle(.bordered).buttonBorderShape(.capsule).tint(.white)
                 }
             }

@@ -296,6 +296,35 @@ const tvScene = scene => {
 function tvRoute(q, s) {
   // Every POST the TV app makes, under any scene, for the flick films' proof of what was and wasn't sent.
   if (q.method === 'POST' && q.url.includes('/api/tv/')) { try { require('fs').appendFileSync('/tmp/tv-posts.log', Date.now() + ' POST ' + q.url + '\n'); } catch {} }
+  // The Remote's keys with what each one said, under any scene, for the key-by-key check (a second listener on the body;
+  // the route below reads it as well, both attached in this same turn).
+  if (q.method === 'POST' && /\/api\/tv\/(key|tv-on|power-toggle|text|sleep)$/.test(q.url)) {
+    let kb = ''; q.on('data', c => kb += c);
+    q.on('end', () => { try { require('fs').appendFileSync('/tmp/tv-keys.log', JSON.stringify({ at: Date.now(), url: q.url, body: JSON.parse(kb || '{}') }) + '\n'); } catch {} });
+  }
+  // /nometa: the real scene with a show's episodes never answered (the Mac out of reach for that one ask), for the show's
+  // page saying so with Try Again.
+  if (q.url.startsWith('/nometa/')) {
+    if (q.url.includes('/api/tv/stremio-meta')) { s.statusCode = 503; return s.end('{"error":"unavailable"}'); }
+    q.url = '/real' + q.url.slice(7);
+  }
+  // The Mac's speakers (the bridge's /api/mac/audio), with stand-in names: the current one, a wired one, and a Bluetooth
+  // pair not connected that connects after 1.5 s when chosen.
+  if (/^\/(?:[a-z]+\/)?api\/mac\/audio(\/select)?$/.test(q.url.split('?')[0])) {
+    const st = tvRoute.audio || (tvRoute.audio = { current: 'bt:00-00-00-00-00-01', linked: false });
+    const outs = () => [
+      { id: 'bt:00-00-00-00-00-01', name: 'Living Room Speaker', kind: 'bluetooth', paired: true, connected: true },
+      { id: 'ca:BuiltInSpeakerDevice', name: 'Built-in Output', kind: 'builtin', paired: false, connected: true },
+      { id: 'bt:00-00-00-00-00-02', name: 'Sample Headphones', kind: 'bluetooth', paired: true, connected: st.linked },
+    ].map(o => ({ ...o, current: o.id === st.current }));
+    s.setHeader('content-type', 'application/json');
+    if (q.url.endsWith('/select')) {
+      let b = ''; q.on('data', c => b += c);
+      q.on('end', () => { let id = ''; try { id = JSON.parse(b).id; } catch {} setTimeout(() => { if (id === 'bt:00-00-00-00-00-02') st.linked = true; st.current = id; const o = outs().find(x => x.id === id); s.end(JSON.stringify({ ok: !!o, current: o ? o.name : null, say: o ? `The Mac plays on ${o.name} now.` : 'That isn’t one of the Mac’s speakers.' })); }, 1500); });
+      return;
+    }
+    return setTimeout(() => s.end(JSON.stringify({ outputs: outs(), airplay: { running: true, playing: false, title: '', artist: '' } })), 600);
+  }
   // Frames the app took longer than 34 ms to draw, in any scene, kept for the build (r21: stalls as numbers).
   if (q.method === 'POST' && /\/api\/tv\/hitch$/.test(q.url)) {
     let body = ''; q.on('data', c => body += c);

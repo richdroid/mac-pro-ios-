@@ -158,8 +158,8 @@ struct Lip: View {
     @ViewBuilder func trailing(_ now: TVNow) -> some View {
         // On the Remote the big key in the pad's ring wakes it; the lip's own would be a second way on one screen.
         if now.kind == .asleep {
-            if tab != 0 { LipKey(icon: "power", label: "Wake the TV") { if model.status?.away == .off { model.post("tv-on") } else { model.key("wake") } } }
-        } else if now.playing != nil {
+            if tab != 0, model.reachable { LipKey(icon: "power", label: "Wake the TV") { if model.status?.away == .off { model.post("tv-on") } else { model.key("wake") } } }
+        } else if now.playing != nil, model.reachable {
             let shown = model.shownPlaying(now.playing)
             LipKey(icon: shown == true ? "pause.fill" : "play.fill", label: shown == true ? "Pause" : "Play") { model.togglePlay(shown: shown) }
         }

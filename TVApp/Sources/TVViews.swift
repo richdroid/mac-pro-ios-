@@ -246,7 +246,7 @@ struct RootView: View {
         RailItem(value: 6, title: "Search", symbol: "magnifyingglass"),
     ]
     private var tabBinding: Binding<Int> {
-        TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
+        TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick); SpeedMark.begin("tab \($0)") }; model.tab = $0 })) { t in
             // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
             // rebuilt, so what was loaded, and the choices made on it, stay.
             if t == 1 { model.browsing = nil }
@@ -281,6 +281,7 @@ struct RootView: View {
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
                 HitchLog.shared.note("tab \(was)→\(t)")
+                SpeedMark.end("tab \(t)")
                 #endif
                 UserDefaults.standard.set(t, forKey: "tab")
                 // Opening Playing shows what's on now, not what was on at the last look.
@@ -294,7 +295,7 @@ struct RootView: View {
         .background { StatusFollower(playingSymbol: $playingSymbol) }
         // The Mac out of reach is the lip's to say ("Reconnecting…"); a pill here covered every page's title (tv-pass-1122).
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { BackFinder.start(); followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 6]) { model.tab = $0 } }
+        .onAppear { BackFinder.start(); followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [3, 0, 6]) { SpeedMark.begin("tab \($0)"); model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task {
             await BrowseStore.shared(.stremio).loadHome()
@@ -1213,7 +1214,12 @@ struct RemoteTab: View {
     @ObservedObject private var nextUp = NextUp.shared
     // The build's shot of the typing bar opens with it up.
     @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
-    @State private var wakeAskedAt: Date?
+    // What the wake key says after a press: waking for 10 s, then still asleep until 40 s, then itself again. Plain state
+    // moved on by a task (a TimelineView reading the press time never showed "Waking the TV…" in CI a05ac5c: the words
+    // stayed "Wake the TV" at 2, 7 and 14 s after a finger's press that sent the key).
+    enum WakeWords: Equatable { case waking, stuck }
+    @State private var wakeWords: WakeWords?
+    @State private var wakeTimer: Task<Void, Never>?
     // The layout's own idea of typing: on with the keyboard key, and off only once the keyboard has gone, so the page
     // never lays itself out in the room a keyboard still on its way down leaves (Remote gate 4: for half a second it
     // split into two columns upright, crushed open flat, and came back under the keyboard folded).
@@ -1270,8 +1276,10 @@ struct RemoteTab: View {
     var asleep: Bool { !model.staleStatus && model.status?.screen == "asleep" }
     // The television off, or on another input, while the box is awake: treated as asleep is, with its own one key.
     var away: TVStatus.Away? { model.staleStatus ? nil : model.status?.away }
-    // The Mac answers but the TV doesn't: the keys can't reach it, so they show it.
-    var unreachable: Bool { model.status.map { !$0.online } ?? false }
+    // The Mac answers but the TV doesn't, or the Mac itself has been out of reach past its grace (~25 s, then the lip says
+    // "Reconnecting…"): the keys can't reach it, so they show it, dimmed in their places, the picture dark (11-25 debug:
+    // live keys under "Reconnecting…" each answered "The TV didn't get that").
+    var unreachable: Bool { !model.reachable || (model.status.map { !$0.online } ?? false) }
     // While something plays, where it is and a bar to move it, right under the picture, as on the Playing tab.
     // Hidden, not removed, while a flick's screen moves onto the picture: it carries its own bar, and two showed at once.
     // Its place is kept from the landing on (a start, or a film whose length isn't known yet shows the time it's at), so
@@ -1349,14 +1357,27 @@ struct RemoteTab: View {
             Button {
                 model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") }
                 // Said on the key at once, until the TV answers (or 10 s): a press with nothing to show for it read as dead.
-                wakeAskedAt = Date()
+                wakeTimer?.cancel()
+                wakeWords = .waking
+                #if os(iOS)
+                HitchLog.shared.note("wake pressed")
+                #endif
+                // The television itself coming on (the box up, HDMI-CEC) takes the Sony 12 to 20 s: given 25 s before it's
+                // called still off (gate of 80d0ecb).
+                let wait: UInt64 = asleep ? 10_000_000_000 : 25_000_000_000
+                wakeTimer = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: wait)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { wakeWords = .stuck }
+                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { wakeWords = nil }
+                }
             } label: {
                 // The whole ring is the key: the glyph over the words, never cut. "Waking the TV…" with the light running round
                 // it after a press; still asleep 10 s on, it says so (tv-pass-1122).
-                TimelineView(.periodic(from: .now, by: 1)) { t in
-                    let since = wakeAskedAt.map { t.date.timeIntervalSince($0) }
-                    let waking = since.map { $0 < 10 } ?? false
-                    let stuck = since.map { $0 >= 10 && $0 < 40 } ?? false
+                let waking = wakeWords == .waking, stuck = wakeWords == .stuck
+                Group {
                     GeometryReader { g in
                         let d = min(g.size.width, g.size.height)
                         VStack(spacing: d * 0.04) {
@@ -1375,6 +1396,7 @@ struct RemoteTab: View {
                 .contentShape(Circle())
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel("Wake the TV")
+            .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else if let away, !unreachable {
             TelevisionKey(away: away).transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -1444,6 +1466,9 @@ struct RemoteTab: View {
     var pad: some View {
         DPad(bare: asleep || away != nil).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
             .overlay { wake }
+            // Awake, the key's words go with it: put to sleep again within 40 s, it came back saying "Still asleep. Try
+            // again" (gate of 80d0ecb).
+            .onChange(of: wakeShown) { _, shown in if !shown { wakeTimer?.cancel(); wakeWords = nil } }
             .settledAnimation(.easeInOut(duration: 0.25), value: asleep || away != nil)
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
@@ -2923,17 +2948,8 @@ struct DiscoverColumn: View {
         // short enough to be all on screen has no door to a page of the same few cards.
         let searched = !store.query.trimmingCharacters(in: .whitespaces).isEmpty && row.title == "Results"
         let title = searched ? (kind == "movie" ? "Films" : "Shows") : row.title
-        return VStack(alignment: .leading, spacing: 0) {
-            if searched && 20 + CGFloat(row.items.count) * 124 + CGFloat(max(row.items.count - 1, 0)) * 10 <= max(paneWidth, 1) { RowTitle(title).padding(.leading, 20) }
-            else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 10) {
-                    ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: row.title == Self.continueTitle ? leadWidth : 124) }
-                }
-                .padding(.horizontal, 20)
-            }
-            .rowEdge()
-        }
+        let doorless = searched && 20 + CGFloat(row.items.count) * 124 + CGFloat(max(row.items.count - 1, 0)) * 10 <= max(paneWidth, 1)
+        return ShelfRow(row: row, title: title, doorless: doorless, width: row.title == Self.continueTitle ? leadWidth : 124).equatable()
     }
     // Stremio's home not in yet, and there was a Continue watching last time: its room is kept, so it fills in rather than
     // arriving above the films and pushing them down (r18).
@@ -3025,6 +3041,29 @@ struct DiscoverColumn: View {
         .onChange(of: store.rows, initial: true) { _, _ in built = computeRows() }
         .onChange(of: home.rows) { _, _ in built = computeRows() }
         .onChange(of: store.query) { _, _ in built = computeRows() }
+    }
+}
+// One of Watch's shelves, redrawn only when its own cards, name or size change. The column above it re-runs on every push
+// and tab change (its Binding never compares equal), and every card on the page was drawn again with it: 89 card bodies
+// and a 556 ms frame as a title page was pushed (CI 8260e0f, open upright).
+struct ShelfRow: View, Equatable {
+    let row: MediaRow
+    let title: String
+    let doorless: Bool
+    let width: CGFloat
+    static func == (a: Self, b: Self) -> Bool { a.width == b.width && a.doorless == b.doorless && a.title == b.title && a.row == b.row }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if doorless { RowTitle(title).padding(.leading, 20) }
+            else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: width) }
+                }
+                .padding(.horizontal, 20)
+            }
+            .rowEdge()
+        }
     }
 }
 // What was last flicked from this phone, newest first. One tap has it in the hand again, episode and best stream
