@@ -48,11 +48,13 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$port -tab 6
             sleep 10
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-top.png
-            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x 0.85 $x 0.1 0.15 || echo "drag failed"; sleep 1; done
+            $D "$DEVICE" drag $x 0.85 $x 0.1 0.4 || true; sleep 1
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x 0.85 $x 0.1 0.4 || echo "drag failed"; sleep 1; done
             sleep 1
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-music.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
+          $D "$DEVICE" pose open || true; sleep 6
           # Open upright (portrait), open flat (landscape), folded (outer display).
           dash dash-lyrics-off-portrait 3 0.5 9001
           dash dash-lyrics-on-portrait 3 0.5 9061
