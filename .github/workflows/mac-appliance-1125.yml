@@ -1,5 +1,6 @@
 name: Mac appliance shots (branch only)
 # Branch-only: the Dashboard tab with the Music section, in every posture. Delete at merge.
+on:
   push:
     branches: [mac-appliance-1125]
 permissions:
