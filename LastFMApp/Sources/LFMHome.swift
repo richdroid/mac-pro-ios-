@@ -58,8 +58,11 @@ struct HomeView: View {
             if let photo = ArtistPhotos.shared.plain(s.artist) { _ = await ArtStore.shared.treated(photo, .tinted(tint)) }
             else { _ = await ArtStore.shared.treated(s.art, .duotone) }
         }
-        // His figures worked out before the profile is first opened, so it opens on them (never 5,108 then 5,056).
-        .task { try? await Task.sleep(nanoseconds: 3_000_000_000); await Totals.warm() }
+        // Each hub drawn once, small and unseen, while home rests, and his figures worked out: a hub's first push spent
+        // 0.4-0.9 s resolving its view types for the first time (profile runs 10-13: swift_conformsToProtocol and the
+        // metadata of every hub under the push), a bare backdrop the whole time. Drawn into a bitmap, nothing of theirs
+        // runs; done before the tiles start turning.
+        .task { await HubWarm.run() }
     }
 
     private func order(_ key: String) -> TurnstileOut { TurnstileOut(index: Home.order(key), count: Home.count) }
@@ -78,6 +81,27 @@ struct HomeView: View {
             // turnstile starts on its first frame: out and in chained, with no bare frames between (gate on build 71).
             try? await Task.sleep(nanoseconds: UInt64(Z.leaveWait * 1_000_000_000))
             open.hub(hub, panel)
+        }
+    }
+}
+
+@MainActor enum HubWarm {
+    private static var done: Set<Hub> = []
+    static func run() async {
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        for h in [Hub.profile, .nowPlaying, .charts, .library, .discover, .history, .scrobbling] where !done.contains(h) {
+            // Only while home is at rest and on screen.
+            for _ in 0..<40 {
+                if !Store.shared.scrolling, !HomeSwipe.moving, HomeLeave.shared.chosen == nil, !NavTransit.shared.inFlight { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard !Task.isCancelled, HomeLeave.shared.chosen == nil else { return }
+            let r = ImageRenderer(content: HubView(hub: h, panel: nil).environment(\.turnstileArrived, true).frame(width: 390, height: 844))
+            r.scale = 0.05
+            _ = r.cgImage
+            done.insert(h)
+            if h == .profile { await Totals.warm() }
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
     }
 }
