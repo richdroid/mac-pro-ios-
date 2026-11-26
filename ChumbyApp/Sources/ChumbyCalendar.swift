@@ -54,7 +54,10 @@ final class CalendarWake: ObservableObject {
         let cal = Calendar.current, base = cal.startOfDay(for: Date())
         func shift(_ day: Int, _ hour: Int, _ title: String, work: Bool, lead: Int, short: String? = nil) -> PlannedWake {
             let start = cal.date(byAdding: .hour, value: day * 24 + hour, to: base) ?? base
-            return PlannedWake(key: title + "\(day)", title: title, start: start, wake: start.addingTimeInterval(TimeInterval(-lead * 60)), lead: lead, isWork: work, shortNight: short)
+            var w = PlannedWake(key: title + "\(day)", title: title, start: start, wake: start.addingTimeInterval(TimeInterval(-lead * 60)), lead: lead, isWork: work, shortNight: short)
+            // the rule's own lead, as the real planner gives it (the day page's "· usual"; the Dentist sample has a place)
+            w.ruleLead = work ? rules.workLead : rules.otherLead + rules.travelExtra
+            return w
         }
         samplePlan = [shift(1, 18, "Shift", work: true, lead: 160), shift(2, 13, "Dentist", work: false, lead: 120), shift(3, 18, "Shift", work: true, lead: 160)]
         plan = samplePlan
