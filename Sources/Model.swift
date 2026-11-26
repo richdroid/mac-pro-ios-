@@ -201,9 +201,7 @@ final class AppModel: ObservableObject {
         // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
         if UserDefaults.standard.integer(forKey: "startTab") == 9 { UserDefaults.standard.set(0, forKey: "startTab") }
-        // Settings asked for at launch (a link, a widget or the last tab used): pushed once the tab under it has drawn, as
-        // the other pages are. Pushed in init, open portrait came up all black, the tab and its bar never drawn (CI, 11-25).
-        if Self.firstTab == 9 { whenDrawn { [weak self] in self?.nav.settingsTab = 0; self?.nav.settingsOpen = true } }
+        if Self.firstTab == 9 { nav.settingsTab = 0; nav.settingsOpen = true }
         let h = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         let p = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).

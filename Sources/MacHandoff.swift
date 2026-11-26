@@ -53,9 +53,7 @@ enum MacDeepLink {
         case "macos", "updates":
             model.tab = 4
         case "settings":
-            model.tab = 0; model.history = nil; model.processes = nil
-            // Once Status has drawn (a Handoff can be what launches the app): pushed before, open portrait was all black.
-            model.whenDrawn { model.nav.settingsTab = 0; model.nav.settingsOpen = true }
+            model.tab = 0; model.history = nil; model.processes = nil; model.nav.settingsTab = 0; model.nav.settingsOpen = true
         case "console":
             model.tab = 6
         default:
