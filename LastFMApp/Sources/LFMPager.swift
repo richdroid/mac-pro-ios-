@@ -45,7 +45,8 @@ struct Panel: Identifiable {
     @ObservationIgnored private var release: (drag: CGFloat, v: CGFloat, at: Double)?
     // This touch's release has chosen its page (reset as the next touch begins).
     @ObservationIgnored private(set) var decided = false
-    func began() { startX = offset; release = nil; decided = false; samples.removeAll(keepingCapacity: true) }
+    func began() { startX = offset; startT = Date().timeIntervalSinceReferenceDate; release = nil; decided = false; samples.removeAll(keepingCapacity: true) }
+    @ObservationIgnored private var startT: Double = 0
     // Where the finger had the page over the last moments of the drag, for its own velocity: UIKit's at the lift is 0 when
     // the finger pauses before it lifts (profile runs 10 and 11: the folded flick read 0 page/s and sprang back, though
     // it moved a seventh of a page in three frames). WP7 judged a flick by the drag's speed.
@@ -57,10 +58,15 @@ struct Panel: Identifiable {
         if samples.count > 12 { samples.removeFirst(samples.count - 12) }
     }
     // Points a second over the drag's last 0.1 s (0 when not known).
+    // A whole drag shorter than 0.3 s is a flick judged by its mean speed: its moves and its lift can arrive together
+    // after a stall, with no samples in between (profile run 12: a folded flick behind 40-85 ms stalls read 0 page/s).
     func dragVelocity(at x: CGFloat) -> CGFloat {
         let now = Date().timeIntervalSinceReferenceDate
-        guard let old = samples.first(where: { now - $0.t <= 0.1 }), now - old.t > 0.012 else { return 0 }
-        return (x - old.x) / CGFloat(now - old.t)
+        if let old = samples.first(where: { now - $0.t <= 0.1 }), now - old.t > 0.012, abs(x - old.x) > 0.5 {
+            return (x - old.x) / CGFloat(now - old.t)
+        }
+        if let s = startX, startT > 0, now - startT < 0.3, now - startT > 0.008 { return (x - s) / CGFloat(now - startT) }
+        return 0
     }
     func released(slot: Int, x: CGFloat, v: CGFloat, w: CGFloat) {
         decided = true
