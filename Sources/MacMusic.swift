@@ -117,6 +117,7 @@ struct MacMusicSection: View {
                     row("Lyrics", lyricsNote, "quote.bubble")
                 }
                 .accessibilityIdentifier("switch.lyrics")
+                .id("mac-music")
                 if store.speaker != nil {
                     Toggle(isOn: Binding(get: { store.asked["speaker"] ?? (store.speaker?.connected == true) }, set: { w in Task { await store.speaker(model, w) } })) {
                         row(speakerName, speakerNote, "hifispeaker")
