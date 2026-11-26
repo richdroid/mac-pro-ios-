@@ -311,12 +311,16 @@ enum ChumbyError: LocalizedError {
     case wrongPlace
     // A save AlarmWriter turned down because it would have cost an alarm that's about to ring. Never retried on its own.
     case refused(String)
+    // The Mac's cache answered 503: its one-at-a-time queue to the Chumby was jammed for 20 s. The Mac is there and the
+    // Chumby may be fine, so it's neither "Can't reach the Mac" nor "Not answering" (chumby_remote.py Busy, 2026-11-11).
+    case busy
     var errorDescription: String? {
         switch self {
         case .message(let m), .refused(let m): return m
         case .waiting(let why): return "Waiting: \(why)."
         case .deviceDown: return ChumbyWords.notAnswering + "."
         case .wrongPlace: return "No answer"
+        case .busy: return "The Chumby is busy. Try again in a moment."
         }
     }
 }
@@ -335,9 +339,10 @@ actor ChumbyAPI {
         let (d, resp) = try await URLSession.shared.data(for: r)
         guard let h = resp as? HTTPURLResponse else { throw ChumbyError.message("No answer") }
         // The Mac answered, but says the Chumby itself isn't responding.
-        // 503 is the Mac too, saying the Chumby's queue was jammed for 20 s (a slow or busy Chumby). Counted as no answer,
-        // it switched routes and said "Can't reach the Mac" of a Mac that was answering (11-25).
-        if h.statusCode == 502 || h.statusCode == 503 { throw ChumbyError.deviceDown }
+        if h.statusCode == 502 { throw ChumbyError.deviceDown }
+        // 503 is the Mac too, saying the Chumby's queue was jammed for 20 s. Counted as no answer, it switched routes and
+        // said "Can't reach the Mac" of a Mac that was answering (11-25).
+        if h.statusCode == 503 { throw ChumbyError.busy }
         if h.statusCode == 404 { throw ChumbyError.wrongPlace }
         guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
         return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)

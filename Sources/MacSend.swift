@@ -38,7 +38,9 @@ enum MacFiles {
         case 404 where said?.contains("Tailscale") == true: return "The Mac takes files over Tailscale only. Turn Tailscale on and try again."
         case 404: return "This Mac doesn’t take files yet. Its Mac dashboard needs updating."
         case 413: return "That file is too big for the Mac to take."
-        case 401, 403: return "The Mac didn’t accept this iPhone. Open the Mac Pro app and sign in."
+        case 401: return "The Mac didn’t accept this iPhone. Open the Mac Pro app and sign in."
+        // The Tailscale door has no sign-in: its 403 is Tailscale not saying who this iPhone is (11-25).
+        case 403: return "The Mac didn’t recognise this iPhone’s Tailscale account. Try again in a moment."
         default: return said.map { $0.hasSuffix(".") ? $0 : $0 + "." } ?? "The Mac couldn’t save it (error \(code))."
         }
     }
