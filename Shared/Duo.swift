@@ -144,9 +144,15 @@ struct HoldsWhileMoving: ViewModifier {
         // the pop began and again as it ended, for a size that never changed: work on the main thread at the very moment
         // the pop should start moving.
         let hold = transit.active && transit.underFinger && box.settled ? box.rest : nil
+        // A reading's size is the page's safe area (867 x 611 open flat with insets t24 b34 r84, in a 951 x 669 window),
+        // not its whole area. Held, the page is framed at its whole area (that size plus the insets) and given the insets
+        // back as padding, the very layout it had at rest. It was framed at the safe area's size and padded by the insets
+        // again, so under the finger every page lost the side strip's width and the top and foot (84 and 58 pt open flat)
+        // and sprang back as the finger let go (Richard's recording, 2026-11-26, Upload open flat: "the sizing swiping issue").
         content
             .safeAreaPadding(hold?.insets ?? EdgeInsets())
-            .frame(width: hold?.size.width, height: hold?.size.height, alignment: .topLeading)
+            .frame(width: hold.map { $0.size.width + $0.insets.leading + $0.insets.trailing },
+                   height: hold.map { $0.size.height + $0.insets.top + $0.insets.bottom }, alignment: .topLeading)
             .ignoresSafeArea(.all, edges: hold == nil ? [] : .all)
             // The page's whole area and its safe area, as the system gives them.
             .background {
@@ -167,7 +173,9 @@ struct HoldsWhileMoving: ViewModifier {
             // Pushed in mid-move, it had no reading at rest yet: the last one counts once the move is over.
             .onChange(of: transit.active) { _, now in
                 if !now, box.shown, let l = box.latest { box.rest = l; box.settled = true; box.turned = false }
-                SwipeLog.note("\(name) transit \(now ? "began" : "ended")")
+                let held = now && transit.underFinger && box.settled ? box.rest.map { r in
+                    " held \(Int(r.size.width + r.insets.leading + r.insets.trailing))x\(Int(r.size.height + r.insets.top + r.insets.bottom)) (safe area \(Int(r.size.width))x\(Int(r.size.height)))" } ?? "" : ""
+                SwipeLog.note("\(name) transit \(now ? "began" : "ended")\(held)")
             }
             .onAppear {
                 box.shown = true
@@ -535,6 +543,179 @@ struct RailItem: Identifiable {
         #else
         return asset.map { Image($0) } ?? Image(systemName: symbol ?? "circle")
         #endif
+    }
+}
+
+// Room a page keeps at its foot for the tab bar DuoTabs draws there open upright (0 where the tabs are down the side).
+private struct TabBarRoomKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues { var tabBarRoom: CGFloat { get { self[TabBarRoomKey.self] } set { self[TabBarRoomKey.self] = newValue } } }
+// And the column the capsule down the side needs from the display's trailing edge (0 open upright).
+private struct TabRailColumnKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues { var tabRailColumn: CGFloat { get { self[TabRailColumnKey.self] } set { self[TabRailColumnKey.self] = newValue } } }
+// Each page takes the bar's room itself, a tab's root and every page pushed on it: room given from outside a navigation
+// stack never reaches the pages UIKit hosts inside it (designer gate 1, 2026-11-20: a list's last row under the bar).
+// Down the side the system's strip is the room (the capsule stands inside it); only were the strip ever narrower than the
+// capsule's column would a page take the difference, never the strip twice.
+struct TabBarRoom: ViewModifier {
+    @Environment(\.tabBarRoom) private var room
+    @Environment(\.tabRailColumn) private var column
+    @State private var has: CGFloat = 0
+    func body(content: Content) -> some View {
+        content
+            .safeAreaPadding(.trailing, column > has ? column - has : 0)
+            .safeAreaPadding(.bottom, room)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
+    }
+}
+extension View { func tabBarRoom() -> some View { modifier(TabBarRoom()) } }
+
+// Every tab one tap away in every posture, never "More" (Richard, 2026-11-19 and 2026-11-26: "i expressly told u to fix
+// these ... the side bar not encompassing everything"). The system's TabView can't promise that on his phone: its side
+// strip holds five slots there once the camera or the island (a recording, a Live Activity) takes the strip's top, and
+// six only in the build's simulator, which has neither; and once it has overflowed (opened folded) it kept "•••" after
+// unfolding. Hiding only its bar isn't safe either: UIKit still files the fifth tab on into More's own navigation stack.
+// So the tab bar is drawn here, where iOS draws its own and as it draws it, holding every tab: down the side strip
+// (folded, open flat, folded on its side), on the clock's and the gear's centre line at the strip's foot, a Liquid Glass
+// capsule of icons; along the foot open upright, where iOS keeps a horizontal bar. Everything else stays the system's:
+// each tab is its own NavigationStack with the system Back, edge swipe and toolbar placed by iOS (HIG, iPhone Duo,
+// "Vertical controls"). Tabs once shown are kept, as TabView keeps them, so coming back finds each as it was left.
+// Tapping the tab in front hands its value back, as TabView does, so TabReset takes it to its start.
+struct DuoTabs<Content: View>: View {
+    @Binding var selection: Int
+    let items: [RailItem]
+    let badge: (Int) -> Int
+    @ViewBuilder let content: (Int) -> Content
+    @State private var shown: Set<Int> = []
+    // The system's side strip: the trailing safe area the status bar and the bar items take where iOS puts them on the
+    // side (84 pt open flat, about as much folded); none open upright, where its bars run across.
+    @State private var strip: CGFloat = 0
+    @State private var keyboardUp = false
+    @Environment(\.colorScheme) private var scheme
+    private var side: Bool { strip > 30 }
+    // The system's own strip, measured on its shots (CI 6d22d62 open flat and folded, his recording of 317): its icons on
+    // the clock's and gear's centre line 48 pt in from the display's edge, a capsule 26 pt clear of the foot, an icon
+    // every 49 to 52 pt; each cell the HIG's least tap target, 44 pt wide.
+    static var cell: CGFloat { 44 }
+    static var cellHeight: CGFloat { 49 }
+    static var inset: CGFloat { 3 }
+    static var centre: CGFloat { 48 }
+    static var foot: CGFloat { 26 }
+    static var width: CGFloat { cell + inset * 2 }
+    // Open upright: the system's floating bar, icons over their names.
+    static var barHeight: CGFloat { 54 }
+    static var barInset: CGFloat { 4 }
+    var body: some View {
+        ZStack {
+            ForEach(items) { it in
+                let front = it.value == selection
+                if front || shown.contains(it.value) {
+                    content(it.value)
+                        .opacity(front ? 1 : 0)
+                        .allowsHitTesting(front)
+                        .accessibilityHidden(!front)
+                        .zIndex(front ? 1 : 0)
+                }
+            }
+        }
+        // Down the side the strip already keeps every page clear of the capsule (it stands inside the strip's 84 pt);
+        // along the foot each page keeps the bar's room, none with the keyboard up (the bar is behind it then).
+        .environment(\.tabBarRoom, side || keyboardUp ? 0 : Self.barHeight + Self.barInset * 2 + 6)
+        .environment(\.tabRailColumn, side ? Self.centre + Self.width / 2 + 10 : 0)
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { strip = $0 }
+        #if canImport(UIKit)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+            let screen = UIScreen.main.bounds.height
+            keyboardUp = f.height > 120 && f.minY < screen - 120
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        #endif
+        .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
+        .overlay(alignment: .bottomTrailing) {
+            if side {
+                // Behind the keyboard when it's up, as the system's stays at its foot: never riding up into the clock.
+                rail.padding(.trailing, Self.centre - Self.width / 2).padding(.bottom, Self.foot)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .ignoresSafeArea(.all, edges: [.trailing, .bottom])
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !side, !keyboardUp {
+                // Under the bar the page fades into the ground, the system's soft edge, so no card's words read through
+                // the glass (Richard, 2026-11-21).
+                let ground = scheme == .dark ? Color.black : Color.white
+                LinearGradient(stops: [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: 0.4), .init(color: ground, location: 1)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Self.barHeight + Self.barInset * 2 + 52)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .ignoresSafeArea(.container, edges: .bottom)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !side {
+                bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .ignoresSafeArea(.keyboard)
+            }
+        }
+    }
+    @ViewBuilder private func badgeView(_ value: Int) -> some View {
+        let n = badge(value)
+        if n > 0 {
+            Text("\(n)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+                .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
+                .background(Color.red, in: Capsule())
+        }
+    }
+    private var rail: some View {
+        VStack(spacing: 0) {
+            ForEach(items) { it in
+                let front = it.value == selection
+                Button { selection = it.value } label: {
+                    it.icon
+                        .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                        .frame(width: Self.cell, height: Self.cellHeight)
+                        // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
+                        .background { Capsule().fill(scheme == .dark ? Color.black.opacity(0.38) : Color.primary.opacity(0.08)).opacity(front ? 1 : 0) }
+                        .overlay(alignment: .topTrailing) { badgeView(it.value).offset(x: 2, y: 1) }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(it.title)
+                .accessibilityIdentifier("tab." + it.title)
+                .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
+                .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        .padding(Self.inset)
+        .glassEffect(.regular.interactive(), in: Capsule())
+    }
+    private var bar: some View {
+        HStack(spacing: 0) {
+            ForEach(items) { it in
+                let front = it.value == selection
+                Button { selection = it.value } label: {
+                    VStack(spacing: 2) {
+                        it.icon.resizable().scaledToFit().frame(width: 24, height: 22)
+                        Text(it.title).font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+                    }
+                    .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                    // Each cell at least its name and 8 pt of air either side, the rest shared (designer gate, 2026-11-20).
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, minHeight: Self.barHeight)
+                    .background { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)).opacity(front ? 1 : 0) }
+                    .overlay(alignment: .top) { badgeView(it.value).offset(x: 14, y: 3) }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(it.title)
+                .accessibilityIdentifier("tab." + it.title)
+                .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
+                .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        .padding(Self.barInset)
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 
