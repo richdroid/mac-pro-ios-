@@ -17,7 +17,7 @@ concurrency:
 jobs:
   check:
     runs-on: xcode-27
-    timeout-minutes: 110
+    timeout-minutes: 130
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +41,7 @@ jobs:
           done
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 72
+        timeout-minutes: 92
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -91,7 +91,8 @@ jobs:
             sleep 2; shot $d $n-3partial-after
             echo "$n swipe at $(date +%s.%N | cut -c1-14)"
             $D "$DEVICE" drag 0.01 0.5 0.92 0.5 2.6 & DR=$!
-            sleep 1.7; shot $d $n-4swipe-mid; wait $DR
+            # The tool finds the display before the finger lands (about a second), so stills at three moments.
+            sleep 1.9; shot $d $n-4swipe-mid1; sleep 0.6; shot $d $n-4swipe-mid2; sleep 0.6; shot $d $n-4swipe-mid3; wait $DR
             sleep 2.5; shot $d $n-5swipe-after
             swipelog $b $n
             xcrun simctl terminate "$DEVICE" $b || true
@@ -110,7 +111,7 @@ jobs:
           # Status's detail pages, each pushed over Status and taken back (display, suffix).
           statuspages() {
             local d=$1 x=$2
-            for h in cpu memory download upload disk; do navfilm macpro-back-$h$x $d $MAC -tab 0 -openHistory $h; done
+            for h in cpu mem rx tx disk; do navfilm macpro-back-$h$x $d $MAC -tab 0 -openHistory $h; done
             navfilm macpro-back-processes$x $d $MAC -tab 0 -openProcesses cpu
             navfilm macpro-back-fans$x $d $MAC -tab 0 -pose fans
             navfilm macpro-back-storage$x $d $MAC -tab 0 -pose storage
@@ -120,27 +121,28 @@ jobs:
             local d=$1 x=$2
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/macpro-pushpop$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) -swipeLog YES -reopen YES -tab 0 -openHistory upload > /dev/null
+            xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) -swipeLog YES -reopen YES -tab 0 -openHistory tx > /dev/null
             sleep 13.2; shot $d macpro-pushpop$x-pushmid
             sleep 10
             swipelog $MAC macpro-pushpop$x
             xcrun simctl terminate "$DEVICE" $MAC || true
             kill -INT $REC; wait $REC
           }
-          # The island taken (the TV app's own Live Activity, left running in the background), then the Mac Pro's tabs.
+          # The island taken (the Chumby app's alarm Live Activity, which the simulator shows at the strip's top, as his
+          # recording's island was taken), then the Mac Pro's tabs.
           islandshots() {
             local d=$1 x=$2
-            xcrun simctl launch "$DEVICE" $TV -address $M/real -tab 2 -pose island > /dev/null
-            sleep 12
+            xcrun simctl launch "$DEVICE" $CH -address $(addr $CH) -tab 0 > /dev/null
+            sleep 9
+            xcrun simctl terminate "$DEVICE" $CH || true
             for T in 0 6; do
               xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) -tab $T > /dev/null
               sleep 7; shot $d macpro-island-tab$T$x
               xcrun simctl terminate "$DEVICE" $MAC || true
             done
-            xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) -tab 0 -openHistory upload > /dev/null
-            sleep 8; shot $d macpro-island-upload$x
+            xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) -tab 0 -openHistory tx > /dev/null
+            sleep 11; shot $d macpro-island-upload$x
             xcrun simctl terminate "$DEVICE" $MAC || true
-            xcrun simctl terminate "$DEVICE" $TV || true
           }
           posture() {
             local d=$1 x=$2
@@ -152,15 +154,15 @@ jobs:
             islandshots $d $x
             tabshots $CH $d $x "0 1 2 3 4"
             tabshots $TV $d $x "3 0 6"
-            navfilm chumby-back$x $d $CH -tab 2 -pose calsettings
-            navfilm tv-back$x $d $TV -tab 9 -pose tvsettings
           }
           date
           FALLBACK="0.895 0.292"; posture 1 -folded
-          # Folded and turned on its side.
+          # Folded and turned on its side, each way (the strip stays with the camera's edge).
           $D "$DEVICE" rotate 3 || true; sleep 5
-          tabshots $MAC 1 -foldedside "0 6"
-          tabshots $CH 1 -foldedside "0"
+          tabshots $MAC 1 -foldedside3 "0 6"
+          tabshots $CH 1 -foldedside3 "0"
+          $D "$DEVICE" rotate 4 || true; sleep 5
+          tabshots $MAC 1 -foldedside4 "0 6"
           $D "$DEVICE" rotate 1 || true; sleep 5
           date
           # Folded on Dashboard, opened flat, turned upright, back flat, closed: the bar moves to where iOS puts it and
@@ -179,6 +181,12 @@ jobs:
           date
           $D "$DEVICE" rotate 3 || true; sleep 5
           FALLBACK="0.948 0.222"; posture 3 -flat
+          # Chumby and Mint Remote share the hold: a page swiped and tapped back open flat.
+          navfilm chumby-back-flat 3 $CH -tab 2 -pose calsettings
+          navfilm tv-back-flat 3 $TV -tab 9 -pose tvsettings
+          # The same two Mac Pro pages with the hold off (-noHold YES), as the system alone moves them, to compare.
+          navfilm macpro-nohold-tx-flat 3 $MAC -tab 0 -openHistory tx -noHold YES
+          navfilm macpro-nohold-processes-flat 3 $MAC -tab 0 -openProcesses cpu -noHold YES
           # A shorter window, as a taller island or status leaves: every tab still in the bar.
           tabshots $MAC 3 -flat-859x604 "0 6" -windowSize 859x604
           date

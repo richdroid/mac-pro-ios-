@@ -149,10 +149,17 @@ struct HoldsWhileMoving: ViewModifier {
         // back as padding, the very layout it had at rest. It was framed at the safe area's size and padded by the insets
         // again, so under the finger every page lost the side strip's width and the top and foot (84 and 58 pt open flat)
         // and sprang back as the finger let go (Richard's recording, 2026-11-26, Upload open flat: "the sizing swiping issue").
+        // Pinned to the top leading corner of that whole area: a fixed frame bigger than the safe area it was offered was
+        // centred in it before the safe area was let go, which moved the page 42 pt left and 17 pt up the moment the finger
+        // landed, folded (CI f7ab4fa, Processes). The flexible frame fills the whole area once the safe area is ignored,
+        // and puts the page at its corner. At rest every frame is nil: nothing changes.
+        let w: CGFloat? = hold.map { $0.size.width + $0.insets.leading + $0.insets.trailing }
+        let h: CGFloat? = hold.map { $0.size.height + $0.insets.top + $0.insets.bottom }
+        let fill: CGFloat? = hold == nil ? nil : .infinity
         content
             .safeAreaPadding(hold?.insets ?? EdgeInsets())
-            .frame(width: hold.map { $0.size.width + $0.insets.leading + $0.insets.trailing },
-                   height: hold.map { $0.size.height + $0.insets.top + $0.insets.bottom }, alignment: .topLeading)
+            .frame(width: w, height: h, alignment: .topLeading)
+            .frame(maxWidth: fill, maxHeight: fill, alignment: .topLeading)
             .ignoresSafeArea(.all, edges: hold == nil ? [] : .all)
             // The page's whole area and its safe area, as the system gives them.
             .background {
@@ -549,9 +556,13 @@ struct RailItem: Identifiable {
 // Room a page keeps at its foot for the tab bar DuoTabs draws there open upright (0 where the tabs are down the side).
 private struct TabBarRoomKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 extension EnvironmentValues { var tabBarRoom: CGFloat { get { self[TabBarRoomKey.self] } set { self[TabBarRoomKey.self] = newValue } } }
-// And the column the capsule down the side needs from the display's trailing edge (0 open upright).
+// And the column the capsule down the side needs from the display's edge (0 open upright), and which edge: the trailing
+// one, or the leading one where iOS put its strip there (folded and turned on its side the other way, the strip stays with
+// the camera's edge; HIG, "controls on the vertical axis stay aligned with the hardware").
 private struct TabRailColumnKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 extension EnvironmentValues { var tabRailColumn: CGFloat { get { self[TabRailColumnKey.self] } set { self[TabRailColumnKey.self] = newValue } } }
+private struct TabRailLeadingKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var tabRailLeading: Bool { get { self[TabRailLeadingKey.self] } set { self[TabRailLeadingKey.self] = newValue } } }
 // Each page takes the bar's room itself, a tab's root and every page pushed on it: room given from outside a navigation
 // stack never reaches the pages UIKit hosts inside it (designer gate 1, 2026-11-20: a list's last row under the bar).
 // Down the side the system's strip is the room (the capsule stands inside it); only were the strip ever narrower than the
@@ -559,12 +570,13 @@ extension EnvironmentValues { var tabRailColumn: CGFloat { get { self[TabRailCol
 struct TabBarRoom: ViewModifier {
     @Environment(\.tabBarRoom) private var room
     @Environment(\.tabRailColumn) private var column
+    @Environment(\.tabRailLeading) private var leading
     @State private var has: CGFloat = 0
     func body(content: Content) -> some View {
         content
-            .safeAreaPadding(.trailing, column > has ? column - has : 0)
+            .safeAreaPadding(leading ? .leading : .trailing, column > has ? column - has : 0)
             .safeAreaPadding(.bottom, room)
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { has = $0 }
+            .onGeometryChange(for: CGFloat.self) { leading ? $0.safeAreaInsets.leading : $0.safeAreaInsets.trailing } action: { has = $0 }
     }
 }
 extension View { func tabBarRoom() -> some View { modifier(TabBarRoom()) } }
@@ -586,12 +598,17 @@ struct DuoTabs<Content: View>: View {
     let badge: (Int) -> Int
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
-    // The system's side strip: the trailing safe area the status bar and the bar items take where iOS puts them on the
-    // side (84 pt open flat, about as much folded); none open upright, where its bars run across.
-    @State private var strip: CGFloat = 0
+    // The system's side strip: the safe area the status bar and the bar items take where iOS puts them on the side (84 pt
+    // open flat, about as much folded), on the trailing edge, or the leading one folded and turned on its side with the
+    // camera there; none open upright, where its bars run across.
+    @State private var strip = Strip()
+    struct Strip: Equatable { var leading: CGFloat = 0; var trailing: CGFloat = 0 }
     @State private var keyboardUp = false
     @Environment(\.colorScheme) private var scheme
-    private var side: Bool { strip > 30 }
+    private var onLeading: Bool { strip.leading > 30 && strip.leading > strip.trailing }
+    private var side: Bool { strip.trailing > 30 || onLeading }
+    private var footRoom: CGFloat { side || keyboardUp ? 0 : Self.barHeight + Self.barInset * 2 + 6 }
+    private var railColumn: CGFloat { side ? Self.centre + Self.width / 2 + 10 : 0 }
     // The system's own strip, measured on its shots (CI 6d22d62 open flat and folded, his recording of 317): its icons on
     // the clock's and gear's centre line 48 pt in from the display's edge, a capsule 26 pt clear of the foot, an icon
     // every 49 to 52 pt; each cell the HIG's least tap target, 44 pt wide.
@@ -619,9 +636,10 @@ struct DuoTabs<Content: View>: View {
         }
         // Down the side the strip already keeps every page clear of the capsule (it stands inside the strip's 84 pt);
         // along the foot each page keeps the bar's room, none with the keyboard up (the bar is behind it then).
-        .environment(\.tabBarRoom, side || keyboardUp ? 0 : Self.barHeight + Self.barInset * 2 + 6)
-        .environment(\.tabRailColumn, side ? Self.centre + Self.width / 2 + 10 : 0)
-        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { strip = $0 }
+        .environment(\.tabBarRoom, footRoom)
+        .environment(\.tabRailColumn, railColumn)
+        .environment(\.tabRailLeading, onLeading)
+        .onGeometryChange(for: Strip.self) { Strip(leading: $0.safeAreaInsets.leading, trailing: $0.safeAreaInsets.trailing) } action: { strip = $0 }
         #if canImport(UIKit)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
             guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
@@ -631,33 +649,33 @@ struct DuoTabs<Content: View>: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         #endif
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
-        .overlay(alignment: .bottomTrailing) {
-            if side {
-                // Behind the keyboard when it's up, as the system's stays at its foot: never riding up into the clock.
-                rail.padding(.trailing, Self.centre - Self.width / 2).padding(.bottom, Self.foot)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .ignoresSafeArea(.all, edges: [.trailing, .bottom])
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if !side, !keyboardUp {
-                // Under the bar the page fades into the ground, the system's soft edge, so no card's words read through
-                // the glass (Richard, 2026-11-21).
-                let ground = scheme == .dark ? Color.black : Color.white
-                LinearGradient(stops: [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: 0.4), .init(color: ground, location: 1)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: Self.barHeight + Self.barInset * 2 + 52)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .ignoresSafeArea(.container, edges: .bottom)
-                    .allowsHitTesting(false)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if !side {
-                bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .ignoresSafeArea(.keyboard)
-            }
-        }
+        .overlay { if side { sideRail } }
+        .overlay(alignment: .bottom) { if !side, !keyboardUp { footFade } }
+        .overlay(alignment: .bottom) { if !side { footBar } }
+    }
+    // Under the bar the page fades into the ground, the system's soft edge, so no card's words read through the glass
+    // (Richard, 2026-11-21).
+    private var footFade: some View {
+        let ground: Color = scheme == .dark ? .black : .white
+        let stops: [Gradient.Stop] = [.init(color: ground.opacity(0), location: 0), .init(color: ground, location: 0.4), .init(color: ground, location: 1)]
+        return LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
+            .frame(height: Self.barHeight + Self.barInset * 2 + 52)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .ignoresSafeArea(.container, edges: .bottom)
+            .allowsHitTesting(false)
+    }
+    private var footBar: some View {
+        bar.frame(maxWidth: 470).padding(.horizontal, 8).padding(.bottom, 2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .ignoresSafeArea(.keyboard)
+    }
+    // Behind the keyboard when it's up, as the system's stays at its foot: never riding up into the clock.
+    private var sideRail: some View {
+        let edge: Edge.Set = onLeading ? .leading : .trailing
+        let corner: Alignment = onLeading ? .bottomLeading : .bottomTrailing
+        return rail.padding(edge, Self.centre - Self.width / 2).padding(.bottom, Self.foot)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner)
+            .ignoresSafeArea(.all, edges: [edge, .bottom])
     }
     @ViewBuilder private func badgeView(_ value: Int) -> some View {
         let n = badge(value)
