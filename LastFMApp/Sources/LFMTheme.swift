@@ -246,9 +246,14 @@ struct NowBackdrop: View {
                     TreatedArt(s.art, .duotone)
                         .frame(width: side, height: side)
                         .clipped()
-                        .offset(x: g.width - side * 0.85, y: g.height - side)
-                    LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.22), location: 0.5),
-                                           .init(color: .black.opacity(0.6), location: 1)], startPoint: .top, endPoint: .bottom)
+                        // Never short of the left edge: open flat the screen is wider than tall and 0.85 of the side
+                        // left a black strip down the left pane.
+                        .offset(x: min(0, g.width - side * 0.85), y: g.height - side)
+                    // Darker down the lower half, where the page's figures sit over the giant capitals and the cover's
+                    // own lettering (run 64 shots: "Friday" over "ENDLESS" over the cover's title).
+                    LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.22), location: 0.42),
+                                           .init(color: .black.opacity(0.5), location: 0.68), .init(color: .black.opacity(0.7), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
                     // The giant capitals in a band at the foot, clear of the cover above (run 61 gate).
                     VStack(alignment: .leading, spacing: -24) {
                         Text(s.artist).font(.zuneCaps(size: 96, .bold))
@@ -256,7 +261,7 @@ struct NowBackdrop: View {
                     }
                     .textCase(.uppercase).lineLimit(1).fixedSize()
                     // Quieter than the type over it: open upright the page's "about" lay over them and was hard to read (run 63 gate).
-                    .foregroundStyle(vivid.mix(with: .white, by: 0.5).opacity(0.3))
+                    .foregroundStyle(vivid.mix(with: .white, by: 0.5).opacity(0.26))
                     .padding(.leading, S.margin - 4)
                     .offset(y: g.height - (s.album.isEmpty ? 1 : 2) * 92 - 60)
                 }
