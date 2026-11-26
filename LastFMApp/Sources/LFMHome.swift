@@ -179,8 +179,9 @@ private struct HomePanorama: View {
                 .padding(.leading, S.margin - 2)
                 .modifier(TurnstileOut(index: Home.order(key), count: Home.count))
                 .accessibilityAddTraits(.isHeader)
+            let body = content()
             WPScroll {
-                content()
+                body
                     .padding(.leading, S.margin)
                     .padding(.bottom, max(S.section, 34))
                     .frame(width: w, alignment: .topLeading)

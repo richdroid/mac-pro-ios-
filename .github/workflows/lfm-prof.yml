@@ -66,6 +66,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
+          # Nothing built, nothing filmed: the last good run's files stay up (run 7 put empty ones over them).
+          [ -d build-sim/Build/Products/Release-iphonesimulator/LastFM.app ] || { echo "no build: nothing published"; exit 0; }
           gh release view lastfm-prof >/dev/null 2>&1 || gh release create lastfm-prof --prerelease --title "Rotation profile" --notes "Rotation's motions filmed (branch lastfm-prof)." --target lastfm-prof
           for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > dist/hitches.txt
           echo "$GITHUB_SHA run $GITHUB_RUN_NUMBER" > status.txt
