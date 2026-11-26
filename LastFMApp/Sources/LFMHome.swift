@@ -39,7 +39,7 @@ struct HomeView: View {
         }
         .background { if pane { Backdrop(ref: store.shown.flatMap { ArtistPhotos.shared.photo($0.artist) } ?? store.shown?.art) } else { Color.black.ignoresSafeArea() } }
         .toolbarBackground(.hidden, for: .navigationBar)
-        .onAppear { TileClock.shared.start() }
+        .onAppear { TileClock.shared.start(); HomeSwipe.moving = false; TouchTravel.swiped = false }
         // Back on home finds it as it was: everything flat again (reset once the hub has covered it).
         .onDisappear {
             TileClock.shared.stop()
@@ -48,6 +48,16 @@ struct HomeView: View {
         .task(id: store.shown?.id) { if let s = store.shown { NowStats.shared.load(s, full: false) } }
         // What the rediscover tile shows, worked out off the main thread once the screen has settled.
         .task { try? await Task.sleep(nanoseconds: 2_500_000_000); RediscoverModel.shared.appear() }
+        // The hubs prewarmed once home is at rest: the backdrops a hub and now playing open on, baked for the song shown,
+        // so a push's first frame never waits on them (gate on build 71: bare frames after a tile tap).
+        .task(id: store.shown?.id) {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let s = store.shown else { return }
+            _ = await ArtStore.shared.treated(s.art, .muted)
+            let tint = (ArtStore.shared.palette(s.art) ?? Palette.from(name: s.art.artist + s.art.album)).vivid
+            if let photo = ArtistPhotos.shared.plain(s.artist) { _ = await ArtStore.shared.treated(photo, .tinted(tint)) }
+            else { _ = await ArtStore.shared.treated(s.art, .duotone) }
+        }
     }
 
     private func order(_ key: String) -> TurnstileOut { TurnstileOut(index: Home.order(key), count: Home.count) }
@@ -56,15 +66,22 @@ struct HomeView: View {
     // its own turnstile brings it in.
     private func go(_ key: String, _ hub: Hub, _ panel: Int?) {
         guard HomeLeave.shared.chosen == nil else { return }
+        // A swipe begun on a tile or word, or one let go while the panorama still moves, is never a tap (WP7; gate on
+        // build 71: a quick flick across the menu open flat opened History).
+        if TouchTravel.swiped || HomeSwipe.moving { TouchTravel.swiped = false; return }
         // Read by the turnstiles alone: the tiles and words under them aren't worked out again as they leave.
         HomeLeave.shared.chosen = Home.order(key)
         Task { @MainActor in
-            // Every part gone (the last starts at 0.15 s and swings 0.25 s), then the hub.
-            try? await Task.sleep(nanoseconds: 420_000_000)
+            // The parts all but gone (the last starts at 0.06 s and swings 0.25 s, ease in), then the hub, whose own
+            // turnstile starts on its first frame: out and in chained, with no bare frames between (gate on build 71).
+            try? await Task.sleep(nanoseconds: UInt64(Z.leaveWait * 1_000_000_000))
             open.hub(hub, panel)
         }
     }
 }
+
+// The panorama between a finger's touch and its rest (the landing included): a tap let go then is never an opening.
+@MainActor enum HomeSwipe { static var moving = false }
 
 // The order things leave home in (top to bottom, left to right), for the turnstile out.
 enum Home {
@@ -132,21 +149,28 @@ private struct HomePanorama: View {
                             }
                         }
                         // WP7's panorama stops hard at both ends.
-                        .background(alignment: .topLeading) { NoBounce(); FastSettle() }
+                        .background(alignment: .topLeading) { NoBounce(); FastSettle(lander: motion.lander) }
                         .padding(.leading, side.leading)
                         // Room after the last section so it, too, rests at the left margin.
                         .padding(.trailing, pw - sec + side.trailing)
                         .scrollTargetLayout()
                     }
-                    .scrollTargetBehavior(WPPaging(width: sec, count: count, release: { motion.x }, chosen: { motion.target = $0 }))
+                    .scrollTargetBehavior(WPPaging(width: sec, count: count, motion: motion))
                     .scrollPosition($pos)
                     .scrollIndicators(.hidden)
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in motion.x = x }
+                    // Let go: the section chosen (WPPaging) is reached by the lander in 0.35 s, the tick as it starts.
                     .onScrollPhaseChange { old, p in
-                        motion.swiped(old, p, at: Int((motion.x / max(sec, 1)).rounded()))
-                        Store.shared.scrolling = p != .idle
-                        if p == .decelerating, let t = motion.target { motion.target = nil; if t != rest.section { rest.section = t; motion.landed += 1 } }
-                        if p == .idle { rest.section = Int((motion.x / max(sec, 1)).rounded()) }
+                        motion.phase = p
+                        if old == .idle, p != .idle { motion.began(); Store.shared.scrolling = true; HomeSwipe.moving = true }
+                        if p == .interacting { motion.lander.stop() }
+                        guard p == .idle else { return }
+                        if let t = motion.target {
+                            motion.target = nil
+                            arrive(max(0, min(count - 1, t)), sec)
+                        } else if !motion.lander.active {
+                            settle(sec, count)
+                        }
                     }
                     .frame(width: W, height: H - sectionsTop)
                     .offset(y: sectionsTop)
@@ -169,6 +193,24 @@ private struct HomePanorama: View {
             }
             .ignoresSafeArea(.container, edges: .all)
         }
+    }
+
+    private func arrive(_ t: Int, _ sec: CGFloat) {
+        if t != rest.section { motion.landed += 1 }
+        rest.section = t
+        let x = CGFloat(t) * sec
+        if !motion.lander.land(to: x, done: { settle(sec, 4) }) {
+            withAnimation(Z.easeOut(0.35)) { pos.scrollTo(x: x) } completion: { settle(sec, 4) }
+        }
+    }
+    private func settle(_ sec: CGFloat, _ count: Int) {
+        let x = motion.offset
+        let r = max(0, min(count - 1, Int((x / max(sec, 1)).rounded())))
+        if abs(x - CGFloat(r) * sec) > 1, motion.lander.land(to: CGFloat(r) * sec, done: { settle(sec, count) }) { return }
+        motion.rested(w: sec, slots: count)
+        rest.section = r
+        Store.shared.scrolling = false
+        HomeSwipe.moving = false
     }
 
     // A section: its name (WP7's panorama header, Semilight 42.667 px, lowercase), then its content, which scrolls on its

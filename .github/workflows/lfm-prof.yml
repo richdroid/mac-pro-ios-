@@ -51,12 +51,22 @@ jobs:
           calibrate portrait 1
           films_scroll "" 1
           films_all "" 1
+          # Now playing's first side swipe sprang back once (gate on build 71): filmed twice more, each land logged with
+          # its drag and release velocity.
+          for r in 2 3; do
+            Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-now-again$r 1 24 -hub nowPlaying
+          done
           upright
           calibrate portrait 3
           films_scroll "-portrait" 3
+          # The push from a tile (turnstile out, hub in) and the profile's wrap in this posture too.
+          STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2" film home-tap-portrait 3 14 -hub home
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap-portrait 3 22 -hub profile
           flat
           calibrate landscape 3
           films_scroll "-open" 3
+          STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2" film home-tap-open 3 14 -hub home
+          Y=0.6 X=0.72 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap-open 3 22 -hub profile
           xcrun simctl shutdown "$DEVICE"
       - name: Publish
         if: always()
@@ -71,6 +81,9 @@ jobs:
           echo "$GITHUB_SHA run $GITHUB_RUN_NUMBER" > status.txt
           # Where every swipe landed, and any posture whose touches never calibrated: read with the status.
           cat dist/lands.txt >> status.txt 2>/dev/null
+          # Every landing with its drag, release velocity and time from release to rest (ms).
+          for f in dist/hitches-*.txt; do [ -f "$f" ] || continue; n=$(basename "$f" .txt | sed 's/^hitches-//'); grep -o 'land .*' "$f" | sed "s/^/$n /"; done > dist/settles.txt
+          cat dist/settles.txt >> status.txt 2>/dev/null
           # The stalls' stacks named against this build (LFMStalls.swift samples, atos for the app's frames).
           APPD=build-sim/Build/Products/Release-iphonesimulator/LastFM.app
           ls dist/stalls-*.txt 2>/dev/null | grep -v -- -before > /tmp/sl.txt

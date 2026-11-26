@@ -50,7 +50,10 @@ struct Totals: View {
     private var store: Store { Store.shared }
     // Once all of his history is on the phone, its own counts: the same ones the library and every page say, never
     // Last.fm's a little apart from them (review 2026-11-14, item 23).
-    @State private var own: (artists: Int, albums: Int, tracks: Int)?
+    // Kept across the views that show it, so a page built afresh opens on the same figures and never re-counts from
+    // Last.fm's (gate on build 71: tracks 5,108 then 5,056 after a wrap).
+    @MainActor private static var kept: (artists: Int, albums: Int, tracks: Int)?
+    @State private var own: (artists: Int, albums: Int, tracks: Int)? = Totals.kept
     var body: some View {
         let p = store.profile
         VStack(alignment: .leading, spacing: S.inner) {
@@ -72,9 +75,9 @@ struct Totals: View {
             }
         }
         .task(id: HistorySync.shared.complete) {
-            guard HistorySync.shared.complete else { own = nil; return }
+            guard HistorySync.shared.complete else { own = nil; Totals.kept = nil; return }
             let c = await HistoryDB.reader.distinct(from: 0, to: Int(Int32.max))
-            if c.artists > 0 { own = c }
+            if c.artists > 0 { Totals.kept = c; if own.map({ $0 != c }) ?? true { own = c } }
         }
     }
 }

@@ -26,9 +26,12 @@ extension Z {
     static func easeOut(_ d: Double = 0.35) -> Animation { .timingCurve(0.16, 1, 0.3, 1, duration: d) }
     static func easeIn(_ d: Double = 0.25) -> Animation { .timingCurve(0.7, 0, 0.84, 0, duration: d) }
     static let feather = 0.05
-    // Leaving is quicker than arriving: 20 ms apart, so the whole menu is gone in 0.4 s before the hub is pushed.
-    // How long home's turnstile out spreads its parts' starts over, first to last (the tapped one).
-    static let leaveSpread = 0.15
+    // How long home's turnstile out spreads its parts' starts over, first to last (the tapped one). 0.06 s, so the
+    // tapped part is gone 0.31 s after the tap and the hub is pushed then (gate on build 71: 420 ms of wait and a bare
+    // backdrop before the hub turned in).
+    static let leaveSpread = 0.06
+    // Home waits this long after a tap before the hub is pushed: the tapped part's swing (0.25 s, ease in) all but over.
+    static let leaveWait = 0.3
 
     #if canImport(UIKit)
     static func uiFont(_ size: CGFloat, weight: CGFloat) -> UIFont {
@@ -113,8 +116,11 @@ struct TurnstileIn: ViewModifier {
     @State private var shown = false
     @Environment(\.accessibilityReduceMotion) private var still
     @Environment(\.turnstileArrived) private var arrived
+    @Environment(\.turnstileUntil) private var until
     func body(content: Content) -> some View {
-        let on = shown || still || arrived
+        // Made after its page's arrival (a pivot page built at rest, a lazy row scrolled to, the page a wrap lands on): it is
+        // simply there. The entrance plays once per arrival (gate on build 71: a wrap flick's page turned in again).
+        let on = shown || still || arrived || Date() > until
         // At rest the turn is exactly nothing (no angle, no perspective): a projection left on a resting page made
         // every page a 3D layer, and home drew at 12-29 fps under the Back drag (gate 2b, item 3).
         // No fade: WP7 cuts opacity in at 0.01 s, and a page held at 0 through a busy first frame showed as a blank page
@@ -122,7 +128,7 @@ struct TurnstileIn: ViewModifier {
         content
             .rotation3DEffect(.degrees(on ? 0 : -80), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: on ? 0 : 0.55)
             .onAppear {
-                guard !shown else { return }
+                guard !shown, Date() <= until else { return }
                 // Begun once the page's first frames are on screen: begun in the same update as a hub's first build, the
                 // swing was mostly over by the time that frame landed, and the turnstile read as a cut (run 63 gate).
                 // Not at launch: there the screen must be whole in its first frame (launch-warm), as it was.
@@ -132,9 +138,10 @@ struct TurnstileIn: ViewModifier {
     }
 }
 
-// Runs what's waiting once the screen is drawing on time again (two frames in a row on time), or after 0.3 s at most: a
-// page's first frames are its costliest, so an entrance begun after them is seen whole. One display link for every waiter,
-// only while someone waits.
+// Runs what's waiting once the page's first frame is on screen and the next one came on time, or after 0.12 s at most: a
+// page's first frame is its costliest, so an entrance begun after it is seen whole, and no later (gate on build 71: two
+// on-time frames or 0.3 s held a bare backdrop after every push). One display link for every waiter, only while someone
+// waits.
 @MainActor final class FirstFrames: NSObject {
     static let shared = FirstFrames()
     // The app's first seconds (read first by home's own turnstile, as the app comes up).
@@ -162,7 +169,7 @@ struct TurnstileIn: ViewModifier {
         let period = max(l.targetTimestamp - l.timestamp, 1.0 / 120)
         if last > 0 { onTime = l.timestamp - last < period * 1.5 ? onTime + 1 : 0 }
         last = l.timestamp
-        guard onTime >= 2 || CACurrentMediaTime() - began > 0.3 else { return }
+        guard onTime >= 1 || CACurrentMediaTime() - began > 0.12 else { return }
         l.invalidate(); link = nil
         let ready = waiting; waiting = []
         ready.forEach { $0() }
@@ -170,7 +177,11 @@ struct TurnstileIn: ViewModifier {
     #endif
 }
 private struct TurnstileArrivedKey: EnvironmentKey { static let defaultValue = false }
+private struct TurnstileUntilKey: EnvironmentKey { static let defaultValue = Date.distantFuture }
 extension EnvironmentValues {
+    // Until when a part made on this page still turns in: a pivot sets its arrival plus a moment, so pages and rows made
+    // later never replay the entrance.
+    var turnstileUntil: Date { get { self[TurnstileUntilKey.self] } set { self[TurnstileUntilKey.self] = newValue } }
     // Set for a page restored (a build's pose, a link opening deep): no swing, it's simply there.
     var turnstileArrived: Bool { get { self[TurnstileArrivedKey.self] } set { self[TurnstileArrivedKey.self] = newValue } }
 }
@@ -240,6 +251,9 @@ private struct TiltBody<L: View>: View {
             #endif
     }
 }
+// The last press on a tilting tile or word travelled more than 10 pt: a swipe begun on it, never a tap (gate on build 71:
+// a quick flick across home's menu words open flat opened History). Read by whatever the press would open.
+@MainActor enum TouchTravel { static var swiped = false }
 #if canImport(UIKit)
 // The finger's first point, for the tilt: a press of no duration that recognises beside everything and never cancels the
 // button's touch.
@@ -261,10 +275,10 @@ private struct TouchDown: UIGestureRecognizerRepresentable {
         let p: CGPoint? = context.converter.localLocation
         // Travel is read in the window: the tile moves with a scroll, so under its own finger it barely moves at all.
         let w = g.location(in: nil)
-        if g.state == .began, let p { context.coordinator.from = w; context.coordinator.gone = false; down(p) }
+        if g.state == .began, let p { context.coordinator.from = w; context.coordinator.gone = false; TouchTravel.swiped = false; down(p) }
         // More than 10 pt from where it came down: a swipe, said once.
         if g.state == .changed, let f = context.coordinator.from, !context.coordinator.gone, hypot(w.x - f.x, w.y - f.y) > 10 {
-            context.coordinator.gone = true; moved()
+            context.coordinator.gone = true; TouchTravel.swiped = true; moved()
         }
     }
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
@@ -322,31 +336,131 @@ enum TopBar {
 
 // WP7's pivot and panorama paging: the page follows the finger 1:1; let go, the release VELOCITY decides (WP7's
 // pivot): a flick faster than `flick` pages per second turns one page in its direction, however short; anything slower
-// lands on the nearer page (a drag must pass half a page). Half a page a second is the throw build 63 turned on (a
-// quarter page carried at the normal 0.998 rate), so the decisions are 63's and only the settle is quicker. Never more
-// than one page per swipe. The settle stays the scroll's own quick deceleration (FastSettle). The velocity is read back from the projected carry: UIKit projects a throw by
-// v * r / (1 - r) / 1000 (r the deceleration rate per ms), so with `.fast` (0.99) the carry is about a tenth of a second
-// of the throw. Deciding by the carry itself, as the build before did, needed a 1,000 pt/s throw at the fast rate, so
-// ordinary flicks sprang back (gate on build 70).
+// lands on the nearer page (a drag must pass half a page). Half a page a second is the throw build 63 turned on, so the
+// decisions are 63's. Never more than one page per swipe. The velocity is read back from the projected carry: UIKit
+// projects a throw by v * r / (1 - r) / 1000 (r the deceleration rate per ms, FastSettle's 0.99).
+// The landing is not the scroll's: on a release the scroll is told to stop where the finger left it, and the page chosen
+// is reached by PageLander's fixed 0.35 s exponential ease out (gate on build 71: UIKit's deceleration to the adjusted
+// target took 1.5-2 s to rest, 90 % in the first half second and then a creep; WP7 lands in about 0.35 s).
 struct WPPaging: ScrollTargetBehavior {
     let width: CGFloat
     let count: Int
-    let release: () -> CGFloat
-    let chosen: (Int) -> Void
+    let motion: PagerMotion
     // Pages per second at release that count as a flick.
     var flick: CGFloat = 0.5
     func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        // Asked on the main thread, as the scroll's own delegate is.
+        let original = context.originalTarget.rect.minX
+        target = MainActor.assumeIsolated { decide(target, original) }
+    }
+    @MainActor private func decide(_ given: ScrollTarget, _ original: CGFloat) -> ScrollTarget {
+        var target = given
         let w = max(width, 1)
-        let from = (context.originalTarget.rect.minX / w).rounded()
-        let x = release()
+        let from = (original / w).rounded()
+        let x = motion.offset
         let at = x / w
         let v = (target.rect.minX - x) / FastSettle.projection
         var to: CGFloat
         if abs(v) > flick * w { to = v > 0 ? at.rounded(.down) + 1 : at.rounded(.up) - 1 } else { to = at.rounded() }
         to = max(from - 1, min(from + 1, to))
         to = max(0, min(CGFloat(count - 1), to))
-        target.rect.origin.x = to * w
-        chosen(Int(to))
+        // A finger let go: the scroll stops where it is and the lander takes it to the page (when it can reach the scroll).
+        if motion.phase == .interacting, motion.lander.ready {
+            target.rect.origin.x = x
+            motion.released(slot: Int(to), x: x, v: v, w: w)
+        } else {
+            target.rect.origin.x = to * w
+            if motion.phase == .interacting { motion.released(slot: Int(to), x: x, v: v, w: w) }
+        }
+        return target
+    }
+}
+
+// The landing, WP7's way: from where the finger left the page to the page chosen in 0.35 s, ExponentialEase (exponent 6)
+// EaseOut as the Silverlight toolkit's transitions [S4], set frame by frame on the scroll itself so the names, the
+// panorama's title and its background follow every frame. A finger that starts dragging again takes over at once.
+@MainActor final class PageLander: NSObject {
+    #if canImport(UIKit)
+    weak var scroll: UIScrollView?
+    private var link: CADisplayLink?
+    #endif
+    private var from: CGFloat = 0, to: CGFloat = 0, began: Double = 0
+    private var done: (() -> Void)?
+    static let duration = 0.35
+    var ready: Bool {
+        #if canImport(UIKit)
+        return scroll != nil
+        #else
+        return false
+        #endif
+    }
+    var active: Bool {
+        #if canImport(UIKit)
+        return link != nil
+        #else
+        return false
+        #endif
+    }
+    // Where the scroll is now, exactly (nil when it isn't known).
+    var offset: CGFloat? {
+        #if canImport(UIKit)
+        return scroll?.contentOffset.x
+        #else
+        return nil
+        #endif
+    }
+    static func ease(_ t: Double) -> Double { let k = 6.0; return (1 - exp(-k * t)) / (1 - exp(-k)) }
+    // Lands on x; `done` once it rests there. False when there is no scroll to drive.
+    @discardableResult func land(to x: CGFloat, done: @escaping () -> Void) -> Bool {
+        #if canImport(UIKit)
+        guard let sv = scroll else { return false }
+        link?.invalidate(); link = nil
+        from = sv.contentOffset.x; to = x
+        self.done = done
+        began = CACurrentMediaTime()
+        if abs(to - from) < 0.5 {
+            sv.setContentOffset(CGPoint(x: to, y: sv.contentOffset.y), animated: false)
+            finish(); return true
+        }
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        l.add(to: .main, forMode: .common)
+        link = l
+        return true
+        #else
+        return false
+        #endif
+    }
+    // Put at x at once, no landing (the carousel dealt round under a page at rest).
+    func jump(to x: CGFloat) {
+        #if canImport(UIKit)
+        guard let sv = scroll else { return }
+        sv.setContentOffset(CGPoint(x: x, y: sv.contentOffset.y), animated: false)
+        #endif
+    }
+    // A finger on it again: the landing stops where it is (the next release lands from there).
+    func stop() {
+        #if canImport(UIKit)
+        link?.invalidate(); link = nil
+        #endif
+        done = nil
+    }
+    #if canImport(UIKit)
+    @objc private func tick(_ l: CADisplayLink) {
+        guard let sv = scroll, !sv.isDragging else { stop(); return }
+        // The position for the frame about to be shown.
+        let t = min(1, (l.targetTimestamp - began) / Self.duration)
+        let x = from + (to - from) * CGFloat(Self.ease(t))
+        sv.setContentOffset(CGPoint(x: t >= 1 ? to : x, y: sv.contentOffset.y), animated: false)
+        if t >= 1 { finish() }
+    }
+    #endif
+    private func finish() {
+        #if canImport(UIKit)
+        link?.invalidate(); link = nil
+        #endif
+        let d = done; done = nil
+        d?()
     }
 }
 
@@ -661,9 +775,11 @@ struct FastSettle: View {
     // Seconds of release velocity the scroll projects at the rate set here (UIKit: r / (1 - r) / 1000, r per ms).
     static let rate: CGFloat = 0.99
     static let projection: CGFloat = rate / (1 - rate) / 1000
+    // Handed the scroll, to land its pages itself.
+    var lander: PageLander? = nil
     var body: some View {
         #if canImport(UIKit)
-        FastSettleProbe().frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
+        FastSettleProbe(lander: lander).frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
         #else
         Color.clear.frame(width: 0, height: 0)
         #endif
@@ -671,19 +787,25 @@ struct FastSettle: View {
 }
 #if canImport(UIKit)
 private struct FastSettleProbe: UIViewRepresentable {
+    let lander: PageLander?
     final class Probe: UIView {
+        weak var lander: PageLander?
         override func didMoveToWindow() {
             super.didMoveToWindow()
             DispatchQueue.main.async { [weak self] in
                 var v = self?.superview
                 while let s = v {
-                    if let sv = s as? UIScrollView { sv.decelerationRate = UIScrollView.DecelerationRate(rawValue: FastSettle.rate); return }
+                    if let sv = s as? UIScrollView {
+                        sv.decelerationRate = UIScrollView.DecelerationRate(rawValue: FastSettle.rate)
+                        self?.lander?.scroll = sv
+                        return
+                    }
                     v = s.superview
                 }
             }
         }
     }
-    func makeUIView(context: Context) -> Probe { Probe() }
+    func makeUIView(context: Context) -> Probe { let p = Probe(); p.lander = lander; return p }
     func updateUIView(_ v: Probe, context: Context) {}
 }
 #endif
