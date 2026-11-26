@@ -65,6 +65,8 @@ jobs:
           # The push from a tile (turnstile out, hub in) and the profile's wrap in this posture too.
           STEPS="shot:4 tap=0.25,0.70:2 shot:1 shot:2" film home-tap-portrait 3 14 -hub home
           Y=0.6 STEPS="side:6 shot:2 tap=0.3,0.5:2 shot:1 shot:2" film home-word-portrait 3 16 -hub home
+          # Home panned to its last section and back (gate on build 78: the background must run edge to edge there).
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:3 sideback:2 shot:1" film home-pan-portrait 3 26 -hub home
           Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:2" film pivot-wrap-portrait 3 22 -hub profile
           flat
           calibrate landscape 3

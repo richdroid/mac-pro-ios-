@@ -218,8 +218,9 @@ struct TurnstileOut: ViewModifier {
         // study §3, measured): the tapped word lifts away first, up and to the right, in about 0.1 s; then the title,
         // background and headers turn out; the other words go last.
         let order = chosen.map { index == $0 ? count : (index < $0 ? index : index - 1) } ?? 0
+        // The tapped tile held a beat after the rest have turned (gate on build 78: tapped-last wasn't visible).
         let delay = word ? HomeLeave.wordLead + Double(index) / Double(max(count, 1)) * HomeLeave.wordSpread
-                         : Double(order) / Double(max(count, 1)) * Z.leaveSpread
+                         : (me ? Z.leaveSpread + HomeLeave.tileHold : Double(order) / Double(max(count, 1)) * Z.leaveSpread)
         let lift = gone && word && me
         content
             .rotation3DEffect(.degrees(gone && !lift ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: gone && !lift ? 0.55 : 0)
@@ -230,12 +231,13 @@ struct TurnstileOut: ViewModifier {
 }
 extension HomeLeave {
     nonisolated static let liftTime = 0.12
-    nonisolated static let wordLead = 0.06
+    nonisolated static let wordLead = 0.03
+    nonisolated static let tileHold = 0.1
     nonisolated static let wordSpread = 0.12
     nonisolated static func isWord(_ i: Int) -> Bool { Home.keys.indices.contains(i) && Home.keys[i].hasPrefix("w-") }
     // From the tap to the push: everything gone (a word's leave: its lead, the spread, a swing; a tile's: the spread and
     // its swing), so nothing on screen freezes while the hub is made.
-    nonisolated static func wait(_ i: Int) -> Double { isWord(i) ? wordLead + wordSpread + 0.25 + 0.01 : Z.leaveSpread + 0.25 + 0.01 }
+    nonisolated static func wait(_ i: Int) -> Double { isWord(i) ? wordLead + wordSpread + 0.25 + 0.01 : Z.leaveSpread + tileHold + 0.25 + 0.01 }
 }
 
 // Windows Phone's tilt [S4, S5]: what's pressed tips toward the finger (up to 0.3 rad at a corner) and sinks (25 px of

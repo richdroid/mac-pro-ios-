@@ -163,8 +163,10 @@ private struct HomePanorama: View {
                 // the background's"): each crosses its own overhang once over the panorama's travel. The title, shorter,
                 // is the slowest; the background (as tall as the screen, square) next; the sections 1:1.
                 let titleRate = max(0.05, (titleW + 10 - pw) / travel)
-                let bgSide = max(H * 1.02, pw + 40)
-                let bgRate = max(titleRate + 0.05, min(0.9, (bgSide - pw) / travel))
+                let bgRate = max(titleRate + 0.05, min(0.9, (H * 1.02 - pw) / travel))
+                // Wide enough for the whole travel at that rate (gate on build 78: a black band down the last section
+                // folded, the picture shorter than the distance it slid).
+                let bgSide = max(H * 1.02, pw + bgRate * travel + 40)
                 ZStack(alignment: .topLeading) {
                     PanoramaBackground(ref: Ground.hubs.pick?.ref, motion: motion, rate: bgRate, side: bgSide)
                         .modifier(TurnstileOut(index: 0, count: Home.count))
