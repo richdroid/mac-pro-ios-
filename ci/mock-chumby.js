@@ -584,7 +584,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow|soundsplay)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|livestale|livelate|livestill|livemany|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail|soundsslow|soundsplay|soundsrefused)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
@@ -601,6 +601,9 @@ function chumbyScene(q, s) {
       return false;
     }
     if (!chumbyLive[scene]) chumbyLive[scene] = { sys: { ...data.sys, ring: '' }, state: soundsState() };
+    // soundsrefused (11-26 gate): a real-sized list, 12 stations, so a note at the list's end would be off screen
+    if (scene === 'soundsrefused' && chumbyLive[scene].state.pandora.length < 12)
+      chumbyLive[scene].state.pandora.push(...['Built to Spill Radio', 'Duster Radio', 'Mazzy Star Radio', 'Alvvays Radio', 'Beach House Radio', 'Hum Radio', 'Failure Radio', 'Codeine Radio'].map((name, i) => ({ id: String(31 + i), name })));
     // soundsslow: every save is taken, but its answer comes after 4 s, for the film of a pick on a slow Chumby (no flip-flop).
     if (scene === 'soundsslow' && q.method === 'POST') { const end = s.end.bind(s); s.end = (...x) => { setTimeout(() => end(...x), 4000); return s; }; }
   }
@@ -667,6 +670,9 @@ function chumbyScene(q, s) {
         if (a === 'play') {
           const id = qs.get('s') || '', st = (live.state.pandora || []).find(p => p.id === id);
           if (!st) return json({ ok: false, error: 'bad station' });
+          // soundsrefused (11-26): the Chumby's own no, as its hook gives it when an alarm is under 20 minutes away by its
+          // list (chalarm 468fcc73: "started": false, "why")
+          if (scene === 'soundsrefused') return json({ ok: true, pending: false, station: st.name, started: false, why: 'an alarm rings in 12 min' });
           clearTimeout(live.playing);
           live.playing = setTimeout(() => {
             live.state.music = { source: 'pandora', label: st.name, state: id, playing: true };
