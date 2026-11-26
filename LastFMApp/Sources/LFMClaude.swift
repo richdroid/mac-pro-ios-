@@ -1,14 +1,14 @@
 import SwiftUI
 import CryptoKit
 
-// What Claude writes about his listening, asked from the phone itself (no Mac in between): a portrait of what he plays
-// and the threads through it (Sonnet), a note on his week (Sonnet), artists to hear next chosen from Last.fm's similar
-// artists (Haiku), and a short answer to a question about his own music (Haiku). The prompts are the bridge's
-// (lastfm-claude.js, tried on his data 2026-11-20), less the tags the phone doesn't keep.
-// The key is baked in at signing (AnthropicKey, preset-ipa.sh); without it every piece hides. The mock shows written
-// samples about the mock's own artists, for the build's shots. Answers are kept on disk and shown from disk first; the
-// portrait and the note are written again at most once a day and only when his listening has moved; discovery once a
-// day. A hard cap of $0.25 a day: each call reserves its worst case before it's made. The key is never logged.
+// What Claude writes about his listening: a portrait of what he plays and the threads through it, a note on his week,
+// artists to hear next chosen from Last.fm's similar artists, and a short answer to a question about his own music.
+// Written on the Mac by the bridge (lastfm-claude.js, through the local Claude CLI on his plan; Richard, 2026-11-25:
+// "dont use api key, figure out alternative way for now") and read here from it over the tailnet address baked into
+// the build (DefaultAddress): /api/lastfm/claude for the pieces, /api/lastfm/claude/ask for a question. No key is in the
+// app. The last good answers are kept on disk and shown from disk first, so the pieces stay when the Mac can't be
+// reached; a piece written while he's in the app shows when he next comes back to it. The mock shows written samples
+// about the mock's own artists, for the build's shots.
 
 // MARK: - Kept answers
 
@@ -53,14 +53,21 @@ struct TasteKept: Codable {
 
 @MainActor @Observable final class Taste {
     static let shared = Taste()
-    static let sonnet = "claude-sonnet-5-5", haiku = "claude-haiku-5-5"
-    static let cap = 0.25, asksADay = 5, askMax = 200
-    private static let prices: [String: (in: Double, out: Double)] = [sonnet: (2, 10), haiku: (0.10, 0.50)]
+    static let askMax = 200
 
-    // The key, or nil: then nothing of this shows. Read once; never printed.
-    @ObservationIgnored private let key: String? = (Bundle.main.infoDictionary?["AnthropicKey"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    // The Mac's bridge, or nil (a build with no address): then nothing of this shows.
+    @ObservationIgnored private let bridge: URL? = {
+        var a = (UserDefaults.standard.string(forKey: "address") ?? "").trimmingCharacters(in: .whitespaces)
+        if a.isEmpty { a = (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "").trimmingCharacters(in: .whitespaces) }
+        guard !a.isEmpty else { return nil }
+        if !a.contains("://") { a = "https://" + a }
+        while a.hasSuffix("/") { a.removeLast() }
+        return URL(string: a + "/api/lastfm/")
+    }()
     let mock = LastFM.shared.mock
-    var on: Bool { mock || key != nil }
+    var on: Bool { mock || bridge != nil || store.portrait != nil }
+    // The day's questions as the bridge counts them (three on the plan).
+    private(set) var asksADay = 3
 
     // What the screens show, and what is kept on disk: a piece written while he's in the app goes to disk and is shown
     // when he next comes back to it, never landing at the head of a page while he reads it (run 48 gate, blocker 7).
@@ -96,103 +103,47 @@ struct TasteKept: Codable {
         try? d.write(to: Self.file, options: .atomic)
     }
 
-    var asksLeft: Int { Self.asksADay - (store.asks.day == LocalDay.today ? store.asks.n : 0) }
+    // The bridge's count when it last answered; on a new day, the whole day's.
+    var asksLeft: Int { store.asks.day == LocalDay.today ? max(0, asksADay - store.asks.n) : asksADay }
 
     // MARK: Refresh
 
-    // On launch and on coming back, once his whole history is in: each piece that is due, one at a time.
+    // On launch and on coming back: the bridge's pieces as it holds them now (it writes them again behind the answer when
+    // they're due). Nothing reached: the kept ones stand.
     func refresh() async {
-        guard key != nil, !mock, HistorySync.shared.complete else { return }
-        await piece("portrait", Self.sonnet) { try await self.writePortrait() }
-        await piece("week", Self.sonnet) { try await self.writeWeek() }
-        await piece("discovery", Self.haiku) { try await self.writeDiscovery() }
-    }
-
-    private func piece(_ name: String, _ model: String, _ run: @escaping () async throws -> Void) async {
-        guard !busy.contains(name) else { return }
-        // Any try, good or bad, waits six hours before the next.
-        if let t = store.tried[name], Clock.now.timeIntervalSince(t) < 6 * 3600 { return }
-        busy.insert(name); defer { busy.remove(name) }
-        do { try await run() } catch { }
-    }
-
-    // Due: never written, or a day old and his listening has moved since (or a week old regardless).
-    private func due(_ at: Date?, _ sig: String, _ was: String?) -> Bool {
-        guard let at else { return true }
-        let age = Clock.now.timeIntervalSince(at)
-        return age >= 7 * 86400 || (age >= 20 * 3600 && sig != was)
-    }
-
-    private func writePortrait() async throws {
-        let d = await HistoryDB.reader.tasteFacts()
-        let sig = Self.sig(d.periods[1].artists.prefix(10).map(\.0).sorted())
-        guard due(store.portrait?.at, sig, store.portrait?.sig) else { return }
-        store.tried["portrait"] = Clock.now; save()
-        var user = d.portraitBlock
-        if let last = store.portrait?.data { user += "\n\nYOUR LAST PORTRAIT (say what is true now; don't reuse its sentences):\n" + last.joined(separator: "\n") }
-        let text = try await call(Self.sonnet, Prompts.portrait, user, maxTokens: 6000, effort: "medium")
-        guard let j = Self.json(text), let lines = (j["lines"] as? [String])?.map(Self.line).filter({ !$0.isEmpty }), (3...4).contains(lines.count), !lines.contains(where: { $0.count > 230 }) else { return }
-        let known = Dictionary(d.names.map { ($0.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
-        var used = Set<String>(), threads: [TasteThread] = []
-        for t in (j["threads"] as? [[String: Any]]) ?? [] {
-            let artists = ((t["artists"] as? [String]) ?? []).compactMap { known[$0.lowercased()] }.filter { used.insert($0).inserted }.prefix(5)
-            let name = Self.line(t["name"] as? String ?? "").lowercased(), note = Self.line(t["note"] as? String ?? "")
-            guard artists.count >= 2, !name.isEmpty, name.count <= 40, !note.isEmpty, note.count <= 140 else { continue }
-            threads.append(TasteThread(name: name, artists: Array(artists), note: note))
-            if threads.count == 5 { break }
-        }
-        guard threads.count >= 3 else { return }
-        store.portrait = .init(data: lines, at: Clock.now, sig: sig); store.threads = threads; save()
-    }
-
-    private func writeWeek() async throws {
-        let d = await HistoryDB.reader.weekFacts()
-        let sig = Self.sig(d.top)
-        guard !d.top.isEmpty, due(store.week?.at, sig, store.week?.sig) else { return }
-        store.tried["week"] = Clock.now; save()
-        let text = try await call(Self.sonnet, Prompts.week, d.block, maxTokens: 3000, effort: "medium")
-        let note = Self.line(Self.json(text)?["note"] as? String ?? "")
-        guard note.count >= 20, note.count <= 260 else { return }
-        store.week = .init(data: note, at: Clock.now, sig: sig); save()
-    }
-
-    private func writeDiscovery() async throws {
-        let (seeds, facts) = await HistoryDB.reader.discoverySeeds()
-        let sig = Self.sig(seeds.sorted())
-        guard seeds.count >= 3, due(store.discovery?.at, sig, store.discovery?.sig) else { return }
-        // Last.fm's similar artists for each (kept a month), less everyone he has ever played.
-        let have = await HistoryDB.reader.everyArtist()
-        var by: [String: (name: String, score: Double, via: [String])] = [:]
-        for (k, s) in seeds.enumerated() {
-            guard let j = try? await LastFM.shared.call("artist.getSimilar", ["artist": s, "limit": "30", "autocorrect": "1"], fresh: 30 * 86400) else { continue }
-            let w = 1 - Double(k) / Double(seeds.count * 2)
-            for a in j["similarartists"]["artist"].array {
-                let name = a["name"].text, n = name.lowercased()
-                guard !name.isEmpty, name.count <= 60, !have.contains(n) else { continue }
-                let m = Double(a["match"].string ?? "") ?? 0
-                var c = by[n] ?? (name, 0, []); c.score += w * m; c.via.append(s); by[n] = c
+        guard let bridge, !mock, !busy.contains("all") else { return }
+        busy.insert("all"); defer { busy.remove("all") }
+        var r = URLRequest(url: bridge.appendingPathComponent("claude")); r.timeoutInterval = 20
+        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        func at(_ p: [String: Any]) -> Date { Date(timeIntervalSince1970: (p["at"] as? Double ?? 0) / 1000) }
+        func ready(_ k: String) -> [String: Any]? { (o[k] as? [String: Any]).flatMap { $0["ready"] as? Bool == true ? $0 : nil } }
+        let first = store.portrait == nil && store.week == nil && store.discovery == nil
+        if let p = ready("portrait"), let lines = p["lines"] as? [String], !lines.isEmpty {
+            store.portrait = .init(data: lines.map(Self.line), at: at(p), sig: String(p["at"] as? Int ?? 0))
+            store.threads = ((p["threads"] as? [[String: Any]]) ?? []).compactMap { t in
+                guard let n = t["name"] as? String, let a = t["artists"] as? [String] else { return nil }
+                return TasteThread(name: n, artists: a, note: t["note"] as? String ?? "")
             }
         }
-        let cands = by.values.sorted { $0.score > $1.score }.prefix(50)
-        guard cands.count >= 10 else { return }
-        store.tried["discovery"] = Clock.now; save()
-        let user = facts + "\n\n" + (store.discovery.map { "SUGGESTED LAST TIME (keep the ones that are still the best; otherwise prefer someone new): " + $0.data.map(\.artist).joined(separator: ", ") + "\n\n" } ?? "")
-            + "CANDIDATES (name | similar to, closest first)\n" + cands.map { "\($0.name) | \($0.via.prefix(4).joined(separator: "; "))" }.joined(separator: "\n")
-        let text = try await call(Self.haiku, Prompts.discovery, user, maxTokens: 1500, thinkingOff: true)
-        let known = Dictionary(cands.map { ($0.name.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
-        var seen = Set<String>(), per: [String: Int] = [:], picks: [TastePick] = []
-        for p in (Self.json(text)?["picks"] as? [[String: Any]]) ?? [] {
-            guard let c = known[(p["artist"] as? String ?? "").lowercased()], seen.insert(c.name).inserted else { continue }
-            let like = c.via.first { $0.lowercased() == (p["like"] as? String ?? "").lowercased() } ?? c.via[0]
-            guard per[like, default: 0] < 3 else { continue }
-            per[like, default: 0] += 1
-            var why = Self.line(p["why"] as? String ?? "").trimmingCharacters(in: CharacterSet(charactersIn: ".!"))
-            if why.count > 44 { why = String(why.prefix(43)) + "…" }
-            picks.append(TastePick(artist: c.name, like: like, why: why))
-            if picks.count == 15 { break }
+        if let p = ready("week"), let note = p["note"] as? String, !note.isEmpty { store.week = .init(data: Self.line(note), at: at(p), sig: String(p["at"] as? Int ?? 0)) }
+        if let p = ready("discovery"), let picks = p["picks"] as? [[String: Any]] {
+            let list = picks.compactMap { x -> TastePick? in
+                guard let a = x["artist"] as? String else { return nil }
+                return TastePick(artist: a, like: x["like"] as? String ?? "", why: x["why"] as? String ?? "")
+            }
+            if !list.isEmpty { store.discovery = .init(data: list, at: at(p), sig: String(p["at"] as? Int ?? 0)) }
         }
-        guard picks.count >= 8 else { return }
-        store.discovery = .init(data: picks, at: Clock.now, sig: sig); save()
+        if let a = o["ask"] as? [String: Any] { counted(a) }
+        save()
+        // Nothing was showing yet: shown now (nothing on the page to move).
+        if first { kept = store; await findArt() }
+    }
+
+    // The bridge's count of the day's questions.
+    private func counted(_ a: [String: Any]) {
+        if let n = a["aDay"] as? Int, n > 0 { asksADay = n }
+        if let left = a["left"] as? Int { store.asks = (LocalDay.today, max(0, asksADay - left)) }
     }
 
     // MARK: Ask
@@ -211,76 +162,28 @@ struct TasteKept: Codable {
             withAnimation(.smooth) { kept.asked = store.asked }
             return true
         }
-        guard key != nil else { return false }
-        guard asksLeft > 0 else { askError = "That's the \(Self.asksADay) questions for today."; return false }
+        guard let bridge else { return false }
+        guard asksLeft > 0 else { askError = "That's the \(asksADay) questions for today."; return false }
         asking = true; defer { asking = false }
-        // Counted before the call: a question that fails still used one of the day's.
-        store.asks = (LocalDay.today, Self.asksADay - asksLeft + 1); save()
-        do {
-            let data = await HistoryDB.reader.askFacts(q)
-            let text = try await call(Self.haiku, Prompts.ask, "QUESTION: \(q)\n\nDATA\n" + data, maxTokens: 400, thinkingOff: true)
-            let answer = Self.line(Self.json(text)?["answer"] as? String ?? "")
-            guard !answer.isEmpty else { askError = "No answer came back. Try asking another way."; return false }
-            store.asked.insert(TasteAsked(q: q, answer: answer, day: LocalDay.today), at: 0)
-            store.asked = Array(store.asked.prefix(3)); save()
-            withAnimation(.smooth) { kept.asked = store.asked }
-            return true
-        } catch let e as TasteError {
-            askError = e.say
-        } catch { askError = "Couldn't answer just now. Try again in a while." }
-        return false
-    }
-
-    // MARK: One call
-
-    enum TasteError: Error { case cap, http(Int), shape
-        var say: String {
-            switch self {
-            case .cap: return "That's all the questions for today. More tomorrow."
-            case .http(let c): return c == 429 || c >= 500 ? "Couldn't answer just now. Try again in a while." : "Couldn't answer that one. Try asking another way."
-            case .shape: return "No answer came back. Try asking another way."
-            }
-        }
-    }
-
-    private func cost(_ model: String, _ tin: Int, _ tout: Int) -> Double {
-        let p = Self.prices[model] ?? (2, 10)
-        return (Double(tin) * p.in + Double(tout) * p.out) / 1_000_000
-    }
-
-    private func call(_ model: String, _ system: String, _ user: String, maxTokens: Int, effort: String? = nil, thinkingOff: Bool = false) async throws -> String {
-        guard let key else { throw TasteError.shape }
-        // The worst case reserved before the call (a token is about 2.7 characters here; counted at 2 to be safe).
-        let worst = cost(model, (system.count + user.count) / 2, maxTokens)
-        if store.spend.day != LocalDay.today { store.spend = (LocalDay.today, 0) }
-        guard store.spend.dollars + worst <= Self.cap else { throw TasteError.cap }
-        store.spend.dollars += worst; save()
-        var spent = worst
-        defer { store.spend.dollars += spent - worst; save() }
-
-        var body: [String: Any] = ["model": model, "max_tokens": maxTokens, "system": system, "messages": [["role": "user", "content": user]]]
-        if let effort { body["output_config"] = ["effort": effort] }
-        if thinkingOff { body["thinking"] = ["type": "disabled"] }
-        var r = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-        r.httpMethod = "POST"; r.timeoutInterval = model == Self.sonnet ? 60 : 30
-        r.setValue(key, forHTTPHeaderField: "x-api-key")
-        r.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        var r = URLRequest(url: bridge.appendingPathComponent("claude/ask"))
+        r.httpMethod = "POST"; r.timeoutInterval = 90
         r.setValue("application/json", forHTTPHeaderField: "content-type")
-        r.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, resp) = try await URLSession.shared.data(for: r)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        // A refused request costs nothing; a failed one is counted at nothing too (its reservation is returned).
-        spent = 0
-        guard code == 200, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw TasteError.http(code) }
-        if let u = o["usage"] as? [String: Any] {
-            let tin = (u["input_tokens"] as? Int ?? 0) + (u["cache_creation_input_tokens"] as? Int ?? 0) + (u["cache_read_input_tokens"] as? Int ?? 0)
-            spent = cost(model, tin, u["output_tokens"] as? Int ?? maxTokens)
-        } else { spent = worst }
-        // Refused, or cut off by its token limit (thinking counts toward it): no half answer is kept.
-        guard o["stop_reason"] as? String == "end_turn" else { throw TasteError.shape }
-        let text = ((o["content"] as? [[String: Any]]) ?? []).filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
-        guard !text.isEmpty else { throw TasteError.shape }
-        return text
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["q": q])
+        guard let (d, resp) = try? await URLSession.shared.data(for: r) else { askError = "Couldn't reach the Mac. Try again in a while."; return false }
+        guard (resp as? HTTPURLResponse)?.statusCode == 200, let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            askError = "Couldn't answer that one. Try asking another way."; return false
+        }
+        counted(o)
+        let answer = Self.line(o["answer"] as? String ?? "")
+        guard o["ok"] as? Bool == true, !answer.isEmpty else {
+            let reason = o["reason"] as? String ?? ""
+            askError = reason.contains("for today") ? "That's the \(asksADay) questions for today." : "Couldn't answer just now. Try again in a while."
+            save(); return false
+        }
+        store.asked.insert(TasteAsked(q: q, answer: answer, day: LocalDay.today), at: 0)
+        store.asked = Array(store.asked.prefix(3)); save()
+        withAnimation(.smooth) { kept.asked = store.asked }
+        return true
     }
 
     // MARK: Helpers
@@ -328,189 +231,6 @@ struct TasteKept: Codable {
         k.asked = [TasteAsked(q: "How much Nadia Sorel have I played this year?", answer: "You have played Nadia Sorel 2,790 times in all, 912 of them this year, and first played them in February 2019.", day: LocalDay.today)]
         return k
     }
-}
-
-// MARK: - His listening, laid out for Claude (from the phone's own history)
-
-extension HistoryDB {
-    struct TasteFacts: Sendable {
-        var periods: [(label: String, scrobbles: Int, artists: [(String, Int)], tracks: [(String, String, Int)])]
-        var names: [String]
-        var portraitBlock: String
-    }
-
-    func tracks(from: Int, to: Int, limit: Int) -> [(String, String, Int)] {
-        var out: [(String, String, Int)] = []
-        rows("SELECT artist, track, COUNT(*) c FROM plays WHERE uts >= ? AND uts < ? GROUP BY artist, track ORDER BY c DESC LIMIT ?", [from, to, limit]) { out.append((text($0, 0), text($0, 1), int($0, 2))) }
-        return out
-    }
-    private func latest(_ n: Int) -> [String] {
-        let f = DateFormatter(); f.dateFormat = "MM-dd HH:mm"
-        var out: [String] = []
-        rows("SELECT uts, artist, track FROM plays ORDER BY uts DESC LIMIT ?", [n]) { out.append("\(f.string(from: Date(timeIntervalSince1970: TimeInterval(self.int($0, 0))))) | \(self.text($0, 1)) | \(self.text($0, 2))") }
-        return out
-    }
-    private func head() -> String {
-        var n = 0, first = 0
-        rows("SELECT COUNT(*), MIN(uts) FROM plays") { n = self.int($0, 0); first = self.int($0, 1) }
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd, EEEE"
-        let d = DateFormatter(); d.dateFormat = "yyyy-MM-dd"
-        return "TODAY: \(f.string(from: Clock.now))\nHISTORY: \(n) scrobbles since \(d.string(from: Date(timeIntervalSince1970: TimeInterval(first))))"
-    }
-    private static func artistsLine(_ r: [(String, Int)]) -> String { r.isEmpty ? "none" : r.map { "\($0.0) (\($0.1))" }.joined(separator: ", ") }
-    private static func tracksLine(_ r: [(String, String, Int)]) -> String { r.isEmpty ? "none" : r.map { "\($0.0): \($0.1) (\($0.2))" }.joined(separator: ", ") }
-
-    func tasteFacts() -> TasteFacts {
-        let now = Int(Clock.now.timeIntervalSince1970), D = 86400
-        let spans = [("PAST 7 DAYS", 7, 15), ("PAST MONTH", 30, 20), ("PAST 3 MONTHS", 91, 25), ("PAST 12 MONTHS", 365, 30)]
-        let periods = spans.map { s in (label: s.0, scrobbles: between(now - s.1 * D, now), artists: artists(from: now - s.1 * D, to: now, limit: s.2), tracks: tracks(from: now - s.1 * D, to: now, limit: 10)) }
-        let prevWeek = artists(from: now - 14 * D, to: now - 7 * D, limit: 12), prevMonth = artists(from: now - 60 * D, to: now - 30 * D, limit: 15)
-        var names: [String] = [], seen = Set<String>()
-        for a in periods.flatMap(\.artists) + prevWeek + prevMonth where seen.insert(a.0).inserted { names.append(a.0) }
-        let notes = names.map { n -> String in
-            var c = 0, f = 0
-            rows("SELECT COUNT(*), MIN(uts) FROM plays WHERE artist = ?", [n]) { c = self.int($0, 0); f = self.int($0, 1) }
-            return "\(n) | \(c) | \(Calendar.current.component(.year, from: Date(timeIntervalSince1970: TimeInterval(f))))"
-        }
-        func block(_ p: (label: String, scrobbles: Int, artists: [(String, Int)], tracks: [(String, String, Int)])) -> [String] {
-            ["\(p.label): \(p.scrobbles) scrobbles", "artists: " + Self.artistsLine(p.artists), "tracks: " + Self.tracksLine(p.tracks)]
-        }
-        var lines = [head(), ""] + block(periods[0])
-        lines += ["THE 7 DAYS BEFORE THAT: \(between(now - 14 * D, now - 7 * D)) scrobbles", "artists: " + Self.artistsLine(prevWeek), ""]
-        lines += block(periods[1]) + ["THE MONTH BEFORE THAT: \(between(now - 60 * D, now - 30 * D)) scrobbles", "artists: " + Self.artistsLine(prevMonth), ""]
-        lines += block(periods[2]) + [""] + block(periods[3]) + [""]
-        lines += ["ARTIST NOTES (artist | all-time plays | year he first played them)"] + notes + [""]
-        lines += ["LATEST SCROBBLES (newest first; month-day time | artist | track)"] + latest(40)
-        return TasteFacts(periods: periods, names: names, portraitBlock: lines.joined(separator: "\n"))
-    }
-
-    func weekFacts() -> (top: [String], block: String) {
-        let now = Int(Clock.now.timeIntervalSince1970), D = 86400, from = now - 7 * D
-        let week = artists(from: from, to: now, limit: 8)
-        let usual = between(from - 84 * D, from) / 12
-        let d = DateFormatter(); d.dateFormat = "yyyy-MM-dd"
-        let rows8 = week.map { a -> String in
-            var n = 0, f = 0, l = 0
-            rows("SELECT COUNT(*), MIN(uts), MAX(uts) FROM plays WHERE artist = ? AND uts < ?", [a.0, from]) { n = self.int($0, 0); f = self.int($0, 1); l = self.int($0, 2) }
-            let q = plays(of: a.0, from: from - 90 * D, to: from)
-            let first = n > 0 ? d.string(from: Date(timeIntervalSince1970: TimeInterval(f))) : "new this week"
-            let last = n > 0 ? "\(d.string(from: Date(timeIntervalSince1970: TimeInterval(l)))), \((from - l) / D) days before this week began" : "never"
-            return "\(a.0) | \(a.1) | \(q) | \(n) | \(first) | \(last)"
-        }
-        let lines = [head(), "", "THIS WEEK (the past 7 days): \(between(from, now)) scrobbles. HIS USUAL WEEK (average of the 12 before): \(usual) scrobbles. THE WEEK BEFORE: \(between(from - 7 * D, from)) scrobbles.", "",
-                     "THIS WEEK'S ARTISTS (artist | plays this week | plays in the 90 days before | all-time plays before this week | first played | last played before this week)"] + rows8
-            + ["", "THIS WEEK'S TRACKS: " + Self.tracksLine(tracks(from: from, to: now, limit: 6)), "",
-               "THE WEEK BEFORE, ARTISTS: " + Self.artistsLine(artists(from: from - 7 * D, to: from, limit: 8)),
-               "HIS USUAL (past 3 months), ARTISTS: " + Self.artistsLine(artists(from: now - 91 * D, to: now, limit: 15))]
-        return (week.prefix(5).map(\.0), lines.joined(separator: "\n"))
-    }
-
-    // The artists the candidates gather around (the nearer periods first), and his listening as Claude is shown it.
-    func discoverySeeds() -> (seeds: [String], facts: String) {
-        let now = Int(Clock.now.timeIntervalSince1970), D = 86400
-        let w = artists(from: now - 7 * D, to: now, limit: 10), q = artists(from: now - 91 * D, to: now, limit: 25), y = artists(from: now - 365 * D, to: now, limit: 20)
-        var seeds: [String] = [], seen = Set<String>()
-        for a in w.prefix(6) + q.prefix(10) + y.prefix(6) where seen.insert(a.0).inserted { seeds.append(a.0) }
-        let facts = [head(), "", "HIS ARTISTS, PAST 7 DAYS: " + Self.artistsLine(w), "HIS ARTISTS, PAST 3 MONTHS: " + Self.artistsLine(q), "HIS ARTISTS, PAST 12 MONTHS: " + Self.artistsLine(y)].joined(separator: "\n")
-        return (Array(seeds.prefix(14)), facts)
-    }
-
-    func everyArtist() -> Set<String> {
-        var s = Set<String>()
-        rows("SELECT DISTINCT artist FROM plays") { s.insert(self.text($0, 0).lowercased()) }
-        return s
-    }
-
-    func askFacts(_ question: String) -> String {
-        let now = Int(Clock.now.timeIntervalSince1970), D = 86400
-        let d = DateFormatter(); d.dateFormat = "yyyy-MM-dd"
-        // By year: plays, artists, and the top five, from the month column (year × 12 + month).
-        var years: [(Int, Int, Int)] = []
-        rows("SELECT month / 12, COUNT(*), COUNT(DISTINCT artist) FROM plays WHERE month > 0 GROUP BY month / 12 ORDER BY 1") { years.append((self.int($0, 0), self.int($0, 1), self.int($0, 2))) }
-        var yearTop: [Int: [(String, Int)]] = [:]
-        rows("SELECT y, artist, n FROM (SELECT month / 12 y, artist, COUNT(*) n, ROW_NUMBER() OVER (PARTITION BY month / 12 ORDER BY COUNT(*) DESC) k FROM plays WHERE month > 0 GROUP BY y, artist) WHERE k <= 5 ORDER BY y, n DESC") { yearTop[self.int($0, 0), default: []].append((self.text($0, 1), self.int($0, 2))) }
-        // Any of his artists (five plays or more) the question names, longest names first.
-        let q = " " + question.lowercased().replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: " ", options: .regularExpression) + " "
-        var named: [String] = []
-        rows("SELECT artist FROM plays GROUP BY artist HAVING COUNT(*) >= 5 ORDER BY LENGTH(artist) DESC") {
-            let a = self.text($0, 0), n = " " + a.lowercased().replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: " ", options: .regularExpression) + " "
-            if named.count < 4, n.count > 3, q.contains(n), !named.contains(where: { $0.lowercased().contains(a.lowercased()) }) { named.append(a) }
-        }
-        var about: [String] = []
-        for a in named {
-            var n = 0, f = 0, l = 0, days = 0
-            rows("SELECT COUNT(*), MIN(uts), MAX(uts), COUNT(DISTINCT day) FROM plays WHERE artist = ?", [a]) { n = self.int($0, 0); f = self.int($0, 1); l = self.int($0, 2); days = self.int($0, 3) }
-            var byYear: [String] = []
-            rows("SELECT month / 12, COUNT(*) FROM plays WHERE artist = ? AND month > 0 GROUP BY 1 ORDER BY 1", [a]) { byYear.append("\(self.int($0, 0)) (\(self.int($0, 1)))") }
-            var top: [String] = []
-            rows("SELECT track, COUNT(*) c FROM plays WHERE artist = ? GROUP BY track ORDER BY c DESC LIMIT 8", [a]) { top.append("\(self.text($0, 0)) (\(self.int($0, 1)))") }
-            about += ["ARTIST: \(a). \(n) plays on \(days) days, first played \(d.string(from: Date(timeIntervalSince1970: TimeInterval(f)))), last played \(d.string(from: Date(timeIntervalSince1970: TimeInterval(l))))",
-                      "plays by year: " + byYear.joined(separator: ", "), "top tracks: " + top.joined(separator: ", "), ""]
-        }
-        var lines = [head(), "BY YEAR (scrobbles, artists; top five artists): " + years.map { y in "\(y.0): \(y.1), \(y.2); " + (yearTop[y.0] ?? []).map { "\($0.0) (\($0.1))" }.joined(separator: ", ") }.joined(separator: " / "), ""]
-        lines += about
-        lines += ["ALL TIME", "artists: " + Self.artistsLine(artists(from: 0, to: now + D, limit: 30)), "tracks: " + Self.tracksLine(tracks(from: 0, to: now + D, limit: 15)), ""]
-        for (label, days) in [("PAST 7 DAYS", 7), ("PAST MONTH", 30), ("PAST 3 MONTHS", 91), ("PAST 12 MONTHS", 365)] {
-            lines += ["\(label): \(between(now - days * D, now)) scrobbles", "artists: " + Self.artistsLine(artists(from: now - days * D, to: now, limit: 15)), ""]
-        }
-        lines += ["LATEST SCROBBLES (newest first; month-day time | artist | track)"] + latest(25)
-        return lines.joined(separator: "\n")
-    }
-}
-
-// MARK: - What Claude is told (the bridge's words, less tags)
-
-enum Prompts {
-    static let voice = "Voice: plain, warm, exact, like a friend who knows records and has looked at the numbers. Speak to him as \"you\". No flattery, no praise of his taste, nothing about what kind of person he is. No clichés: never \"eclectic\", \"sonic\", \"journey\", \"soundtrack\", \"tapestry\", \"vibes\", \"deep dive\", \"rabbit hole\", \"on repeat\", \"comfort\", \"taste\". No exclamation marks, no questions, no dashes. Say only what the data shows or what is plainly true of the music itself (its era, mood, sound, scene)."
-
-    static let portrait = """
-    You write a short portrait of one person's music listening, shown to him in his own Last.fm app. You are given his top artists and tracks over four periods (plays in brackets), the periods before them for comparison, notes on his artists (all-time plays, the year he first played them), and his latest scrobbles.
-
-    Write:
-    - "lines": 3 or 4 lines, each one sentence of at most 150 characters. Between them they say: what his listening is right now; the eras and moods it lives in; and what changed against the period before (who rose, who faded, who came back). Name his artists, at most three in a line: a line is a sentence to read, not a list. Don't open two lines the same way.
-    - "threads": 3 to 5 threads that run through his listening. Each has a "name" (2 to 4 words, lowercase), "artists" (2 to 5 of his artists that belong together, copied exactly as written in the data) and a "note" (one line, at most 90 characters, on what ties them or where the thread is heading). An artist goes in one thread only. Threads are about him: built from what he plays most now, not a genre list. Name a thread for its sound, era or scene, never for the people who make it.
-
-    \(voice) Use at most two play counts in the whole portrait.
-
-    Answer with JSON only, no other text and no code fence:
-    {"lines":["...","...","..."],"threads":[{"name":"...","artists":["...","..."],"note":"..."}]}
-    """
-
-    static let discovery = """
-    You choose new artists for one person to hear, shown in his own Last.fm app. You are given the artists he plays most and CANDIDATES: artists he has never played, each with the artists of his that Last.fm says it is similar to.
-
-    Choose the 12 to 15 candidates he would most want to hear, best first.
-    - Choose ONLY from CANDIDATES, by their exact name. Never add an artist that is not in the list.
-    - Prefer a candidate close to what he is playing now, and one tied to several of his artists. Keep a spread: at most three picks tied to the same artist of his, and not all one genre.
-    - For each pick give "like": the ONE artist of his (from that candidate's "similar to" list, exact name) it is closest to, and "why": what the new artist sounds like next to that one, in plain words, under 38 characters, lowercase, without either artist's name (the app shows both names beside it). Such as "slower, sadder, more pedal steel" or "the same blur with a drum machine". Not "similar to", not "fans also like", no flattery.
-
-    Answer with JSON only, no other text and no code fence:
-    {"picks":[{"artist":"<candidate name>","like":"<his artist>","why":"<under 38 characters>"}]}
-    """
-
-    static let week = """
-    You write a note about one person's past seven days of music against his usual, shown to him in his own Last.fm app. You are given this week's top artists with what he played of each before (the 90 days before this week, all time before this week, when he first played them, when he last played them before this week), this week's tracks, and what he usually plays.
-
-    Write "note": one or two sentences, at most 200 characters in all. Say the one or two things most worth saying: what he leaned into, a new obsession (an artist first played in the last few weeks and already played a lot), or a return (an artist back after a long gap). Name the artists, three at most. A week like his usual can be said to be like his usual.
-
-    Say it in words, not figures: at most ONE number in the whole note, and never the word "scrobbles". Not "You played 706 scrobbles against a usual 506 and X went from 2 plays to 55" but the same thing as a person would say it: that it was a heavier week and X, hardly played since spring, took most of it. Find your own words; don't reuse these.
-
-    \(voice)
-
-    Answer with JSON only, no other text and no code fence:
-    {"note":"..."}
-    """
-
-    static let ask = """
-    You answer one short question from a person about his own music listening, in his own Last.fm app. You are given DATA from his scrobble history: totals, plays and top artists by year, top artists and tracks over several periods, his latest scrobbles, and details of any artist of his the question names.
-
-    Answer from DATA only, in one to three sentences, at most 400 characters. Give the numbers that answer it. If DATA does not hold the answer, say in one sentence what you can't see from here and give the nearest thing DATA does show. Anything that isn't a question about his listening or music: say that's all you can answer here.
-
-    \(voice)
-
-    Answer with JSON only, no other text and no code fence:
-    {"answer":"..."}
-    """
 }
 
 // MARK: - The pieces on screen (Zune: large light words hung from the left edge, no card, no label saying who wrote it)
