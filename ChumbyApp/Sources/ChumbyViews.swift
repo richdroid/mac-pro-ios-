@@ -2397,13 +2397,15 @@ struct NowPlaying: View {
                         .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         VStack(alignment: .leading, spacing: 3) {
                             if let song {
-                                Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
+                                // A station's name is what he just tapped: whole, on two lines if it needs them (gate 11-25:
+                                // "Sunny Day Re…"), with its status on one line, inside the cover's height.
+                                Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(station != nil ? 2 : 1)
                                 // Chosen a moment ago and not yet sounding: said so, where its artist will be.
                                 // Two lines while starting, so the one status of the wait is never cut short beside the spinner.
-                                Text(starting != nil || station != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(starting != nil || station != nil ? 2 : 1)
+                                Text(station != nil ? "Starting…" : starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(starting != nil ? 2 : 1)
                                     .contentTransition(.opacity)
                             } else if playing, let held {
-                                Text(held.label).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
+                                Text(held.label).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(2)
                                 Text(held.source == "pandora" ? "Pandora" : "Radio").foregroundStyle(.secondary).lineLimit(1)
                             } else {
                                 Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
@@ -2472,7 +2474,7 @@ struct PandoraRow: View {
         Button { if !playing && !starting { model.playPandora(station) } } label: {
             HStack(spacing: 10) {
                 Label {
-                    Text(station.name).lineLimit(1).foregroundStyle(.primary)
+                    Text(station.name).lineLimit(2).foregroundStyle(.primary)
                 } icon: {
                     Image(systemName: playing ? "speaker.wave.2.fill" : "play.fill")
                         .symbolEffect(.variableColor.iterative, isActive: playing)

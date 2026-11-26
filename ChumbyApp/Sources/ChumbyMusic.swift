@@ -160,13 +160,15 @@ extension ChumbyModel {
         }
         guard let api else { return }
         tick()
+        pandoraAsk += 1
+        let ask = pandoraAsk
         withAnimation(.snappy) { pandoraStarting = st }
         Task {
             // Only the newest pick counts: a station chosen while another was starting must not be called failed, or
             // playing, by the first one's answer.
             do { try await api.post("play", extra: "&s=" + ChumbyAPI.enc(st.id), timeout: 20) }
             catch {
-                guard pandoraStarting == st else { return }
+                guard pandoraAsk == ask, pandoraStarting == st else { return }
                 withAnimation(.snappy) { pandoraStarting = nil }
                 fail("pplay", "“\(st.name)” didn’t start. \(AlarmWriter.explain(error))")
                 return
@@ -174,7 +176,7 @@ extension ChumbyModel {
             let asked = Date()
             while Date().timeIntervalSince(asked) < 60 {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard pandoraStarting == st else { return }
+                guard pandoraAsk == ask, pandoraStarting == st else { return }
                 _ = await loadState()
                 if state.music?.pandoraStation == st.id {
                     withAnimation(.snappy) { pandoraStarting = nil }
@@ -182,7 +184,7 @@ extension ChumbyModel {
                     return
                 }
             }
-            guard pandoraStarting == st else { return }
+            guard pandoraAsk == ask, pandoraStarting == st else { return }
             withAnimation(.snappy) { pandoraStarting = nil }
             fail("pplay", "“\(st.name)” didn’t start on the Chumby. Try again in a minute.")
         }
@@ -190,6 +192,7 @@ extension ChumbyModel {
     // The Chumby's own music stopped, a station still starting included (the Chumby ends that too).
     func stopChumbyMusic(id: String) {
         letGo("pplay")
+        pandoraAsk += 1
         withAnimation(.snappy) { pandoraStarting = nil }
         cmd("stopmusic", id: id)
     }

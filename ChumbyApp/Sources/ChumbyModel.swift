@@ -1224,6 +1224,8 @@ final class ChumbyModel: ObservableObject {
     // A Pandora station asked for from Sounds (a=play), until the Chumby's player says it has it: about 7 s, or about
     // 25 s on the first play after the Chumby's panel restarts (Pandora only logs in then, and the Chumby asks again).
     @Published var pandoraStarting: NamedID?
+    // Which ask the start under way belongs to: a Stop, then the same station again, is a new ask (gate 11-25).
+    var pandoraAsk = 0
     @Published var addingStation = false
     @Published var stationAdded: String?
     func addPandora(_ link: String) async {

@@ -54,7 +54,12 @@ jobs:
             xcrun simctl list devices | grep "$DEVICE" | grep -q Booted && return 0
             echo "simulator was down, booting again"; xcrun simctl boot "$DEVICE"; xcrun simctl bootstatus "$DEVICE" -b; sleep 5
           }
-          restart_mock() { kill $MOCK 2>/dev/null; sleep 1; node ci/mock-chumby.js & MOCK=$!; sleep 2; ensure; }
+          # And the app's own copy of the Chumby's state (Library/Caches/chumby-*) goes too: a cold open shows it first, so
+          # run 2's "starting" still opened on the last pose's song (gate 11-25).
+          restart_mock() {
+            kill $MOCK 2>/dev/null; sleep 1; node ci/mock-chumby.js & MOCK=$!; sleep 2; ensure
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && rm -f "$C"/Library/Caches/chumby-*
+          }
           # Sounds: a station tapped 3 s in. +7 s: starting (spinner on its row, the Now card naming it with Stop);
           # +20 s: playing (the row's sound, the card's song). pandoraswitch: a second station tapped once the first plays.
           stills() { # display, suffix
@@ -101,6 +106,7 @@ jobs:
           films 1 ""
           ensure; $D "$DEVICE" pose open; sleep 6; ensure
           stills 3 "-open"
+          films 3 "-open"
           $D "$DEVICE" rotate 1; sleep 6; ensure
           stills 3 "-portrait"
           films 3 "-portrait"
