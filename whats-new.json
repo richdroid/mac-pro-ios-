@@ -59,6 +59,7 @@
     "135": ["Pages scroll softly under their title"]
   },
   "Chumby.ipa": {
+    "318": ["Stopping an alarm on the Chumby now tries to cancel your iPhone backup even when the app is closed", "Calendar wake-up times are picked from a menu of common lengths, like Calendar's alerts", "If the Chumby won't play a station because an alarm is coming up, the app says so right under it"],
     "317": ["Play any of your Pandora stations on the Chumby right from Sounds, and stop it from the Now card", "The iPhone backup alarm stands down when you stop the alarm on the Chumby itself", "A busy Chumby says it's busy, never Can't reach the Mac"],
     "204": ["Pages open without waiting for scrolling to stop"],
     "200": ["Back works like other Duo apps: top of the side bar, or swipe from the edge"],
