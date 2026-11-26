@@ -80,6 +80,7 @@ struct PlannedWake: Identifiable, Equatable {
     var label: String?          // this day's own label, in place of the title on the Chumby
     var own: Alarm?             // this day's own sound and snooze (DayEdit.own), in place of the shared set
     var usualWake: Date?        // when the calendar's rule alone would wake (its lead before the start), whatever the day's own time
+    var ruleLead = 0            // the rule's own lead for this event (Work, or anything else plus a location's extra), no day's edit
     var shown: String { label ?? title }
     var id: String { key }
 }
@@ -137,7 +138,8 @@ enum WakePlanner {
             guard let first = list.first else { continue }
             let work = isWork(first, r)
             let edit = r.dayEdits[key(first)]
-            var lead = r.leadOverrides[key(first)] ?? (work ? r.workLead : r.otherLead + (first.hasLocation ? r.travelExtra : 0))
+            let ruleLead = work ? r.workLead : r.otherLead + (first.hasLocation ? r.travelExtra : 0)
+            var lead = r.leadOverrides[key(first)] ?? ruleLead
             var wake = first.start.addingTimeInterval(TimeInterval(-lead * 60))
             let usual = wake
             // A time set for this day alone, as long as it's still before the event.
@@ -154,6 +156,7 @@ enum WakePlanner {
             if let l = edit?.label?.trimmingCharacters(in: .whitespaces), !l.isEmpty { item.label = l }
             item.own = edit?.own
             item.usualWake = usual
+            item.ruleLead = ruleLead
             // Worth saying if the night before leaves little sleep.
             if let i = usable.indices.last(where: { usable[$0].end <= wake && days[$0] < day }) {
                 let before = usable[i]

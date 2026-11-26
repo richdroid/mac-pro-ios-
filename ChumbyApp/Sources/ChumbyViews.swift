@@ -2509,7 +2509,8 @@ struct PandoraRow: View {
             for _ in 0..<60 where model.state.pandora.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
             guard model.state.pandora.count > 1 else { return }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            model.playPandora(model.state.pandora[0])
+            // pandoramid (gate 11-26): a station further down, to show its note under it
+            model.playPandora(pose == "pandoramid" ? model.state.pandora[min(3, model.state.pandora.count - 1)] : model.state.pandora[0])
             guard pose == "pandoraswitch" || pose == "pandorastop" else { return }
             for _ in 0..<200 where model.state.music?.pandoraStation == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -2760,8 +2761,12 @@ struct SoundsTab: View {
             // its Stop. The stations themselves are kept under Stations, beside the alarms that play them.
             if !model.state.pandora.isEmpty {
                 Section {
-                    ForEach(model.state.pandora) { st in PandoraRow(station: st) }
-                    if let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")) }
+                    ForEach(model.state.pandora) { st in
+                        PandoraRow(station: st)
+                        if st.id == model.pplayStation, let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")) }
+                    }
+                    // a station no longer on the list: the note under the list, as before
+                    if !model.state.pandora.contains(where: { $0.id == model.pplayStation }), let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")) }
                 } header: { SectionHead(icon: "radio", text: "Pandora") }
                     .task { await PandoraPose.run(model) }
             }

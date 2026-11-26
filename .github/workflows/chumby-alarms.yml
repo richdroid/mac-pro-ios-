@@ -83,16 +83,19 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
               set -- "$1" "$2"
             done
-            # a Pandora station tapped 3 s in, the Chumby saying no (an alarm in 12 min): the note at once
-            restart_mock
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-refused$2.mp4 > /dev/null 2>&1 & REC=$!
-            sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/soundsrefused -tab 3 -pose pandoraplay
-            sleep 8
-            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-refused$2.png
-            sleep 6
-            kill -INT $REC; wait $REC; echo "film refused$2 exit $?"
-            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # a Pandora station tapped 3 s in (the first; then the fourth), the Chumby saying no (an alarm in 12 min): the note
+            # at once, under the station tapped; 12 stations, as his list is
+            for P in pandoraplay pandoramid; do
+              restart_mock
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-refused-$P$2.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/soundsrefused -tab 3 -pose $P
+              sleep 10
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-refused-$P$2.png
+              sleep 5
+              kill -INT $REC; wait $REC; echo "film refused-$P$2 exit $?"
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
           }
           ensure
           stills 1 ""

@@ -268,6 +268,11 @@ do {
     expect(p[0].wake == at(2026, 11, 12, 11, 30) && !p[0].isWork, "anything else 1 h 30 min before")
     dentist.hasLocation = true
     expect(WakePlanner.plan([dentist], rules: r, now: now, calendar: ny)[0].wake == at(2026, 11, 12, 11), "plus travel when it has a place")
+    // 11-26: the rule's own lead stays known whatever the day's own (the menu's "usual")
+    expect(WakePlanner.plan([dentist], rules: r, now: now, calendar: ny)[0].ruleLead == 120, "a day's rule lead: anything else plus travel")
+    var ro = r; ro.leadOverrides[WakePlanner.plan([shift], rules: r, now: now, calendar: ny)[0].key] = 45
+    let po = WakePlanner.plan([shift], rules: ro, now: now, calendar: ny)[0]
+    expect(po.lead == 45 && po.ruleLead == 160 && po.custom, "a day's own lead leaves its rule lead as it was")
     expect(WakePlanner.mentions("Workout", ["work"]) == false && WakePlanner.mentions("Work: late", ["work"]) && WakePlanner.mentions("My Day Off!", ["day off"]), "words match whole words only")
     // One wake a day: the first thing.
     p = WakePlanner.plan([event("a", "Dentist", at(2026, 11, 12, 10), hours: 1), event("s2", "Shift", at(2026, 11, 12, 18))], rules: r, now: now, calendar: ny)

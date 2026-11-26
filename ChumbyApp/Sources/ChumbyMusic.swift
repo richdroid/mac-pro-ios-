@@ -153,6 +153,8 @@ extension ChumbyModel {
     // If it doesn't within a minute, the card goes back and a note says so.
     func playPandora(_ st: NamedID) {
         letGo("pplay")
+        // the note (gate 11-26) goes under the station he tapped, where he is looking, not under the list
+        pplayStation = st.id
         if let why = alarmBusy { fail("pplay", "Not while \(why)."); return }
         if let n = state.nextRing(), n.at.timeIntervalSinceNow < 20 * 60 {
             fail("pplay", "The \(n.at.formatted(date: .omitted, time: .shortened)) alarm is less than 20 minutes away. Stations can play again once it has rung.")
@@ -176,7 +178,7 @@ extension ChumbyModel {
             }
             // 11-26: the Chumby's own word when it won't (it keeps clear of his alarms by its own list, which can know
             // more than this phone's), said at once rather than after a minute of "starting"
-            if let why = Self.playRefusal(answer) {
+            if let why = playRefusal(answer) {
                 guard pandoraAsk == ask, pandoraStarting == st else { return }
                 withAnimation(.snappy) { pandoraStarting = nil }
                 fail("pplay", why)
@@ -199,10 +201,17 @@ extension ChumbyModel {
         }
     }
     // The Chumby's a=play answer when it refused (chalarm 468fcc73: "started": false, "why"), as a sentence; nil otherwise.
-    nonisolated static func playRefusal(_ answer: [String: Any]) -> String? {
+    // Its "an alarm rings in N min" is said as the phone's own check says it, by the alarm's clock time (a note that is
+    // kept must not go false while he reads it, as "in 12 min" did; gate 11-26).
+    func playRefusal(_ answer: [String: Any]) -> String? {
         guard (answer["started"] as? Bool) == false || (answer["started"] as? NSNumber)?.boolValue == false else { return nil }
         let why = (answer["why"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-        if why.hasPrefix("an alarm rings in ") { return "Not now: the Chumby has an alarm in \(why.dropFirst("an alarm rings in ".count)). Stations can play again once it has rung." }
+        if why.hasPrefix("an alarm rings in ") {
+            let mins = Int(why.dropFirst("an alarm rings in ".count).prefix { $0.isNumber }) ?? 0
+            var at = Date().addingTimeInterval(Double(mins) * 60)
+            if let n = state.nextRing(), abs(n.at.timeIntervalSince(at)) < 150 { at = n.at }
+            return "The \(at.formatted(date: .omitted, time: .shortened)) alarm is less than 20 minutes away. Stations can play again once it has rung."
+        }
         if why == "an alarm rings or snoozes" || why == "an alarm is being watched" { return "Not while an alarm is ringing or snoozing." }
         return why.isEmpty ? "The Chumby didn’t start it." : "The Chumby didn’t start it: \(why)."
     }

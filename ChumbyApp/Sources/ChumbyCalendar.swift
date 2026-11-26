@@ -285,28 +285,36 @@ struct ChumbyCalendarIntent: AppIntent {
 // How long before an event: a menu of the usual lengths, as iOS's own Calendar asks for an alert or travel time (Richard,
 // 11-24: "changing calendar time doesn't feel stock"; a 5-minute Stepper took dozens of taps to go from 30 min to 2 h).
 // A length saved before that isn't one of them stays on the menu, in its place.
+// The rule's own default and the value the page opened with stay on the menu too (gate 11-26: his default 2 h 40 min went
+// once he tried 2 h 30, with no way back), and `usual` marks the length that puts a day back to the rule.
 enum LeadChoices {
     static let usual = [15, 20, 30, 45, 60, 75, 90, 105, 120, 150, 180, 240, 300, 360]
-    static func with(_ v: Int) -> [Int] { usual.contains(v) ? usual : (usual + [v]).sorted() }
+    static func with(_ v: Int, keep: [Int] = []) -> [Int] { Array(Set(usual + keep + [v])).filter { $0 > 0 }.sorted() }
 }
 struct LeadPicker: View {
     let title: String
     var note: String? = nil
     var suffix = ""
+    var keep: [Int] = []
+    var usual: Int? = nil
     @Binding var value: Int
+    @State private var opened: Int?
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 12) {
                 Text(title).lineLimit(1).fixedSize().layoutPriority(2)
                 Spacer(minLength: 8)
                 Picker(title, selection: $value.ticking()) {
-                    ForEach(LeadChoices.with(value), id: \.self) { Text(leadText($0) + suffix).tag($0) }
+                    ForEach(LeadChoices.with(value, keep: keep + (opened.map { [$0] } ?? [])), id: \.self) {
+                        Text(leadText($0) + suffix + ($0 == usual ? " · usual" : "")).tag($0)
+                    }
                 }
                 .labelsHidden().pickerStyle(.menu).monospacedDigit().layoutPriority(1)
             }
             if let note { Text(note).font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
         }
         .padding(.vertical, 2)
+        .onAppear { if opened == nil { opened = value } }
     }
 }
 func leadText(_ m: Int) -> String { m % 60 == 0 ? "\(m / 60)\u{00A0}h" : m < 60 ? "\(m)\u{00A0}min" : "\(m / 60)\u{00A0}h\u{00A0}\(m % 60)\u{00A0}min" }
@@ -329,7 +337,7 @@ struct CalendarSettingsSections: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
     @State private var showCalendars = false
-    func leadRow(_ label: String, _ value: Binding<Int>) -> some View { LeadPicker(title: label, value: value) }
+    func leadRow(_ label: String, _ value: Binding<Int>, _ standard: Int) -> some View { LeadPicker(title: label, keep: [standard], value: value) }
     var included: Int { wake.calendars.filter { !wake.rules.excludedCalendars.contains($0.title) }.count }
     var body: some View {
         Group {
@@ -339,9 +347,9 @@ struct CalendarSettingsSections: View {
                     .soloCard()
             }
             Section {
-                leadRow("Work", $wake.rules.workLead)
-                leadRow("Anything else", $wake.rules.otherLead)
-                leadRow("Extra for a location", $wake.rules.travelExtra)
+                leadRow("Work", $wake.rules.workLead, WakeRules().workLead)
+                leadRow("Anything else", $wake.rules.otherLead, WakeRules().otherLead)
+                leadRow("Extra for a location", $wake.rules.travelExtra, WakeRules().travelExtra)
                 Stepper(value: $wake.rules.daysAhead, in: 1...7) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Plan ahead")
@@ -577,7 +585,8 @@ struct CalendarDaySheet: View {
                     }
                 } else {
                     LeadPicker(title: "Wake", note: "Rings at \(item.wake.formatted(date: .omitted, time: .shortened))", suffix: " before",
-                               value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = $0 }))
+                               keep: item.ruleLead > 0 ? [item.ruleLead] : [], usual: item.ruleLead > 0 ? item.ruleLead : nil,
+                               value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = ($0 == item.ruleLead && item.ruleLead > 0) ? nil : $0 }))
                 }
                 if let problem { FailNote(text: problem) }
                 HStack {

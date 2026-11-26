@@ -601,6 +601,9 @@ function chumbyScene(q, s) {
       return false;
     }
     if (!chumbyLive[scene]) chumbyLive[scene] = { sys: { ...data.sys, ring: '' }, state: soundsState() };
+    // soundsrefused (11-26 gate): a real-sized list, 12 stations, so a note at the list's end would be off screen
+    if (scene === 'soundsrefused' && chumbyLive[scene].state.pandora.length < 12)
+      chumbyLive[scene].state.pandora.push(...['Built to Spill Radio', 'Duster Radio', 'Mazzy Star Radio', 'Alvvays Radio', 'Beach House Radio', 'Hum Radio', 'Failure Radio', 'Codeine Radio'].map((name, i) => ({ id: String(31 + i), name })));
     // soundsslow: every save is taken, but its answer comes after 4 s, for the film of a pick on a slow Chumby (no flip-flop).
     if (scene === 'soundsslow' && q.method === 'POST') { const end = s.end.bind(s); s.end = (...x) => { setTimeout(() => end(...x), 4000); return s; }; }
   }
