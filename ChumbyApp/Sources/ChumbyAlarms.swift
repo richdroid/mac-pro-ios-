@@ -946,22 +946,6 @@ struct AlarmsTab: View {
     // (it was swapped into the right pane open flat, with a Done of its own: Richard, 2026-11-23).
     func openDay(_ k: String) { let nav = AlarmsNav.shared; if nav.day != k { nav.day = k }; model.alarmsPage = true }
     func openSettings() { let nav = AlarmsNav.shared; if nav.day != nil { nav.day = nil }; model.alarmsPage = true }
-    // Calendar settings' views worked out once, off screen, after Alarms has sat still a moment, so the first push costs
-    // what every later one does: the first was 0.9 to 1.1 s on the build's Release films against 0.35 s after, a third of
-    // it the system looking up the page's types for the first time (CI chumby-fix-1127). Not if a page has opened first.
-    func prewarmSettings() {
-        #if canImport(UIKit)
-        guard !SettingsPrewarm.asked else { return }
-        SettingsPrewarm.asked = true
-        let model = self.model
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            for _ in 0..<20 where ScrollHold.holding || NavTransit.shared.active { try? await Task.sleep(nanoseconds: 250_000_000) }
-            guard !AlarmsNav.shared.page, model.tab == 2, UIApplication.shared.applicationState == .active else { return }
-            SettingsPrewarm.run(model)
-        }
-        #endif
-    }
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
@@ -1029,7 +1013,6 @@ struct AlarmsTab: View {
             // Coming back from Calendar settings or a day, the plan is already fresh, so Alarms doesn't read the calendar
             // again in the first frame of the slide back.
             if AlarmsNav.shared.returning { AlarmsNav.shared.returning = false } else { wake.refreshPlan() }
-            prewarmSettings()
             openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true
@@ -2061,19 +2044,3 @@ private struct AlarmsPagePush: ViewModifier {
         }
     }
 }
-#if canImport(UIKit)
-// Calendar settings laid out once in a hosting controller of its own, never in the window and never shown, then let go:
-// the page's types and the system's first lookups for them are made then, not in the turn of his tap (AlarmsTab).
-@MainActor enum SettingsPrewarm {
-    static var asked = false
-    static func run(_ model: ChumbyModel) {
-        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
-        let t0 = CACurrentMediaTime()
-        let h = UIHostingController(rootView: CalendarWakeSettings().environmentObject(model))
-        h.view.frame = window.bounds
-        h.view.setNeedsLayout()
-        h.view.layoutIfNeeded()
-        SwipeLog.note(String(format: "settings prewarmed %.0f ms", (CACurrentMediaTime() - t0) * 1000))
-    }
-}
-#endif
