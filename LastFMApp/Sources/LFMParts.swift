@@ -375,6 +375,7 @@ struct Page<C: View>: View {
     var capsRow = false
     var scrolled: Binding<Bool>? = nil
     @ViewBuilder let content: () -> C
+    @Environment(\.paneLayout) private var paned
     var body: some View {
         GeometryReader { g in
             // As a pivot's page does: the scroll runs on under the side bars (the rail open flat, the side tabs folded),
@@ -398,7 +399,8 @@ struct Page<C: View>: View {
                 .contentMargins(.bottom, Win.foot(g), for: .scrollContent)
                 .ignoresSafeArea(.container, edges: [.horizontal, .top])
                 .padding(.bottom, -Win.foot(g))
-                .scrollIndicators(.automatic)
+                // Only at a real edge of the screen: open flat a page is a pane and its edge the seam (Richard, 11-26).
+                .scrollIndicators(paned ? .hidden : .automatic)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
                 .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 2 } action: { _, v in
                     if let scrolled, scrolled.wrappedValue != v { scrolled.wrappedValue = v }

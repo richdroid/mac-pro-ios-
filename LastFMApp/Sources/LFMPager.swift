@@ -425,7 +425,9 @@ struct Pager: View {
             .contentMargins(.top, head - cut, for: .scrollContent)
             .padding(.top, cut)
             .contentMargins(.bottom, foot, for: .scrollContent)
-            .scrollIndicators(.automatic)
+            // A scroll bar only at a real edge of the screen (Richard, 11-26 on build 81 open flat: "the way this scroll bar
+            // is placed is retarded"): a pane's edge is the seam, so open flat none.
+            .scrollIndicators(paned ? .hidden : .automatic)
             .turnstile(0)
             .environment(\.pageWidth, pw)
             .environment(\.pageBleed, EdgeInsets(top: 0, leading: side.leading, bottom: 0, trailing: side.trailing))

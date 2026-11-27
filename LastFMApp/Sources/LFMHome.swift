@@ -15,24 +15,9 @@ struct HomeView: View {
     var body: some View {
         Group {
             if pane {
-                FoldSplit {
-                    Page {
-                        VStack(alignment: .leading, spacing: S.head) {
-                            AppTitle(text: Home.title).modifier(order("title"))
-                            StartTiles(width: nil, go: go)
-                        }
-                        .padding(.top, S.head)
-                    }
-                } right: {
-                    Page {
-                        VStack(alignment: .leading, spacing: S.section) {
-                            MenuWords(go: go).padding(.leading, S.margin)
-                            AlbumTiles(title: "just played", items: Quickplay.albums(store.recent), width: nil)
-                            ArtistTiles(title: "on repeat", list: store.insights.week, width: nil)
-                        }
-                        .padding(.top, S.head)
-                    }
-                }
+                // Open flat, the wide screen: a Windows 8 hub, not the phone's panorama (Richard, 11-26 on build 81: "look at
+                // a windows 8 metro app").
+                MetroHub(go: go)
             } else {
                 HomePanorama(go: go)
             }
@@ -86,6 +71,174 @@ struct HomeView: View {
             // Two frames for the black to be on screen before the push's stall.
             try? await Task.sleep(nanoseconds: 34_000_000)
             open.hub(hub, panel)
+        }
+    }
+}
+
+// Open flat, a Windows 8 hub page (Richard, 2026-11-26 on build 81 open flat: "look at a windows 8 metro app also the way
+// this scroll bar is placed is retarded"; study: ~/.claude/design/reference/zune/w8-metro-hub-study.md). One surface that
+// pans sideways as a whole: the app's name top left in Light at the page header's place (42 pt Segoe UI Light, its
+// baseline 100 px down, 120 px in), then groups side by side from 140 px down, 80 px apart, each under its own 20 pt
+// header: start (his live tiles, now playing as the 2x2 hero), menu (the hubs' words in columns), just played and on
+// repeat (covers in rows). Everything fits the height, so nothing scrolls up and down and there is no bar down the seam;
+// the one scroll bar is Windows 8's own, thin across the foot, shown only while it pans. Sizes from a 768 px tall page,
+// scaled to the screen's height.
+private struct MetroHub: View {
+    let go: (String, Hub, Int?) -> Void
+    private var store: Store { Store.shared }
+    var body: some View {
+        GeometryReader { out in
+            let insets = out.safeAreaInsets
+            GeometryReader { g in
+                let H = max(g.size.height, 1)
+                let u = min(1.15, max(0.8, H / 768))
+                let left = insets.leading + 120 * u
+                let headSize = 56 * u
+                let m = HomePanorama.metrics(headSize)
+                let headTop = 100 * u - m.ascender
+                let contentTop = 140 * u
+                let foot = max(50 * u, insets.bottom + 24)
+                let sub = 44 * u
+                let gap = max(8, 10 * u)
+                let rows = H - contentTop - foot - sub
+                let t = max(90, floor((rows - gap * 2) / 3))
+                // The 8.1 hub's hero: the first section, the screen's full height from its very left edge, no header (study
+                // §3); the song on now or last played, his cover.
+                let heroW = min(780 * u, g.size.width * 0.62)
+                ZStack(alignment: .topLeading) {
+                    ScrollView(.horizontal) {
+                        HStack(alignment: .top, spacing: 80 * u) {
+                            tile("now", .nowPlaying, nil, w: heroW, h: H) { NowLiveTile() }
+                                .overlay(alignment: .top) {
+                                    // The title reads over the hero's top.
+                                    LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+                                        .frame(height: contentTop).allowsHitTesting(false)
+                                }
+                                .turnstile(1)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Color.clear.frame(height: contentTop)
+                                HStack(alignment: .top, spacing: 80 * u) {
+                                    group("start", 1, sub, u) { startTiles(t, gap) }
+                                    group("menu", 2, sub, u) { words(t, gap, u) }
+                                    if !Quickplay.albums(store.recent).isEmpty {
+                                        group("just played", 3, sub, u, key: "h-played", opens: (.history, 1)) { covers(t, gap) }
+                                    }
+                                    if !store.insights.week.isEmpty {
+                                        group("on repeat", 3, sub, u, key: "h-repeat", opens: (.charts, nil)) { artists(t, gap) }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.trailing, 120 * u + insets.trailing)
+                        .frame(height: H, alignment: .topLeading)
+                    }
+                    .scrollIndicators(.automatic)
+                    .onScrollPhaseChange { _, p in HomeSwipe.moving = p != .idle; Store.shared.scrolling = p != .idle }
+                    // The hub's title stays where it is while the sections pan under it (study §3, the 8.1 Hub).
+                    Text(Home.title).font(.zuneLower(size: headSize)).tracking(-0.5)
+                        .foregroundStyle(.white).lineLimit(1).fixedSize()
+                        .padding(.leading, left - 2).offset(y: headTop)
+                        .allowsHitTesting(false)
+                        .accessibilityAddTraits(.isHeader)
+                        .modifier(TurnstileOut(index: Home.order("title"), count: Home.count))
+                        .turnstile(0)
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    // A group: its header (Windows 8's subheader, 20 pt Light), then its items.
+    // A group: its header (Windows 8's subheader, 20 pt Light; one that opens a page carries the chevron), then its items.
+    private func group<C: View>(_ name: String, _ i: Int, _ sub: CGFloat, _ u: CGFloat, key: String? = nil, opens: (Hub, Int?)? = nil, @ViewBuilder _ c: () -> C) -> some View {
+        let head = HStack(alignment: .firstTextBaseline, spacing: 8 * u) {
+            Text(name).font(.zuneLower(size: 27 * u)).foregroundStyle(.white).lineLimit(1).fixedSize()
+            if opens != nil { Image(systemName: "chevron.right").font(.system(size: 15 * u, weight: .light)).foregroundStyle(.white.opacity(0.8)) }
+        }
+        .frame(height: sub, alignment: .topLeading)
+        .modifier(TurnstileOut(index: Home.order(key ?? "h-" + (name == "menu" ? "menu" : "start")), count: Home.count))
+        .accessibilityAddTraits(.isHeader)
+        return VStack(alignment: .leading, spacing: 0) {
+            if let o = opens, let key { Button { go(key, o.0, o.1) } label: { head.contentShape(Rectangle()) }.buttonStyle(Tilt()) }
+            else { head }
+            c().modifier(TurnstileOut(index: key.map { Home.order($0) } ?? -1, count: Home.count))
+        }
+        .turnstile(i)
+    }
+
+    private func tile<C: View>(_ key: String, _ hub: Hub, _ panel: Int?, w: CGFloat, h: CGFloat, @ViewBuilder _ c: () -> C) -> some View {
+        Button { go(key, hub, panel) } label: { c().frame(width: w, height: h) }
+            .buttonStyle(Tilt())
+            .modifier(TurnstileOut(index: Home.order(key), count: Home.count))
+    }
+
+    // His live tiles in three rows, flowing right in columns (now playing is the hero before them).
+    private func startTiles(_ t: CGFloat, _ gap: CGFloat) -> some View {
+        let wide = t * 2 + gap
+        return HStack(alignment: .top, spacing: gap) {
+            VStack(alignment: .leading, spacing: gap) {
+                HStack(spacing: gap) {
+                    tile("profile", .profile, 0, w: t, h: t) { ProfileLiveTile() }
+                    tile("today", .history, 0, w: t, h: t) { TodayLiveTile() }
+                }
+                tile("discover", .discover, 0, w: wide, h: t) { DiscoverLiveTile() }
+                HStack(spacing: gap) {
+                    tile("charts", .charts, nil, w: t, h: t) { ChartsLiveTile() }
+                    tile("library", .library, nil, w: t, h: t) { LibraryLiveTile() }
+                }
+            }
+            VStack(alignment: .leading, spacing: gap) {
+                tile("scrobbling", .scrobbling, nil, w: wide, h: t) { ScrobbleLiveTile() }
+                HStack(spacing: gap) {
+                    tile("rediscover", .discover, 2, w: t, h: t) { RediscoverLiveTile() }
+                    tile("history", .history, 1, w: t, h: t) { HistoryLiveTile() }
+                }
+            }
+        }
+    }
+
+    // The hubs' words, Zune HD's menu, in columns of three as tall as a tile row each.
+    private func words(_ t: CGFloat, _ gap: CGFloat, _ u: CGFloat) -> some View {
+        let size = min(64 * u, floor(t * 0.5))
+        let colW = (Hub.menu.map { textWidth($0.word, size: size, tracking: -1.2, weight: -0.4, face: Z.lower()) }.max() ?? 200) + 40 * u
+        return LazyHGrid(rows: Array(repeating: GridItem(.fixed(t), spacing: gap, alignment: .topLeading), count: 3), alignment: .top, spacing: 0) {
+            ForEach(Hub.menu, id: \.self) { h in
+                Button { go("w-" + h.rawValue, h, nil) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(h.word).font(.zuneLower(size: size)).tracking(-1.2).foregroundStyle(.white)
+                            .lineLimit(1).fixedSize().padding(.leading, -3)
+                        Text(MenuWords.inside(h)).font(.zuneCaps(size: 12, .semibold)).tracking(0.6)
+                            .foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    }
+                    .frame(width: colW, height: t, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(Tilt())
+                .modifier(TurnstileOut(index: Home.order("w-" + h.rawValue), count: Home.count))
+                .accessibilityLabel(h.word)
+            }
+        }
+    }
+
+    private func covers(_ t: CGFloat, _ gap: CGFloat) -> some View {
+        LazyHGrid(rows: Array(repeating: GridItem(.fixed(t), spacing: gap), count: 3), alignment: .top, spacing: gap) {
+            ForEach(Quickplay.albums(store.recent).prefix(12)) { e in
+                Opens(route: e.route, zoom: "tile|\(e.id)") {
+                    CoverTile(ref: e.art, name: e.title, line: when(e.last.map { Date(timeIntervalSince1970: TimeInterval($0)) }), side: t)
+                        .zoomSource("tile|\(e.id)")
+                }
+            }
+        }
+    }
+
+    private func artists(_ t: CGFloat, _ gap: CGFloat) -> some View {
+        LazyHGrid(rows: Array(repeating: GridItem(.fixed(t), spacing: gap), count: 3), alignment: .top, spacing: gap) {
+            ForEach(store.insights.week.prefix(12)) { a in
+                Opens(route: .artist(a.name), zoom: "tile|a|\(a.name)", seed: ArtRef(artist: a.name, album: a.album, url: a.image)) {
+                    CoverTile(ref: ArtRef(artist: a.name, album: a.album, url: a.image), name: a.name, line: "\(number(a.plays)) plays", side: t)
+                        .zoomSource("tile|a|\(a.name)")
+                }
+            }
         }
     }
 }
@@ -219,7 +372,8 @@ private struct HomePanorama: View {
                     .padding(.bottom, max(S.section, 34))
                     .frame(width: w, alignment: .topLeading)
             }
-            .scrollIndicators(.automatic)
+            // A section's edge is mid-screen (the next section shows past it): no scroll bar there (Richard, 11-26).
+            .scrollIndicators(.hidden)
             .onScrollPhaseChange { _, p in Store.shared.scrolling = p != .idle }
         }
         .frame(width: w, height: h, alignment: .topLeading)

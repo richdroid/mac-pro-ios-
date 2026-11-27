@@ -418,8 +418,10 @@ struct WPPaging: ScrollTargetBehavior {
 @MainActor final class PageLander: NSObject {
     #if canImport(UIKit)
     weak var scroll: UIScrollView?
-    private var anim: UIViewPropertyAnimator?
     #endif
+    // The landing running (its number, so a stopped one's completion is ignored), and where it goes.
+    private var running: (id: Int, to: CGFloat)?
+    private var serial = 0
     private var done: (() -> Void)?
     // Told as a landing starts (its target offset), and as it ends or is stopped (its owner syncs what follows the scroll).
     var starts: ((CGFloat) -> Void)?
@@ -432,13 +434,7 @@ struct WPPaging: ScrollTargetBehavior {
         return false
         #endif
     }
-    var active: Bool {
-        #if canImport(UIKit)
-        return anim != nil
-        #else
-        return false
-        #endif
-    }
+    var active: Bool { running != nil }
     // Where the scroll is now (the landing's target while one runs: the model value).
     var offset: CGFloat? {
         #if canImport(UIKit)
@@ -449,36 +445,60 @@ struct WPPaging: ScrollTargetBehavior {
     }
     static func ease(_ t: Double) -> Double { let k = 6.0; return (1 - exp(-k * t)) / (1 - exp(-k)) }
     // Lands on x; `done` once it rests there. False when there is no scroll to drive.
+    // Since build 83 a Core Animation basic animation on the scroll's bounds asking for up to 120 Hz (an iPhone runs a
+    // property animator's frames at 60 unless asked: a 120 Hz drag then landed at half the rate).
     @discardableResult func land(to x: CGFloat, done: @escaping () -> Void) -> Bool {
         #if canImport(UIKit)
         guard let sv = scroll else { return false }
-        if let a = anim { anim = nil; a.stopAnimation(false); a.finishAnimation(at: .current) }
-        let from = sv.contentOffset.x
+        let from = current(sv)
+        cancel(sv)
         self.done = done
         if abs(x - from) < 0.5 {
             sv.setContentOffset(CGPoint(x: x, y: sv.contentOffset.y), animated: false)
             finish(); return true
         }
-        let a = UIViewPropertyAnimator(duration: Self.duration,
-                                       timingParameters: UICubicTimingParameters(controlPoint1: CGPoint(x: 0.16, y: 1), controlPoint2: CGPoint(x: 0.3, y: 1)))
-        a.isInterruptible = true
-        a.isUserInteractionEnabled = true
-        a.addAnimations { sv.contentOffset = CGPoint(x: x, y: sv.contentOffset.y) }
-        a.addCompletion { [weak self] pos in
+        serial += 1
+        let id = serial
+        running = (id, x)
+        starts?(x)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.anim === a else { return }
-                self.anim = nil
-                if pos == .end { self.finish() }
+                guard let self, self.running?.id == id else { return }
+                self.running = nil
+                self.finish()
             }
         }
-        anim = a
-        starts?(x)
-        a.startAnimation()
+        sv.contentOffset = CGPoint(x: x, y: sv.contentOffset.y)
+        let a = CABasicAnimation(keyPath: "bounds.origin.x")
+        a.fromValue = from
+        a.toValue = x
+        a.duration = Self.duration
+        a.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
+        a.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        sv.layer.add(a, forKey: "land")
+        CATransaction.commit()
         return true
         #else
         return false
         #endif
     }
+    #if canImport(UIKit)
+    // Where the scroll shows now: mid-landing, the frame on screen rather than the model's target.
+    private func current(_ sv: UIScrollView) -> CGFloat {
+        guard running != nil, let p = sv.layer.presentation() else { return sv.contentOffset.x }
+        return p.bounds.origin.x
+    }
+    // A landing taken off where it is on screen.
+    private func cancel(_ sv: UIScrollView) {
+        guard running != nil else { return }
+        let at = current(sv)
+        running = nil
+        sv.layer.removeAnimation(forKey: "land")
+        sv.setContentOffset(CGPoint(x: at, y: sv.contentOffset.y), animated: false)
+    }
+    #endif
     // Put at x at once, no landing (the carousel dealt round under a page at rest).
     func jump(to x: CGFloat) {
         #if canImport(UIKit)
@@ -489,7 +509,7 @@ struct WPPaging: ScrollTargetBehavior {
     // A finger on it again: the landing stops where it is on screen (the next release lands from there).
     func stop() {
         #if canImport(UIKit)
-        if let a = anim { anim = nil; a.stopAnimation(false); a.finishAnimation(at: .current); ends?() }
+        if running != nil, let sv = scroll { cancel(sv); ends?() }
         #endif
         done = nil
     }
