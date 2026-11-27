@@ -248,7 +248,15 @@ jobs:
           chset() {
             local d=$1 x=$2
             tabshots $CH $d $x "0 1 2 3 4"
-            shot $CH $d chumby-pandoranote$x 12 http://127.0.0.1:9000/soundsrefused -tab 3 -pose pandoramid
+            # A station played while the Chumby says no: its note under that station, the divider at the names. The app's
+            # kept state cleared first, as the alarms branch's CI did (CI 1bfdbf7: no note at 12 s).
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" $CH data 2>/dev/null) && rm -f "$c"/Library/Caches/chumby-*
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-pandoranote$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $CH -address http://127.0.0.1:9000/soundsrefused -tab 3 -pose pandoramid > /dev/null
+            sleep 12; snap $d chumby-pandoranote$x; sleep 5; snap $d chumby-pandoranote$x-b
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" $CH || true
           }
           chmotion() {
             local d=$1 x=$2
@@ -285,8 +293,10 @@ jobs:
           macset 3 -flat; macmotion 3 -flat
           chset 3 -flat; chmotion 3 -flat
           date
+          # Closed from open flat, rotate 3 is the cover display upright and rotate 1 on its side (CI 1bfdbf7: the other
+          # way round, the folded set came out on its side).
           $D "$DEVICE" pose closed || true; sleep 5
-          $D "$DEVICE" rotate 1 || true; sleep 5
+          $D "$DEVICE" rotate 3 || true; sleep 5
           probe 1 folded
           # Folded the swipe starts low: the drag tool rests the finger a second before it moves, which a chart takes as a
           # hold to read a value (CI 5a48486).
@@ -295,14 +305,14 @@ jobs:
           macset 1 -folded; music 1 -folded; macmotion 1 -folded
           chset 1 -folded; chmotion 1 -folded
           date
-          $D "$DEVICE" rotate 3 || true; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 5
           probe 1 foldedside
           tabshots $TV 1 -foldedside "3 0 6"
           shot $TV 1 tv-remote-rfilm-foldedside 9 $M/rfilm -tab 0
           tabshots $MAC 1 -foldedside "0 1 2 4 5 6"
           tabshots $CH 1 -foldedside "0 1 2 3 4"
           taptest tv-taps-foldedside 1 $TV -tab 3
-          $D "$DEVICE" rotate 1 || true; sleep 3
+          $D "$DEVICE" rotate 3 || true; sleep 3
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           grep -h "open tab" dist/tv-tour-*-hitches.log 2>/dev/null || true
           date

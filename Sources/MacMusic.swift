@@ -26,6 +26,8 @@ final class MacMusicStore: ObservableObject {
     @Published private(set) var available = UserDefaults.standard.bool(forKey: "macMusic.available")
     @Published private(set) var busy: String?
     @Published private(set) var say: String?
+    // Which switch the answer is about: it's said in that switch's own note, where he is looking.
+    @Published private(set) var sayFor: String?
     @Published private(set) var answered = 0
     @Published private(set) var refused = 0
     // A switch shows what was asked for until the Mac answers.
@@ -62,7 +64,7 @@ final class MacMusicStore: ObservableObject {
     }
     private func act(_ model: AppModel, _ key: String, _ want: Bool, _ path: String, _ body: [String: Any]) async {
         guard busy == nil else { return }
-        busy = key; asked[key] = want; say = nil
+        busy = key; asked[key] = want; say = nil; sayFor = key
         let a = try? await model.api.macDo(path, body, timeout: 45)
         // The Mac's answer is shown only when it refused or failed: on success the switch has already said it.
         if a?.done == true { answered += 1; say = nil } else { say = a?.say ?? a?.error ?? "Couldn’t reach the Mac."; refused += 1 }
@@ -86,18 +88,24 @@ struct MacMusicSection: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var store = MacMusicStore.shared
 
-    private func row(_ title: String, _ note: String, _ symbol: String) -> some View {
+    private func row(_ title: String, _ note: String, _ symbol: String, warn: Bool = false) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).fixedSize(horizontal: false, vertical: true)
-                // A long song's name and artist take two lines at most, then end in an ellipsis.
-                Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(2).truncationMode(.tail)
+                // A long song's name and artist take two lines at most, then end in an ellipsis. The Mac's refusal is
+                // said here too, in orange, for its few seconds (whole: it's what he needs to read).
+                Text(note).font(.footnote).foregroundStyle(warn ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                    .lineLimit(warn ? nil : 2).truncationMode(.tail).fixedSize(horizontal: false, vertical: warn)
+                    .animation(.easeOut(duration: 0.2), value: warn)
             }
         } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
     }
     private var lyricsOn: Bool { store.now?.session?.on == true }
+    // The Mac's refusal of this switch's press, while it's shown.
+    private func refusal(_ key: String) -> String? { store.sayFor == key ? store.say : nil }
     private var lyricsNote: String {
         if store.busy == "lyrics" { return "Asking the Mac…" }
+        if let r = refusal("lyrics") { return r }
         // Opened cold, before the Mac's first answer: not "off" when it may be on (designer gate on mac-appliance-1125).
         if store.now == nil { return "Checking…" }
         guard lyricsOn else { return "Full screen on the Mac, through the speaker" }
@@ -108,6 +116,7 @@ struct MacMusicSection: View {
     }
     private var speakerNote: String {
         if store.busy == "speaker" { return "Asking the Mac…" }
+        if let r = refusal("speaker") { return r }
         if store.speaker?.connected == nil { return "Checking…" }
         if store.speaker?.connected == true { return "Connected to the Mac" }
         return lyricsOn ? "Not connected" : "Free for your other devices"
@@ -123,7 +132,7 @@ struct MacMusicSection: View {
         if store.available {
             Section {
                 Toggle(isOn: Binding(get: { store.asked["lyrics"] ?? lyricsOn }, set: { w in Task { await store.lyrics(model, w) } })) {
-                    row("Lyrics", lyricsNote, "quote.bubble")
+                    row("Lyrics", lyricsNote, "quote.bubble", warn: refusal("lyrics") != nil)
                 }
                 .accessibilityIdentifier("switch.lyrics")
                 // Not to be pressed before the Mac has said where it is.
@@ -131,11 +140,13 @@ struct MacMusicSection: View {
                 .id("mac-music")
                 if store.speaker != nil {
                     Toggle(isOn: Binding(get: { store.asked["speaker"] ?? (store.speaker?.connected == true) }, set: { w in Task { await store.speaker(model, w) } })) {
-                        row(speakerName, speakerNote, "hifispeaker")
+                        row(speakerName, speakerNote, "hifispeaker", warn: refusal("speaker") != nil)
                     }
                     .accessibilityIdentifier("switch.speaker")
                 }
-            } header: { Text("Music") } footer: { if let s = store.say { Text(s) } }
+            // The Mac's refusal is in the pressed switch's note: a footer came in below the page's end, under the tab bar,
+            // where he couldn't see it (CI 1bfdbf7).
+            } header: { Text("Music") }
             .disabled(store.busy != nil || model.stale)
             .haptic(.done, trigger: store.answered)
             .haptic(.warn, trigger: store.refused)
