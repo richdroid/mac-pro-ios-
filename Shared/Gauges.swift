@@ -111,32 +111,37 @@ struct SparkLine: View {
     // The samples that went off the left end in the last slide, drawn there until they've gone.
     @State private var gone: [Double] = []
     @State private var shift: CGFloat = 0
+    // What's drawn: set together with `gone` and `shift`, so a new reading is never drawn a step over for a frame first.
+    @State private var shown: [Double]?
     // Shapes, not a Canvas, for the same reason as the dials' ticks: never a blank chart for a frame.
     var body: some View {
         if values.count > 1 {
-            let hi = max(top ?? values.max() ?? 1, 0.0001)
-            let drawn = gone + values
+            let now = shown ?? values
+            let hi = max(top ?? now.max() ?? 1, 0.0001)
+            let drawn = gone + now
             ZStack {
                 SparkPath(values: drawn, hi: hi, closed: true, lead: gone.count, shift: shift).fill(color.opacity(0.18))
                 SparkPath(values: drawn, hi: hi, closed: false, lead: gone.count, shift: shift).stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
             }
             .clipped()
             .onChange(of: values) { old, new in
+                var t = Transaction(); t.disablesAnimations = true
                 guard let slide, slide > 0, let k = Self.added(old, new) else {
-                    var t = Transaction(); t.disablesAnimations = true
-                    withTransaction(t) { gone = []; shift = 0 }
+                    withTransaction(t) { shown = new; gone = []; shift = 0 }
                     return
                 }
-                var t = Transaction(); t.disablesAnimations = true
-                withTransaction(t) { gone = Array(old.prefix(k)); shift = CGFloat(k) }
-                withAnimation(.linear(duration: slide)) { shift = 0 }
+                // Drawn first where the old line was (the new samples past the right edge), then slid by them on the
+                // next turn: set and animated in one turn, the slide ran from 0 to 0 and the line jumped (gate on
+                // 5dea295: one frame a second).
+                withTransaction(t) { shown = new; gone = Array(old.prefix(k)); shift = CGFloat(k) }
+                Task { @MainActor in withAnimation(.linear(duration: slide)) { shift = 0 } }
             }
         }
     }
-    // How many samples the new reading added at the end (1 to 4), the rest of the line the same: nil for anything else.
+    // How many samples the new reading added at the end (1 to 4, fewer on a short line), the rest of the line the same: nil for anything else.
     static func added(_ old: [Double], _ new: [Double]) -> Int? {
-        guard old.count == new.count, old.count > 4 else { return nil }
-        for k in 1...4 where Array(old.dropFirst(k)) == Array(new.dropLast(k)) { return k }
+        guard old.count == new.count, old.count >= 3 else { return nil }
+        for k in 1...min(4, old.count - 2) where Array(old.dropFirst(k)) == Array(new.dropLast(k)) { return k }
         return nil
     }
 }

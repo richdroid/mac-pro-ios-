@@ -139,8 +139,10 @@ const liveMac = () => {
   m.load = [0.8 + (n % 9) / 4, 1.1, 0.9];
   m.net.rxRate = 20000 + ((n * 17) % 61) * 3000; m.net.txRate = 4000 + ((n * 5) % 13) * 900;
   // One rolling history, a sample added and the oldest dropped each second, as the bridge's own ring.
-  if (!liveHist.v) { liveHist.v = JSON.parse(JSON.stringify(m.hist)); liveHist.at = n; }
-  for (; liveHist.at < n; liveHist.at++) for (const k of Object.keys(liveHist.v)) { const h = liveHist.v[k]; h.push(h[(liveHist.at + k.length) % h.length] * (0.7 + (liveHist.at % 5) / 8)); h.shift(); }
+  // Each new sample from the still Mac's own history (never from the rolling one, whose products decayed to nothing
+  // within the hour: the charts lay flat at the foot open flat, gate on 5dea295).
+  if (!liveHist.v) { liveHist.v = JSON.parse(JSON.stringify(m.hist)); liveHist.base = JSON.parse(macStatus).hist; liveHist.at = n; }
+  for (; liveHist.at < n; liveHist.at++) for (const k of Object.keys(liveHist.v)) { const h = liveHist.v[k], b = liveHist.base[k]; h.push(b[(liveHist.at + k.length) % b.length] * (0.7 + (liveHist.at % 5) / 8)); h.shift(); }
   m.hist = JSON.parse(JSON.stringify(liveHist.v));
   m.temps.forEach((t, i) => { t.c = Math.round(t.c + ((n * (i + 3)) % 7) - 3); });
   if (n % 2) m.apps.push({ name: 'TextEdit', pid: 18, cpu: 0, mem: 88000000 });

@@ -164,7 +164,8 @@ jobs:
             shot $MAC $d macpro-music-longtitle$x 9 http://127.0.0.1:9064 -tab 6 -pose music
             shot $MAC $d macpro-music-asking$x 9 http://127.0.0.1:9064 -tab 6 -pose music -musicPress lyrics
             xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:9065 -tab 6 -pose music -musicPress lyrics > /dev/null
-            sleep 5.5; snap $d macpro-music-refused$x-a; sleep 1.5; snap $d macpro-music-refused$x-b
+            # The answer lands about 3 s in and its note stays 5 s: one still while it shows, one after it has gone.
+            sleep 5.5; snap $d macpro-music-refused$x-a; sleep 6; snap $d macpro-music-refused$x-b
             xcrun simctl terminate "$DEVICE" $MAC || true
             shot $MAC $d macpro-music-checking$x 4 http://127.0.0.1:9066 -tab 6 -pose music
           }
@@ -263,56 +264,58 @@ jobs:
             navfilm chumby-back$x $d $CH -tab 2 -pose calsettings
             taptest chumby-taps$x $d $CH -tab 0
           }
+          # Round 3 (after the gate on 5dea295): the posture the first two rounds missed first. Booted, the phone is
+          # folded and upright (the cover display as he holds it folded; mp-nav-1126's order); closing it after opening
+          # gave the cover display on its side first in both rounds.
+          macfilm() {
+            local n=$1 d=$2 secs=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/macpro-$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $MAC "$@" > /dev/null
+            sleep $secs; snap $d macpro-$n-end
+            xcrun simctl terminate "$DEVICE" $MAC || true
+            kill -INT $REC; wait $REC
+          }
           date
-          # Main's posture order (macpro.yml): opened, turned upright, turned flat; then folded, and folded on its side.
-          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
-          $D "$DEVICE" rotate 1; sleep 5
-          probe 3 upright
-          # Open upright first: the posture he holds. Mint Remote leads.
-          FALLBACK="0.065 0.049"; DRAGY=0.5
-          tvset 3 -upright; tvmotion 3 -upright
-          macset 3 -upright; music 3 -upright; macmotion 3 -upright
-          shot $MAC 3 macpro-fans-upright 10 http://127.0.0.1:9021 -tab 5 -pose fans
-          chset 3 -upright; chmotion 3 -upright
-          date
-          # Dark and light, and Dynamic Type one size up, open upright.
-          xcrun simctl ui "$DEVICE" appearance dark; sleep 2
-          ADDR= tabshots $CH 3 -upright-dark "0 2 3"
-          shot $TV 3 tv-tab3-upright-dark 8 $M -tab 3; shot $MAC 3 macpro-tab0-upright-dark 8 $(addr $MAC) -tab 0
-          xcrun simctl ui "$DEVICE" appearance light; sleep 2
-          shot $TV 3 tv-tab3-upright-light 8 $M -tab 3; shot $MAC 3 macpro-tab0-upright-light 8 $(addr $MAC) -tab 0
-          xcrun simctl ui "$DEVICE" content_size extra-large; sleep 2
-          tabshots $MAC 3 -upright-xl "0 1 5 6"; tabshots $CH 3 -upright-xl "0 2 3"; tabshots $TV 3 -upright-xl "3 0 6"
-          shot $TV 3 tv-remote-rfilm-upright-xl 9 $M/rfilm -tab 0
-          xcrun simctl ui "$DEVICE" content_size large; sleep 2
-          date
-          $D "$DEVICE" rotate 3 || true; sleep 5
-          probe 3 flat
-          FALLBACK="0.948 0.222"; DRAGY=0.5
-          tvset 3 -flat; tvmotion 3 -flat
-          macset 3 -flat; macmotion 3 -flat
-          chset 3 -flat; chmotion 3 -flat
-          date
-          # Closed from open flat, rotate 3 is the cover display upright and rotate 1 on its side (CI 1bfdbf7: the other
-          # way round, the folded set came out on its side).
-          $D "$DEVICE" pose closed || true; sleep 5
-          $D "$DEVICE" rotate 3 || true; sleep 5
           probe 1 folded
-          # Folded the swipe starts low: the drag tool rests the finger a second before it moves, which a chart takes as a
-          # hold to read a value (CI 5a48486).
           FALLBACK="0.895 0.292"; DRAGY=0.85
           tvset 1 -folded; tvmotion 1 -folded
           macset 1 -folded; music 1 -folded; macmotion 1 -folded
           chset 1 -folded; chmotion 1 -folded
           date
+          # Folded on its side each way: the camera at the strip's top (one way) and at its foot (the other), where the
+          # drawn strip must clear it.
+          for R in 3 4; do
+            $D "$DEVICE" rotate $R || true; sleep 5
+            probe 1 side$R
+            tabshots $TV 1 -side$R "3 0 6"
+            shot $TV 1 tv-remote-rfilm-side$R 9 $M/rfilm -tab 0
+            tabshots $MAC 1 -side$R "0 4 6"
+            tabshots $CH 1 -side$R "0 4"
+            taptest tv-taps-side$R 1 $TV -tab 3
+            taptest macpro-taps-side$R 1 $MAC -tab 0
+            curl -s $M/fnormal/reset > /dev/null; WD=1; WX=-side$R; ACT=throwIt tvfilm throw-shelf-side$R 1 10 $M/fnormal -tab 3 -pose shelf
+          done
           $D "$DEVICE" rotate 1 || true; sleep 5
-          probe 1 foldedside
-          tabshots $TV 1 -foldedside "3 0 6"
-          shot $TV 1 tv-remote-rfilm-foldedside 9 $M/rfilm -tab 0
-          tabshots $MAC 1 -foldedside "0 1 2 4 5 6"
-          tabshots $CH 1 -foldedside "0 1 2 3 4"
-          taptest tv-taps-foldedside 1 $TV -tab 3
-          $D "$DEVICE" rotate 3 || true; sleep 3
+          date
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          probe 3 upright
+          FALLBACK="0.065 0.049"; DRAGY=0.5
+          for S in rfilm repisode ridle; do shot $TV 3 tv-remote-$S-upright 9 $M/$S -tab 0; done
+          tabshots $TV 3 -upright "3 6"
+          taptest tv-taps-upright 3 $TV -tab 3
+          taptest macpro-taps-upright 3 $MAC -tab 0
+          livefilm 3 -upright
+          macfilm fans-upright 3 16 -address http://127.0.0.1:9021 -tab 5 -pose fans
+          macfilm history-upright 3 14 -address http://127.0.0.1:9021 -tab 0 -openHistory cpu
+          music 3 -upright
+          date
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          probe 3 flat
+          livefilm 3 -flat
+          shot $TV 3 tv-remote-rfilm-flat 9 $M/rfilm -tab 0
+          date
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           grep -h "open tab" dist/tv-tour-*-hitches.log 2>/dev/null || true
           date

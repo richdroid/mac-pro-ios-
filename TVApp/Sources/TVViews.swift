@@ -273,7 +273,7 @@ struct RootView: View {
             // DuoTabs). The system's bar took a drag that started on it and left it as the tab in front tapped again, and
             // threw Watch to its top (designer gate on mp-nav-1126; later list 11-24, "swipes register on rest of
             // screen"); a drawn key that the finger leaves is no tap at all. One bar in all three apps.
-            DuoTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }) { v in
+            DuoTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, fadesFoot: false) { v in
                 tabPage(v).environment(\.tabInFront, model.tab == v)
             }
             .onChange(of: model.tab) { was, t in
@@ -2317,9 +2317,9 @@ struct Transport: View {
     var failed: Bool { starting?.failed == true }
     // An episode on whose next can't be worked out yet: ⏭ stays lit and works it out on the press (r18: dimmed on S2 E3 of 4).
     var episodeOn: Bool { model.status?.session?.seasonEpisode != nil || (starting?.line?.hasPrefix("S") ?? false) }
-    // Nothing after this (a film, or the last episode): never a dead ⏭ (TV polish designer, 2026-11-11), and its place
-    // stays, empty, so every key keeps its place and play stays in the middle (later list 11-26: spread out as four, play
-    // sat off-centre; 11-22 ruling: keys keep fixed places in every state).
+    // Nothing after this (a film, or the last episode): ⏭ stays in its place, dimmed, so every key keeps its place and
+    // play stays in the middle (later list 11-26: spread out as four, play sat off-centre; 11-22 ruling: keys keep fixed
+    // places; Richard 11-05: an empty slot reads as a missing button).
     var body: some View {
         let stremio = playing == nil && (model.status?.session?.pkg == "com.stremio.one" || starting != nil)
         let four = stremio && nextUp.next == nil && !(episodeOn && nextUp.series == nil)
@@ -2353,7 +2353,12 @@ struct Transport: View {
             Group {
                 if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: size) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: size) }
             }.frame(maxWidth: slot)
-            if four { Color.clear.frame(width: size, height: size).frame(maxWidth: .infinity).accessibilityHidden(true) } else {
+            // Nothing follows: ⏭ in its place, dimmed, as with nothing on, never a hole that reads as a missing key
+            // (Richard, 11-05; gate on 5dea295).
+            if four {
+                GlassButton(icon: "forward.end.fill", label: "Nothing next", size: size) {}
+                    .disabled(true).opacity(0.35).frame(maxWidth: .infinity)
+            } else {
             Group {
                 if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: size) }
                 else if let next = nextUp.next {

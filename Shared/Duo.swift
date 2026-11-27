@@ -573,6 +573,9 @@ struct DuoTabs<Content: View>: View {
     @Binding var selection: Int
     let items: [RailItem]
     let badge: (Int) -> Int
+    // The page's own ground fading to black under the bar open upright. Off where the pages fade themselves over their
+    // own tinted ground (Mint Remote): there it laid a black band across the purple (gate on 5dea295).
+    var fadesFoot = true
     @ViewBuilder let content: (Int) -> Content
     @State private var shown: Set<Int> = []
     // The system's side strip: the safe area the status bar and the bar items take where iOS puts them on the side (84 pt
@@ -592,9 +595,18 @@ struct DuoTabs<Content: View>: View {
     // never below the HIG's 44 pt; everywhere else they're the system's 49.
     private var cellHeight: CGFloat {
         guard strip.height > 0, !items.isEmpty else { return Self.cellHeight }
-        let room = strip.height - Self.foot - Self.inset * 2 - Self.topReserve
-        return min(Self.cellHeight, max(44, room / CGFloat(items.count)))
+        let room = strip.height - railFoot - Self.inset * 2 - (cameraAtFoot ? Self.topReserveNoCamera : Self.topReserve)
+        // Only with the camera at the strip's foot may a cell give up a few points below the HIG's 44, so that six tabs
+        // still fit between Back or the gear above and the camera below (never a tab under the camera).
+        return min(Self.cellHeight, max(cameraAtFoot ? 40 : 44, room / CGFloat(items.count)))
     }
+    // Folded and turned on its side the other way (the strip on the trailing edge), the camera is at the strip's foot:
+    // the rail stood on it and its last tab (Search, Dashboard) was under the camera's hole (gate on 5dea295). The system's
+    // strip stops about 82 pt above the foot there; the camera's top is about 67 pt up.
+    private var cameraAtFoot: Bool { !onLeading && strip.trailing > 30 && strip.height > 0 && strip.height < 520 }
+    private var railFoot: CGFloat { cameraAtFoot ? Self.cameraFoot : Self.foot }
+    static var cameraFoot: CGFloat { 76 }
+    static var topReserveNoCamera: CGFloat { 140 }
     static var topReserve: CGFloat { 150 }
     // The system's own strip, measured on its shots (CI 6d22d62 open flat and folded, his recording of 317): its icons on
     // the clock's and gear's centre line 48 pt in from the display's edge, a capsule 26 pt clear of the foot, an icon
@@ -644,7 +656,7 @@ struct DuoTabs<Content: View>: View {
         #endif
         .onChange(of: selection, initial: true) { _, s in shown.insert(s) }
         .overlay { if side { sideRail } }
-        .overlay(alignment: .bottom) { if !side, !keyboardUp { footFade } }
+        .overlay(alignment: .bottom) { if fadesFoot, !side, !keyboardUp { footFade } }
         .overlay(alignment: .bottom) { if !side { footBar } }
     }
     // Under the bar the page fades into the ground, the system's soft edge, solid by the bar's top so no card's words
@@ -669,7 +681,7 @@ struct DuoTabs<Content: View>: View {
     private var sideRail: some View {
         let edge: Edge.Set = onLeading ? .leading : .trailing
         let corner: Alignment = onLeading ? .bottomLeading : .bottomTrailing
-        return rail.padding(edge, Self.centre - Self.width / 2).padding(.bottom, Self.foot)
+        return rail.padding(edge, Self.centre - Self.width / 2).padding(.bottom, railFoot)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner)
             .ignoresSafeArea(.all, edges: [edge, .bottom])
     }
@@ -713,7 +725,8 @@ struct DuoTabs<Content: View>: View {
     }
     // The selected pill as the system draws its own: dark in dark mode (main's system bar, CI 6d22d62), grey in light.
     private var pillFill: Color { scheme == .dark ? Color.black.opacity(0.5) : Color.primary.opacity(0.09) }
-    static var pillSpring: Animation { .spring(duration: 0.3, bounce: 0.12) }
+    // Short, so the pill arrives with the page and the tint, not after them (gate on 5dea295: 150-190 ms behind).
+    static var pillSpring: Animation { .spring(duration: 0.22, bounce: 0.1) }
     private var frontIndex: Int { items.firstIndex { $0.value == selection } ?? 0 }
     private var bar: some View {
         HStack(spacing: 0) {
