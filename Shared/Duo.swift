@@ -767,11 +767,60 @@ extension View { func holdToScrub(_ onChange: @escaping (CGPoint?) -> Void) -> s
 
 // Tapping the tab you're already on goes back to its start, at the top, as in Apple's own apps. TabView hands the same
 // value back on that tap, which a plain binding would ignore.
+// A drag that starts on the system's bar along the foot (open upright) and leaves it came back as the tab in front tapped
+// again, so the page jumped to its top (CI a8f6ba1, Chumby and Mint Remote upright: a drag up from the bar reset Home and
+// Watch; later list 11-24, "swipes register on rest of screen"). Only a touch that stayed put is a tap again.
 enum TabReset {
     static func binding(_ tab: Binding<Int>, onRepeat: @escaping (Int) -> Void) -> Binding<Int> {
-        Binding(get: { tab.wrappedValue }, set: { new in if new == tab.wrappedValue { onRepeat(new) } else { tab.wrappedValue = new } })
+        #if canImport(UIKit)
+        DispatchQueue.main.async { TouchTrail.install() }
+        #endif
+        return Binding(get: { tab.wrappedValue }, set: { new in
+            if new == tab.wrappedValue {
+                #if canImport(UIKit)
+                if TouchTrail.wasDrag { return }
+                #endif
+                onRepeat(new)
+            } else { tab.wrappedValue = new }
+        })
     }
 }
+#if canImport(UIKit)
+// How far the last touch travelled, read by a recognizer on the window that never recognizes, delays or cancels anything:
+// it only watches.
+@MainActor enum TouchTrail {
+    static var moved: CGFloat = 0
+    static var endedAt = Date.distantPast
+    private static var installed = false
+    // The touch that just ended (or is still down) went more than 20 pt.
+    static var wasDrag: Bool { moved > 20 && Date().timeIntervalSince(endedAt) < 0.8 }
+    static func install() {
+        guard !installed, let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        installed = true
+        w.addGestureRecognizer(Watcher())
+    }
+    final class Watcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
+        private var start: CGPoint?
+        init() {
+            super.init(target: nil, action: nil)
+            cancelsTouchesInView = false; delaysTouchesBegan = false; delaysTouchesEnded = false
+            delegate = self
+        }
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            if start == nil, let p = touches.first?.location(in: view) { start = p; TouchTrail.moved = 0; TouchTrail.endedAt = .distantFuture }
+        }
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard let s = start, let p = touches.first?.location(in: view) else { return }
+            TouchTrail.moved = max(TouchTrail.moved, hypot(p.x - s.x, p.y - s.y))
+        }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { finish() }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { finish() }
+        private func finish() { TouchTrail.endedAt = Date(); start = nil; state = .failed }
+        override func reset() { start = nil }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+#endif
 
 // For the build's recording: every tab in turn, twice, so anything that draws in, flashes or jumps between them shows
 // up on film. Only with the "tour" pose; never on the phone.

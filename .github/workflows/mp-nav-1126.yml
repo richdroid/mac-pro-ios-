@@ -80,7 +80,7 @@ jobs:
           # 2. a slow full swipe back, a still taken half-way; 3. relaunched on the page and Back tapped where iOS put it.
           navfilm() {
             local n=$1 d=$2 b=$3 at; shift 3
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            xcrun simctl io "$DEVICE" recordVideo --codec=hevc --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" $b -address $(addr $b) -findBack YES -swipeLog YES "$@" > /dev/null
             sleep 10
@@ -118,7 +118,7 @@ jobs:
           # A push and a pop as the app makes them (pushed at 12 s, closed at 18 s, pushed again at 19.5 s), animated.
           pushfilm() {
             local d=$1 x=$2
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/macpro-pushpop$x.mp4 > /dev/null 2>&1 & REC=$!
+            xcrun simctl io "$DEVICE" recordVideo --codec=hevc --display=$d --force dist/macpro-pushpop$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) -swipeLog YES -reopen YES -tab 0 -openHistory tx > /dev/null
             sleep 13.2; shot $d macpro-pushpop$x-pushmid
@@ -149,7 +149,7 @@ jobs:
           # name, display, bundle, then the app's arguments.
           taptest() {
             local n=$1 d=$2 b=$3 i=0 label x y; shift 3
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            xcrun simctl io "$DEVICE" recordVideo --codec=hevc --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" $b -address ${TAPADDR:-$(addr $b)} -findBack YES "$@" > /dev/null
             sleep 10
@@ -173,9 +173,9 @@ jobs:
             tabshots $MAC $d $x "0 1 2 4 5 6"
             # Apps with updates waiting: the number on its tab.
             tabshots $MAC $d $x-badge "1" -pose otaready
-            statuspages $d $x
+            navfilm macpro-back-tx$x $d $MAC -tab 0 -openHistory tx
+            navfilm macpro-back-processes$x $d $MAC -tab 0 -openProcesses cpu
             pushfilm $d $x
-            islandshots $d $x
             tabshots $CH $d $x "0 1 2 3 4"
             tabshots $TV $d $x "3 0 6"
             navfilm chumby-back$x $d $CH -tab 2 -pose calsettings
@@ -200,7 +200,7 @@ jobs:
           date
           # Folded on Dashboard, opened flat, turned upright, back flat, closed: the bar moves to where iOS puts it and
           # the tab and its page stay.
-          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-posture-inner.mp4 > /dev/null 2>&1 & REC=$!
+          xcrun simctl io "$DEVICE" recordVideo --codec=hevc --display=3 --force dist/macpro-posture-inner.mp4 > /dev/null 2>&1 & REC=$!
           sleep 2
           xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) -tab 6 > /dev/null
           sleep 8
@@ -209,11 +209,6 @@ jobs:
           $D "$DEVICE" rotate 3 || true; sleep 5; shot 3 macpro-posture-3flat
           kill -INT $REC; wait $REC
           xcrun simctl terminate "$DEVICE" $MAC || true
-          $D "$DEVICE" rotate 1 || true; sleep 5
-          FALLBACK="0.065 0.049"; posture 3 -upright
-          date
-          $D "$DEVICE" rotate 3 || true; sleep 5
-          DRAGY=0.5; FALLBACK="0.948 0.222"; posture 3 -flat
           # Hidden tabs do no work: through a proxy that writes every request the app makes, every Mac Pro tab is visited
           # (its loops start), then Status is tapped and the app left on it for 40 s. The requests of those 40 s go to a log.
           node -e "const http=require('http'),fs=require('fs');http.createServer((q,s)=>{fs.appendFileSync('/tmp/req.log',(Date.now()/1000).toFixed(2)+' '+q.url+'\\n');const p=http.request({host:'127.0.0.1',port:9001,path:q.url,method:q.method,headers:q.headers},r=>{s.writeHead(r.statusCode,r.headers);r.pipe(s)});q.pipe(p);p.on('error',()=>{s.statusCode=502;s.end()})}).listen(9061)" &
@@ -228,6 +223,17 @@ jobs:
           awk -v s=$S -v e=$E '$1>=s && $1<=e {print}' /tmp/req.log > dist/macpro-reqidle-flat-requests.log
           echo "requests in 40 s idle on Status: $(wc -l < dist/macpro-reqidle-flat-requests.log)"; awk '{sub(/\?.*/,"",$2); print $2}' dist/macpro-reqidle-flat-requests.log | sort | uniq -c | sort -rn
           xcrun simctl terminate "$DEVICE" $MAC || true
+          # The control: launched on Status and never off it, the same 40 s.
+          xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:9061 -tab 0 > /dev/null; sleep 18
+          S=$(date +%s); sleep 40; E=$(date +%s)
+          awk -v s=$S -v e=$E '$1>=s && $1<=e {print}' /tmp/req.log > dist/macpro-reqidle-control-requests.log
+          echo "control, 40 s on Status only: $(wc -l < dist/macpro-reqidle-control-requests.log)"; awk '{sub(/\?.*/,"",$2); print $2}' dist/macpro-reqidle-control-requests.log | sort | uniq -c | sort -rn
+          xcrun simctl terminate "$DEVICE" $MAC || true
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          FALLBACK="0.065 0.049"; posture 3 -upright
+          date
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          DRAGY=0.5; FALLBACK="0.948 0.222"; posture 3 -flat
           # A shorter window, as a taller island or status leaves: every tab still in the bar.
           tabshots $MAC 3 -flat-859x604 "0 6" -windowSize 859x604
           date
@@ -238,10 +244,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
-          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i 'macpro-*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr0 ../films-apps.zip . -i 'chumby-*.mp4' 'tv-*.mp4' || zip -q ../films-apps.zip /dev/null)
+          ls -la *.zip
           (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view mp-nav-shots >/dev/null 2>&1 || gh release create mp-nav-shots --prerelease --title "Mac Pro navigation check (mp-nav-1126)" --notes "Branch mp-nav-1126: tabs in every posture, back swipe and Back films, island shots; Chumby and Mint Remote checks."
-          for f in shots.zip films.zip logs.zip status.txt; do
+          for f in shots.zip films.zip films-apps.zip logs.zip status.txt; do
             for i in 1 2 3; do gh release upload mp-nav-shots "$f" --clobber && break; sleep 15; done
           done
