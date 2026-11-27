@@ -550,19 +550,14 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("root body")
         PaneReader {
-            // The system's own tabs, placed by iOS (Richard, 2026-11-23: "in line with latest ios documentation on
-            // everything"): down the side strip folded and open in landscape, a bar along the foot open upright (HIG,
-            // iPhone Duo, "Vertical controls").
+            // Every tab one tap away in every posture, in a bar drawn where iOS draws its own (Shared/Duo.swift DuoTabs):
+            // down the side strip folded and open in landscape, along the foot open upright (HIG, iPhone Duo, "Vertical
+            // controls"). The system's TabView put Control and Dashboard under "•••" on his phone open flat (TestFlight
+            // 317; Richard, 2026-11-26: "the side bar not encompassing everything"). Each tab is still its own system
+            // NavigationStack with the system Back and swipe.
             // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab (Richard, 2026-11-07).
-            TabView(selection: tabBinding) {
-                ForEach(Self.railItems) { it in
-                    Tab(value: it.value) {
-                        screen(it.value)
-                    } label: { it.label }
-                        // The updates waiting, as a number on the tab, the App Store's way.
-                        .badge(it.value == 1 ? updateCount : 0)
-                }
-            }
+            // The updates waiting, as a number on the Apps tab, the App Store's way.
+            DuoTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
                 UserDefaults.standard.set(t, forKey: "tab")
@@ -891,6 +886,8 @@ struct Screen<Content: View>: View {
             // the tab coming back under the page slides in whole, rows as they were (later list 11-24, 12). Pushed pages
             // hold their own.
             .holdsWhileMoving("tab \(tab)")
+            // Clear of the tab bar drawn along the foot open upright (DuoTabs).
+            .tabBarRoom()
             .modifier(TabBarFade())
             .modifier(StatusBarFade())
             .background(groupedBackground.ignoresSafeArea())
@@ -946,13 +943,13 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
-            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6) }
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).tabBarRoom() }
             // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
-            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true) }
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).tabBarRoom() }
             // All processes, from the tab itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
-            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).tabBarRoom() }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).tabBarRoom() }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).tabBarRoom() }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
             .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 0 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
@@ -968,6 +965,7 @@ struct StackPages: ViewModifier {
                 case .actions: MacActionsView(model: model)
                 case .upgrade: UpgradeView(model: model)
                 } }
+                .tabBarRoom()
                 
             }
     }
@@ -978,7 +976,7 @@ struct ProcessesOverHistory: ViewModifier {
     @ObservedObject var nav: NavStore
     @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model) }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).tabBarRoom() }
     }
 }
 // A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.

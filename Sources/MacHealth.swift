@@ -712,9 +712,9 @@ struct MacHealthView: View {
         .pushedTitle(title)
         .animation(Motion.quick, value: report)
         .animation(Motion.quick, value: down)
-        .task { await poll() }
-        .task { await links.loop(model, every: 20) }
-        .task { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000_000); now = Date() } }
+        .taskInFront { await poll() }
+        .taskInFront { await links.loop(model, every: 20) }
+        .taskInFront { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000_000); now = Date() } }
     }
 
     // Every 3 s while the page is up (it stops when the page goes), fresher than the Mac's 5 s cache after a restart.

@@ -564,7 +564,7 @@ struct UpgradeView: View {
             UpgradeLog(model: model)
         }
         .onChange(of: feed.value?.download?.percent, initial: true) { _, p in DownloadClock.shared.note(p) }
-        .task {
+        .taskInFront {
             if let p = posed { feed.set(p.feed); await check(); return }
             while !Task.isCancelled {
                 if !model.screenOpen { await feed.read(model.api) }
