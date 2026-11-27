@@ -63,6 +63,11 @@ final class ArtStore: @unchecked Sendable {
 
     // Only what's in memory: for a view's first frame, so a cover seen before is there at once, never faded in again.
     func cached(_ ref: ArtRef, px: Int) -> CGImage? { images.object(forKey: "\(ref.key)@\(px)" as NSString)?.image }
+    // The largest other size of it already decoded (the sizes the app draws covers at), for a first frame.
+    func cachedNear(_ ref: ArtRef, px: Int) -> CGImage? {
+        for p in [1000, 700, 600, 500, 400, 300, 220, 160, 156, 80] where p != px { if let c = cached(ref, px: p) { return c } }
+        return nil
+    }
     func palette(_ ref: ArtRef) -> Palette? { lock.withLock { palettes[ref.key] } }
     func appleMusic(_ ref: ArtRef) -> URL? { lock.withLock { links[ref.key] }.flatMap(URL.init(string:)) }
 
@@ -351,7 +356,10 @@ struct ArtView: View {
     @State private var turn = 0
     init(_ ref: ArtRef, px: Int = 300, corner: CGFloat = 8) {
         self.ref = ref; self.px = px; self.corner = corner
-        _image = State(initialValue: ArtStore.shared.cached(ref, px: px))
+        // Its first frame from any size of this picture already decoded (a row's small cover), never the stand-in: an
+        // artist page opened on a pink disc that the real cover replaced a moment later (gate on build 83). The full size
+        // fades in over it once it's here.
+        _image = State(initialValue: ArtStore.shared.cached(ref, px: px) ?? ArtStore.shared.cachedNear(ref, px: px))
     }
     var body: some View {
         ZStack {

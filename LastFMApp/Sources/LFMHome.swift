@@ -23,7 +23,15 @@ struct HomeView: View {
             }
         }
         .opacity(HomeLeave.shared.cleared ? 0 : 1)
-        .background { if pane { Backdrop(ref: Ground.hubs.pick?.ref).opacity(HomeLeave.shared.cleared ? 0 : 1) } else { Color.black.ignoresSafeArea() } }
+        .modifier(PageLeaveOut())
+        // Home's entrance plays at launch only. Built any later (opened deep by a link or a build's pose, or made again by a
+        // turn of the posture while a hub covers it), home is first seen under a Back, and there it must be whole at rest:
+        // its parts waited at -80 degrees for the swipe to end, so the Back showed the bare ground and an edge-on title,
+        // then home cut in (gate on build 83, open flat).
+        .environment(\.turnstileArrived, Home.launchedDeep || !FirstFrames.launching)
+        // Open flat, Windows 8's hub ground: one flat dark colour behind the groups (Xbox Music 8.1's), the imagery carried by
+        // the hero (lastfm.md §30.6). Folded and upright the panorama draws its own picture.
+        .background { (pane ? Color(white: 0.075) : Color.black).ignoresSafeArea() }
         .toolbarBackground(.hidden, for: .navigationBar)
         .onAppear { TileClock.shared.start(); HomeSwipe.moving = false; TouchTravel.swiped = false }
         // Back on home finds it as it was: everything flat again (reset once the hub has covered it).
@@ -108,13 +116,8 @@ private struct MetroHub: View {
                 ZStack(alignment: .topLeading) {
                     ScrollView(.horizontal) {
                         HStack(alignment: .top, spacing: 80 * u) {
-                            tile("now", .nowPlaying, nil, w: heroW, h: H) { NowLiveTile() }
-                                .overlay(alignment: .top) {
-                                    // The title reads over the hero's top.
-                                    LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
-                                        .frame(height: contentTop).allowsHitTesting(false)
-                                }
-                                .turnstile(1)
+                            tile("now", .nowPlaying, nil, w: heroW, h: H) { MetroHero(top: contentTop, u: u, left: left) }
+                                .modifier(EnterPage(index: 0, u: u))
                             VStack(alignment: .leading, spacing: 0) {
                                 Color.clear.frame(height: contentTop)
                                 HStack(alignment: .top, spacing: 80 * u) {
@@ -132,8 +135,16 @@ private struct MetroHub: View {
                         .padding(.trailing, 120 * u + insets.trailing)
                         .frame(height: H, alignment: .topLeading)
                     }
-                    .scrollIndicators(.automatic)
-                    .onScrollPhaseChange { _, p in HomeSwipe.moving = p != .idle; Store.shared.scrolling = p != .idle }
+                    // Windows 8's panning indicator instead of the system's bar (study §5): thin, at the foot, only while it pans.
+                    .scrollIndicators(.hidden)
+                    .onScrollPhaseChange { _, p in
+                        HomeSwipe.moving = p != .idle; Store.shared.scrolling = p != .idle
+                        PanBar.shared.panning(p != .idle)
+                    }
+                    .onScrollGeometryChange(for: PanBar.Spot.self) { g in
+                        PanBar.Spot(x: g.contentOffset.x, content: g.contentSize.width, view: g.containerSize.width)
+                    } action: { _, v in PanBar.shared.spot = v }
+                    PanIndicator(left: left, right: 120 * u + insets.trailing, bottom: max(insets.bottom, 0) + 10 * u)
                     // The hub's title stays where it is while the sections pan under it (study §3, the 8.1 Hub).
                     Text(Home.title).font(.zuneLower(size: headSize)).tracking(-0.5)
                         .foregroundStyle(.white).lineLimit(1).fixedSize()
@@ -141,7 +152,7 @@ private struct MetroHub: View {
                         .allowsHitTesting(false)
                         .accessibilityAddTraits(.isHeader)
                         .modifier(TurnstileOut(index: Home.order("title"), count: Home.count))
-                        .turnstile(0)
+                        .modifier(EnterPage(index: 0, u: u))
                 }
             }
             .ignoresSafeArea()
@@ -163,7 +174,7 @@ private struct MetroHub: View {
             else { head }
             c().modifier(TurnstileOut(index: key.map { Home.order($0) } ?? -1, count: Home.count))
         }
-        .turnstile(i)
+        .modifier(EnterPage(index: i, u: u))
     }
 
     private func tile<C: View>(_ key: String, _ hub: Hub, _ panel: Int?, w: CGFloat, h: CGFloat, @ViewBuilder _ c: () -> C) -> some View {
@@ -243,6 +254,72 @@ private struct MetroHub: View {
     }
 }
 
+// Windows 8's enterPage (WinJS.UI.Animation.enterPage, study §6): each group slides in from the right, 100 px, eased
+// with WinJS's entrance curve (cubic 0.1, 0.9, 0.2, 1), its opacity up in the first sixth of a second, the groups a
+// twelfth of a second apart in reading order. Once, at launch onto home open flat; home found again by Back is simply
+// there (turnstileArrived, as the phone's turnstile).
+private struct EnterPage: ViewModifier {
+    let index: Int
+    let u: CGFloat
+    @State private var shown = false
+    @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.turnstileArrived) private var arrived
+    func body(content: Content) -> some View {
+        let on = shown || still || arrived
+        content
+            .offset(x: on ? 0 : 100 * u)
+            .opacity(on ? 1 : 0)
+            .onAppear {
+                guard !on else { return }
+                let d = Double(index) * 0.083
+                let go = {
+                    withAnimation(.timingCurve(0.1, 0.9, 0.2, 1, duration: 0.8).delay(d)) { shown = true }
+                }
+                if FirstFrames.launching { go() } else { FirstFrames.shared.after(go) }
+            }
+    }
+}
+
+// The hub's panning indicator: where the screen is along the hub, as a thin bar at the foot, faded in as a pan begins
+// and out half a second after it ends. Its own observable, read only by the bar, so a pan redraws the bar and nothing else.
+@MainActor @Observable final class PanBar {
+    static let shared = PanBar()
+    struct Spot: Equatable { var x: CGFloat = 0; var content: CGFloat = 1; var view: CGFloat = 1 }
+    var spot = Spot()
+    var shown = false
+    @ObservationIgnored private var hide: Task<Void, Never>?
+    func panning(_ on: Bool) {
+        hide?.cancel()
+        if on { if !shown { withAnimation(.easeOut(duration: 0.15)) { shown = true } }; return }
+        hide = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.3)) { shown = false }
+        }
+    }
+}
+private struct PanIndicator: View {
+    let left: CGFloat
+    let right: CGFloat
+    let bottom: CGFloat
+    var body: some View {
+        GeometryReader { g in
+            let b = PanBar.shared
+            let track = max(1, g.size.width - left - right)
+            let k = min(1, b.spot.view / max(b.spot.content, 1))
+            let w = max(24, track * k)
+            let travel = max(1, b.spot.content - b.spot.view)
+            let f = min(1, max(0, b.spot.x / travel))
+            Capsule().fill(.white.opacity(0.55))
+                .frame(width: w, height: 3)
+                .offset(x: left + (track - w) * f, y: g.size.height - bottom - 3)
+                .opacity(b.shown && k < 1 ? 1 : 0)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 @MainActor enum HubWarm {
     private static var done: Set<Hub> = []
     static func run() async {
@@ -261,7 +338,19 @@ private struct MetroHub: View {
             if h == .profile { await Totals.warm() }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
+        // The artist, album and song pages once each, the same way (their first push paid its type lookups: 347-364 ms
+        // in the tap films on build 83).
+        guard !pagesDone, let s = Store.shared.hero else { return }
+        for v in [AnyView(ArtistPage(name: s.artist)), AnyView(AlbumPage(artist: s.artist, album: s.album)), AnyView(TrackPage(s: s))] {
+            guard !Task.isCancelled, HomeLeave.shared.chosen == nil, !Store.shared.scrolling, !HomeSwipe.moving else { return }
+            let r = ImageRenderer(content: v.environment(\.turnstileArrived, true).frame(width: 390, height: 844))
+            r.scale = 0.05
+            _ = r.cgImage
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        pagesDone = true
     }
+    private static var pagesDone = false
 }
 
 // The panorama between a finger's touch and its rest (the landing included): a tap let go then is never an opening.
@@ -274,6 +363,8 @@ enum Home {
     static let keys = ["title", "h-start", "now", "profile", "today", "charts", "library", "discover", "rediscover", "history", "scrobbling",
                        "h-menu"] + Hub.menu.map { "w-" + $0.rawValue } + ["h-played", "h-repeat"]
     static var count: Int { keys.count }
+    // The app came up on a hub (a build's pose, a link at launch): home is first seen under a Back, never turning in.
+    static let launchedDeep = !RootView.posed().isEmpty
     static func order(_ k: String) -> Int { keys.firstIndex(of: k) ?? 0 }
 }
 
@@ -284,6 +375,7 @@ private struct HomePanorama: View {
     let go: (String, Hub, Int?) -> Void
     @Environment(\.openRoute) private var open
     @Environment(\.zoomSpace) private var space
+    @Environment(\.turnstileArrived) private var arrived
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     private var store: Store { Store.shared }
     var body: some View {
@@ -301,9 +393,11 @@ private struct HomePanorama: View {
                 // Margin 10,-76,0,9 in its row under the 32 px tray: the letters' x-height starts 0.18 of the size below
                 // the tray and the items begin 0.97 of the size below it. Placed here from the face's own metrics.
                 let T0 = min(300, max(112, pw * 0.39)) * min(max(k, 0.9), 1.1)
-                // Always wider than the screen, as WP7's panorama title is (open upright a short name fitted inside it).
+                // Fitted so the whole word reads on the first screen: "last.fm" is short, and stretched past the screen its
+                // "m" sat under the side strip's clock folded and was cut to "last.fn" upright (gate on build 83). It ends
+                // 12 pt inside the page, still WP7's size or near it, and slides away slowest as the panorama pans.
                 let w0 = textWidth(Home.title, size: T0, tracking: -3, weight: -0.4, face: Z.lower())
-                let T = w0 > 0 && w0 < pw * 1.12 ? T0 * pw * 1.12 / w0 : T0
+                let T = w0 > 0 ? T0 * max(0.8, min(1.4, (pw - 10 - 12) / w0)) : T0
                 let m = Self.metrics(T)
                 let across = TopBar.across()
                 let tray = across?.maxY ?? insets.top
@@ -329,7 +423,7 @@ private struct HomePanorama: View {
                         .modifier(TurnstileOut(index: 0, count: Home.count))),
                     title: AnyView(PanoramaTitle(text: Home.title, size: T)
                         .modifier(TurnstileOut(index: 0, count: Home.count))
-                        .turnstile(0)),
+                        .turnstile(0).environment(\.turnstileArrived, arrived)),
                     sections: [
                         hosted(section("start", key: "h-start", 0, sec, h, side) { StartTiles(width: sec - S.margin - 12, go: go) }),
                         hosted(section("menu", key: "h-menu", 1, sec, h, side) { MenuWords { go($0, $1, $2) } }),
@@ -351,7 +445,8 @@ private struct HomePanorama: View {
 
     // A hosted section keeps what the stack hands down (its own hosting controller doesn't inherit it).
     private func hosted<V: View>(_ v: V) -> AnyView {
-        AnyView(v.environment(\.openRoute, open).environment(\.zoomSpace, space).environment(\.paneLayout, false).tint(.white))
+        AnyView(v.environment(\.openRoute, open).environment(\.zoomSpace, space).environment(\.paneLayout, false)
+            .environment(\.turnstileArrived, arrived).tint(.white))
     }
 
     // A section: its name (WP7's panorama header, Semilight 42.667 px, lowercase), then its content, which scrolls on its
@@ -524,6 +619,62 @@ private struct TileCover: View {
             ArtView(ref, px: px, corner: 0).frame(width: max(g.size.width, g.size.height), height: max(g.size.width, g.size.height))
                 .frame(width: g.size.width, height: g.size.height).clipped()
         }
+    }
+}
+
+// Open flat, the hub's hero (Windows 8.1's first section, Xbox Music's: a picture the screen's full height, the words over
+// its foot). The cover whole, never a slab of colour over it (gate on build 83: the folded tile's peek laid the song on a
+// flat blue panel across the lower half): the song in a band over a gradient at the foot, and a gradient under the white
+// title at the top, so it reads over any cover however bright. A new song's cover fades in slowly over the old one.
+private struct MetroHero: View {
+    let top: CGFloat
+    let u: CGFloat
+    let left: CGFloat
+    private var store: Store { Store.shared }
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .bottomLeading) {
+                Color.black
+                if let s = store.shown {
+                    // Xbox Music's hero: the artist's picture (the calm ground's, one per visit, faded slowly to a new
+                    // artist's), drifting; the cover itself rides in the song's band.
+                    let pic = Ground.hubs.pick?.ref ?? s.art
+                    Drifting(key: pic.key) { TileCover(ref: pic, px: 1000) }
+                        .frame(width: g.size.width, height: g.size.height)
+                        .clipped()
+                        .id(pic.key)
+                        .transition(.opacity)
+                    // Under the title: dark enough at the very top for white Light type over a white cover.
+                    LinearGradient(stops: [.init(color: .black.opacity(0.72), location: 0), .init(color: .black.opacity(0.45), location: 0.6),
+                                           .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: top * 1.35)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                    LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.55), location: 0.45),
+                                           .init(color: .black.opacity(0.85), location: 1)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: g.size.height * 0.42)
+                    HStack(alignment: .bottom, spacing: 16 * u) {
+                        TileCover(ref: s.art, px: 300).frame(width: 96 * u, height: 96 * u)
+                            .overlay { Rectangle().strokeBorder(.black.opacity(0.35), lineWidth: 1) }
+                            .id(s.art.key).transition(.opacity)
+                        VStack(alignment: .leading, spacing: 2 * u) {
+                            Text(s.nowPlaying ? "now playing" : "last played").font(.zuneLower(size: 22 * u)).foregroundStyle(.white.opacity(0.75))
+                            Text(s.title).font(.zuneLower(size: 42 * u)).tracking(-0.6).foregroundStyle(.white).lineLimit(1)
+                            Text(s.album.isEmpty ? s.artist : "\(s.artist) · \(s.album)").font(.zune(size: 19 * u)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                        }
+                    }
+                    .padding(.leading, left)
+                    .padding(.trailing, 24 * u)
+                    .padding(.bottom, 56 * u)
+                } else {
+                    TileIcon(name: "music.note")
+                }
+            }
+            .frame(width: g.size.width, height: g.size.height)
+            .clipped()
+            .animation(.easeInOut(duration: Ground.fade), value: store.shown?.art.key)
+            .animation(.easeInOut(duration: Ground.fade), value: Ground.hubs.pick?.ref.key)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

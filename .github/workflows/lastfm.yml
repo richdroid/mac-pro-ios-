@@ -282,6 +282,8 @@ jobs:
           STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-album 1 18 -tab 1 -kind 1
           STEPS="tap=0.4,0.62:7 shot:1 shot:2 tap=0.895,0.29:1 shot:1 shot:2" film tap-track 1 18 -tab 1 -kind 2
           STEPS="tap=0.4,0.62:7 shot:3 edgeslow:1 shot:1 shot:3" film back-swipe-slow 1 20 -tab 1 -kind 0
+          # Build 84: a list flung to its foot and pushed past it, WP7's squeeze at the end (at most 8 %).
+          STEPS="slow:6 fling:1 fling:1 fling:1 fling:1 fling:1 fling:1 shot:1 push:2 shot:2" film scroll-foot 1 24 -tab 1
           early films-folded
           # Turned on what's playing and on an artist's page, as on You.
           STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-now 1 22 -tab 0 -panel 1
@@ -314,6 +316,13 @@ jobs:
           X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
           STEPS="tap=0.72,0.62:7 shot:1 shot:2 edgeslow:1 shot:1 shot:3" film tap-artist-open 3 20 -tab 1 -kind 0
           STEPS="shot:4 edgeslow:4 shot:1 shot:3" film edge-back-open 3 16 -hub discover
+          # Build 84, open flat (Windows 8's hub): its entrance, panned through every group to both ends, a flick and its
+          # settle, a short drag; the pan bar at the foot only while it moves.
+          Y=0.55 STEPS="shot:3 side:2 side:2 shot:1 side:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 sideback:2 shot:1 flick:2 shot:2 sideshort:2 shot:3" film home-open-pan 3 40 -hub home
+          # Home's hero to now playing and a slow Back: home whole under the finger, never bare.
+          STEPS="shot:5 tap=0.3,0.5:2 shot:1 shot:2 edgeslow:3 shot:1 shot:3" film home-open-back 3 24 -hub home
+          # Now playing open flat, held: the artist's picture drifting, slow.
+          STEPS="shot:6 shot:8" film now-open-drift 3 18 -hub nowPlaying
           date
           # The simulator stopped before any film is shrunk: shrinking beside it failed with "Cannot Decode" (runs 34, 35).
           xcrun simctl shutdown "$DEVICE"

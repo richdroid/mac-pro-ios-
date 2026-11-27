@@ -309,7 +309,11 @@ struct NowBackdrop: View {
                     // WP7's now playing (study §2): the artist's photo, one per artist, held while his songs play and
                     // faded to the next artist's once it's ready (Ground.now), never a cover per song. Baked look, no filter.
                     if let pick = Ground.now.pick {
-                        TreatedArt(pick.ref, pick.treat)
+                        // Drifting slowly (Windows Phone 8's and Windows 8's now playing: the artist's picture alive behind
+                        // the song, never still, never quick): Core Animation's, so no frame of it is the main thread's.
+                        Drifting(key: pick.ref.key + pick.treat.tag) {
+                            TreatedArt(pick.ref, pick.treat).frame(width: side, height: side)
+                        }
                             .frame(width: side, height: side)
                             .clipped()
                             // Never short of the left edge: open flat the screen is wider than tall and 0.85 of the side
@@ -345,6 +349,75 @@ struct NowBackdrop: View {
         .allowsHitTesting(false)
     }
 }
+
+// A picture that drifts (Windows 8's and Windows Phone 8's music, lastfm.md §30.6; the study's §8): a slow pan and zoom,
+// 1.04 to 1.12 of its size and a few points across, out over 24 s and back, eased at both ends, as Xbox Music moved the
+// artist's photo behind now playing. The content is hosted once and moved as a layer by the render server at up to 30 Hz
+// (a speed under 1 pt a second needs no more), so nothing of it is laid out or drawn again in its frames: the drift of
+// run 39 ran on the main thread and redrew the screen 30 times a second (fault 8). Still under Reduce Motion.
+struct Drifting<C: View>: View {
+    let key: String
+    @ViewBuilder let content: () -> C
+    @Environment(\.accessibilityReduceMotion) private var still
+    var body: some View {
+        #if canImport(UIKit)
+        if still { content() } else { DriftHost(key: key, content: AnyView(content())) }
+        #else
+        content()
+        #endif
+    }
+}
+#if canImport(UIKit)
+private struct DriftHost: UIViewRepresentable {
+    let key: String
+    let content: AnyView
+    final class Box: UIView {
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        var key = ""
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            host.view.backgroundColor = .clear
+            host.view.isUserInteractionEnabled = false
+            // The picture fills the box exactly: no safe area of its own pushing it in from the screen's edges.
+            host.safeAreaRegions = []
+            addSubview(host.view)
+            isUserInteractionEnabled = false
+        }
+        required init?(coder: NSCoder) { nil }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            host.view.bounds = CGRect(origin: .zero, size: bounds.size)
+            host.view.center = CGPoint(x: bounds.midX, y: bounds.midY)
+            if host.view.layer.animation(forKey: "drift") == nil, bounds.width > 0 { drift() }
+        }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            // Animations are taken off a layer that leaves the window; put back when it returns.
+            if window != nil { setNeedsLayout() }
+        }
+        func drift() {
+            let w = bounds.width
+            let a = CABasicAnimation(keyPath: "transform")
+            a.fromValue = CATransform3DMakeScale(1.04, 1.04, 1)
+            var to = CATransform3DMakeScale(1.12, 1.12, 1)
+            to = CATransform3DTranslate(to, -w * 0.02, w * 0.012, 0)
+            a.toValue = to
+            a.duration = 24
+            a.autoreverses = true
+            a.repeatCount = .infinity
+            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            a.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+            a.isRemovedOnCompletion = false
+            host.view.layer.add(a, forKey: "drift")
+        }
+    }
+    func makeUIView(context: Context) -> Box { let b = Box(); b.key = key; b.host.rootView = content; return b }
+    func updateUIView(_ b: Box, context: Context) {
+        // The picture is drawn again only when it is another picture.
+        if b.key != key { b.key = key; b.host.rootView = content }
+    }
+}
+#endif
 
 // Page content fades out under the clock at the top, so no word reads through it: the ground's colour drawn over the
 // content there, not a mask (two full-page masks were an off-screen pass each, every frame; run 39 review, fault 8).

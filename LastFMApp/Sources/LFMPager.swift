@@ -42,15 +42,15 @@ struct Panel: Identifiable {
     // How a pager works out its names' position from an offset (set by the pager; the panorama has no names).
     @ObservationIgnored var fAt: ((CGFloat) -> CGFloat)?
     init() {
-        lander.starts = { [weak self] x in self?.landingStarts(x) }
+        lander.starts = { [weak self] x, curve in self?.landingStarts(x, curve) }
         lander.ends = { [weak self] in self?.landingEnds() }
     }
-    private func landingStarts(_ x: CGFloat) {
+    private func landingStarts(_ x: CGFloat, _ curve: Animation) {
         landing = true
         let target = fAt?(x)
         // Held only for a landing of a page or less (a name tapped two along is laid out round it, as before).
         if let t = target, abs(t - f) <= 1.0001 { heldBase = Int(min(f, t).rounded(.down)) }
-        withAnimation(Z.easeOut(PageLander.duration)) {
+        withAnimation(curve) {
             self.x = x
             if let t = target { self.f = t }
         }
@@ -76,7 +76,9 @@ struct Panel: Identifiable {
     @ObservationIgnored private var release: (drag: CGFloat, v: CGFloat, at: Double)?
     // This touch's release has chosen its page (reset as the next touch begins).
     @ObservationIgnored private(set) var decided = false
-    func began() { startX = offset; startT = Date().timeIntervalSinceReferenceDate; release = nil; decided = false; samples.removeAll(keepingCapacity: true) }
+    // The finger's speed at this touch's release (points a second), handed to the landing once, then forgotten.
+    @ObservationIgnored var releaseVelocity: CGFloat?
+    func began() { startX = offset; startT = Date().timeIntervalSinceReferenceDate; release = nil; decided = false; releaseVelocity = nil; samples.removeAll(keepingCapacity: true) }
     @ObservationIgnored private var startT: Double = 0
     // Where the finger had the page over the last moments of the drag, for its own velocity: UIKit's at the lift is 0 when
     // the finger pauses before it lifts (profile runs 10 and 11: the folded flick read 0 page/s and sprang back, though
@@ -102,6 +104,7 @@ struct Panel: Identifiable {
     func released(slot: Int, x: CGFloat, v: CGFloat, w: CGFloat) {
         decided = true
         target = slot
+        releaseVelocity = v
         release = ((x - (startX ?? x)) / w, v / w, Date().timeIntervalSinceReferenceDate)
     }
     // "land N": where a swipe came to rest against where it began, in pages, with the drag and the release velocity
@@ -370,7 +373,8 @@ struct Pager: View {
         if p != index, placed { motion.ticked = p; motion.landed += 1 }
         let x = CGFloat(s) * W
         prime(W)
-        if !motion.lander.land(to: x, done: { settle(W) }) {
+        let v = motion.releaseVelocity; motion.releaseVelocity = nil
+        if !motion.lander.land(to: x, velocity: v, done: { settle(W) }) {
             withAnimation(Z.easeOut(0.35)) { pos.scrollTo(x: x) } completion: { settle(W) }
         }
     }

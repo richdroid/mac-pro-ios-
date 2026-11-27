@@ -80,7 +80,22 @@ struct RootView: View {
     private var store: Store { Store.shared }
     var body: some View {
         let stack = $path
-        opener.go = { g in stack.wrappedValue.append(.page(g)) }
+        // An artist, album or song page, WP7's way (gate on build 83: the zoom read as a cut, with the hub's small capitals
+        // left over it): the page in front turns out about its left edge (0.15 s, ease in), the page is pushed with no
+        // slide, and turns in from its first on-time frame (TurnstileIn). Black between, WP7's dark moment.
+        opener.go = { g in
+            guard !PageLeave.shared.leaving else { return }
+            if UIAccessibilityReduceMotion.on { stack.wrappedValue.append(.page(g)); return }
+            withAnimation(Z.easeIn(PageLeave.time)) { PageLeave.shared.leaving = true }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(PageLeave.time * 1_000_000_000))
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { stack.wrappedValue.append(.page(g)) }
+                // The page under it put back flat once it's covered (it is found as it was on Back).
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                withTransaction(t) { PageLeave.shared.leaving = false }
+            }
+        }
         opener.hub = { h, panel in
             // Home's words swing away first (HomeView); from anywhere else the page simply turns in.
             var t = Transaction(); t.disablesAnimations = true
@@ -188,6 +203,7 @@ struct HubView: View {
         }
         .environment(\.hubName, hub == .nowPlaying ? nil : hub.word)
         .background { if hub == .nowPlaying { NowBackdrop(song: Store.shared.shown) } else { Backdrop(ref: Ground.hubs.pick?.ref) } }
+        .modifier(PageLeaveOut())
         // Under the edge swipe UIKit re-insets the page in every frame, and both pages were laid out again and their type
         // redrawn each frame of the drag (profile films: 41-48 fps through the swipe). Held at rest size while it moves.
         .holdsWhileMoving("hub")
@@ -199,4 +215,20 @@ private struct HubNameKey: EnvironmentKey { static let defaultValue: String? = n
 extension EnvironmentValues {
     // The small capitals over a hub's pivot (WP7's application title): the hub's own name.
     var hubName: String? { get { self[HubNameKey.self] } set { self[HubNameKey.self] = newValue } }
+}
+
+// The page in front leaving for an artist, album or song page (WP7's turnstile out: 0 to 50 degrees about the left edge,
+// ease in). Read only by this modifier on each hub and page, so the leave redraws nothing inside them.
+@MainActor @Observable final class PageLeave {
+    static let shared = PageLeave()
+    var leaving = false
+    nonisolated static let time = 0.15
+}
+struct PageLeaveOut: ViewModifier {
+    func body(content: Content) -> some View {
+        let gone = PageLeave.shared.leaving
+        content
+            .rotation3DEffect(.degrees(gone ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: gone ? 0.55 : 0)
+            .opacity(gone ? 0 : 1)
+    }
 }

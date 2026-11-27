@@ -423,8 +423,9 @@ struct WPPaging: ScrollTargetBehavior {
     private var running: (id: Int, to: CGFloat)?
     private var serial = 0
     private var done: (() -> Void)?
-    // Told as a landing starts (its target offset), and as it ends or is stopped (its owner syncs what follows the scroll).
-    var starts: ((CGFloat) -> Void)?
+    // Told as a landing starts (its target offset and the curve it runs on), and as it ends or is stopped (its owner syncs
+    // what follows the scroll).
+    var starts: ((CGFloat, Animation) -> Void)?
     var ends: (() -> Void)?
     static let duration = 0.35
     var ready: Bool {
@@ -447,7 +448,15 @@ struct WPPaging: ScrollTargetBehavior {
     // Lands on x; `done` once it rests there. False when there is no scroll to drive.
     // Since build 83 a Core Animation basic animation on the scroll's bounds asking for up to 120 Hz (an iPhone runs a
     // property animator's frames at 60 unless asked: a 120 Hz drag then landed at half the rate).
-    @discardableResult func land(to x: CGFloat, done: @escaping () -> Void) -> Bool {
+    //
+    // Build 84 (gate on 83: one landing held five still frames, then jumped a quarter page in one): a Core Animation
+    // animation's clock starts when its transaction is committed, and the lift's commit also carries that frame's layout
+    // (the tick, the names told their target), so a busy lift drew nothing until the landing was well under way. The
+    // landing now starts on the next display frame after the lift, in a transaction of its own, so it is seen from its
+    // first frame whatever the lift cost. And it carries the finger's speed (WP7 eased a slow drag off and snapped a
+    // flick): `velocity` (points a second at the release) sets the curve's opening slope to match it, between WP7's
+    // exponent-6 snap for a flick and a gentle ease out for a page let go at rest; nil is a tapped name, WP7's curve.
+    @discardableResult func land(to x: CGFloat, velocity: CGFloat? = nil, done: @escaping () -> Void) -> Bool {
         #if canImport(UIKit)
         guard let sv = scroll else { return false }
         let from = current(sv)
@@ -460,7 +469,42 @@ struct WPPaging: ScrollTargetBehavior {
         serial += 1
         let id = serial
         running = (id, x)
-        starts?(x)
+        let curve = Self.curve(distance: abs(x - from), velocity: velocity)
+        pending = { [weak self] in self?.begin(id: id, from: from, to: x, curve: curve) }
+        if link == nil {
+            let l = CADisplayLink(target: self, selector: #selector(tick))
+            l.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+            l.add(to: .main, forMode: .common)
+            link = l
+        }
+        return true
+        #else
+        return false
+        #endif
+    }
+    // The landing's curve: WP7's (0.16, 1, 0.3, 1) when the finger was fast or unknown; its first control point moved out
+    // as the release slows, so the landing opens at about the finger's own speed (at most 0.6: a gentle ease out).
+    struct Curve { let x1: Double; let duration: Double }
+    static func curve(distance d: CGFloat, velocity v: CGFloat?) -> Curve {
+        guard let v, d > 1 else { return Curve(x1: 0.16, duration: duration) }
+        // Opening slope of (x1, 1, 0.3, 1) is 1 / x1 of the mean speed d / T.
+        let T = duration
+        let mean = Double(d) / T
+        let x1 = min(0.6, max(0.16, mean / max(Double(abs(v)), 1)))
+        // Slower releases a little longer, so the gentle curve isn't hurried.
+        return Curve(x1: x1, duration: T + (x1 - 0.16) * 0.15)
+    }
+    #if canImport(UIKit)
+    private var pending: (() -> Void)?
+    private var link: CADisplayLink?
+    @objc private func tick() {
+        link?.invalidate(); link = nil
+        let p = pending; pending = nil
+        p?()
+    }
+    private func begin(id: Int, from: CGFloat, to x: CGFloat, curve: Curve) {
+        guard let sv = scroll, running?.id == id else { return }
+        starts?(x, .timingCurve(curve.x1, 1, 0.3, 1, duration: curve.duration))
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setCompletionBlock { [weak self] in
@@ -474,20 +518,17 @@ struct WPPaging: ScrollTargetBehavior {
         let a = CABasicAnimation(keyPath: "bounds.origin.x")
         a.fromValue = from
         a.toValue = x
-        a.duration = Self.duration
-        a.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
+        a.duration = curve.duration
+        a.timingFunction = CAMediaTimingFunction(controlPoints: Float(curve.x1), 1, 0.3, 1)
         a.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         sv.layer.add(a, forKey: "land")
         CATransaction.commit()
-        return true
-        #else
-        return false
-        #endif
+        // Out at once to the render server: nothing else of this turn rides in the landing's first frame.
+        CATransaction.flush()
     }
-    #if canImport(UIKit)
     // Where the scroll shows now: mid-landing, the frame on screen rather than the model's target.
     private func current(_ sv: UIScrollView) -> CGFloat {
-        guard running != nil, let p = sv.layer.presentation() else { return sv.contentOffset.x }
+        guard running != nil, pending == nil, let p = sv.layer.presentation() else { return sv.contentOffset.x }
         return p.bounds.origin.x
     }
     // A landing taken off where it is on screen.
@@ -495,6 +536,8 @@ struct WPPaging: ScrollTargetBehavior {
         guard running != nil else { return }
         let at = current(sv)
         running = nil
+        // A landing not yet begun: nothing moved, nothing to take off.
+        if pending != nil { pending = nil; link?.invalidate(); link = nil; return }
         sv.layer.removeAnimation(forKey: "land")
         sv.setContentOffset(CGPoint(x: at, y: sv.contentOffset.y), animated: false)
     }
