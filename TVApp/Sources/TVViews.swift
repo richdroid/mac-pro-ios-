@@ -422,6 +422,9 @@ struct Page<C: View>: View {
             guard settingsAt == nil else { return }
             settingsAt = path.count
             SpeedMark.begin("settings")
+        } else {
+            // A page pushed straight over Settings (a launch's TV settings): Settings isn't seen until Back, so it isn't timed.
+            SpeedMark.cancel("settings")
         }
         path.append(v)
     }

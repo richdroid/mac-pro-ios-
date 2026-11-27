@@ -234,7 +234,7 @@ enum SwipeLog {
 // thread was doing while it missed frames, so a stall is named from its stacks rather than guessed (this Mac can't run a
 // profiler, and a launch pose's push stalled 0.6 to 7 s in the 11-26 and 11-27 films with nothing in the log to say why).
 // A watchdog thread watches SwipeLog's display-link heartbeat; once the main thread is 25 ms late it samples the main
-// thread's stack every millisecond until the heartbeat returns. Nothing is allocated while the main thread is suspended
+// thread's stack every 4 ms until the heartbeat returns. Nothing is allocated while the main thread is suspended
 // (the samples go into a buffer made up front), since a lock it holds would never be released. Caches/stalls.txt gets
 // each stall over 40 ms: its start on the swipe log's clock, its length, and every sample's frames, the app's own as
 // image+offset (named with atos on the runner by ci/stall-names.py), the system's as library`symbol. Ported from
@@ -268,14 +268,19 @@ final class FrameStalls: @unchecked Sendable {
             guard FrameStalls.beat > 0, now - FrameStalls.beat > 0.025 else { continue }
             let began = FrameStalls.beat, from = used
             var n = 0
+            // Every 4 ms: every millisecond, suspending the main thread that often stretched the stalls it measured on the
+            // build's slow simulator (CI chumby-fix-1127).
             while FrameStalls.beat == began, used + depth + 2 < capacity {
                 sample(); n += 1
-                usleep(1_000)
+                usleep(4_000)
                 if CACurrentMediaTime() - began > 8 { break }
             }
             let ms = (CACurrentMediaTime() - began) * 1000
             if ms >= 40, n > 0 { write(from: from, to: used, start: began - origin, ms: ms) }
             used = from
+            // One stall is written once: past the 8 s cap (or with the app away) the same heartbeat wrote a new "stall" every
+            // few milliseconds, 17,000 of them in one run.
+            while FrameStalls.beat == began { usleep(20_000) }
         }
     }
     // One sample: the main thread suspended, its registers read, its frame-pointer chain walked into the buffer.

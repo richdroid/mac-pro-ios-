@@ -910,10 +910,6 @@ struct WokeUpTo: View {
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
-    @ObservedObject private var nav = AlarmsNav.shared
-    // Coming back from Calendar settings or a day, the plan is already fresh (a rule changed there plans again at once),
-    // so Alarms doesn't read the calendar again in the first frame of the slide back.
-    @State private var backFromPage = false
     @State private var turningOn = false
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
@@ -948,9 +944,24 @@ struct AlarmsTab: View {
     func editNap(_ a: Alarm?) { editing = EditTarget(alarm: a, nap: true) }
     // A day, or Calendar settings, is a page pushed over Alarms in every posture, with the system's Back and edge swipe
     // (it was swapped into the right pane open flat, with a Done of its own: Richard, 2026-11-23).
-    func openDay(_ k: String) { dayPage = k; model.alarmsPage = true }
-    func openSettings() { dayPage = nil; model.alarmsPage = true }
-    @State private var dayPage: String?
+    func openDay(_ k: String) { let nav = AlarmsNav.shared; if nav.day != k { nav.day = k }; model.alarmsPage = true }
+    func openSettings() { let nav = AlarmsNav.shared; if nav.day != nil { nav.day = nil }; model.alarmsPage = true }
+    // Calendar settings' views worked out once, off screen, after Alarms has sat still a moment, so the first push costs
+    // what every later one does: the first was 0.9 to 1.1 s on the build's Release films against 0.35 s after, a third of
+    // it the system looking up the page's types for the first time (CI chumby-fix-1127). Not if a page has opened first.
+    func prewarmSettings() {
+        #if canImport(UIKit)
+        guard !SettingsPrewarm.asked else { return }
+        SettingsPrewarm.asked = true
+        let model = self.model
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            for _ in 0..<20 where ScrollHold.holding || NavTransit.shared.active { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard !AlarmsNav.shared.page, model.tab == 2, UIApplication.shared.applicationState == .active else { return }
+            SettingsPrewarm.run(model)
+        }
+        #endif
+    }
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
@@ -1007,19 +1018,18 @@ struct AlarmsTab: View {
         // Back on this tab with the rows behind the Chumby (a change that came while it was away): put right at once.
         .onAppear { if napSwap == nil, napRowShown != (model.napDue != nil) { napRows = model.napDue != nil; napFaded = false } }
         .environment(\.openCalendarSettings, { openSettings() })
-        .navigationDestination(isPresented: $nav.page) {
-            Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
-                .holdsWhileMoving("calendar")
-        }
+        .modifier(AlarmsPagePush())
         // Edge to edge (fillCover), with the zoom from its row.
         .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
         // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         .onChange(of: model.openAlarm) { _, k in openAsked(k) }
-        .onChange(of: nav.page) { _, open in if open { backFromPage = true } }
         .onAppear {
-            if backFromPage { backFromPage = false } else { wake.refreshPlan() }
+            // Coming back from Calendar settings or a day, the plan is already fresh, so Alarms doesn't read the calendar
+            // again in the first frame of the slide back.
+            if AlarmsNav.shared.returning { AlarmsNav.shared.returning = false } else { wake.refreshPlan() }
+            prewarmSettings()
             openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true
@@ -2040,3 +2050,30 @@ struct GlassKeyLabel: View {
         .padding(.horizontal, 2)
     }
 }
+
+// Calendar settings or a day pushed over Alarms, watched here and not by Alarms (see AlarmsNav).
+private struct AlarmsPagePush: ViewModifier {
+    @ObservedObject private var nav = AlarmsNav.shared
+    func body(content: Content) -> some View {
+        content.navigationDestination(isPresented: $nav.page) {
+            Group { if let k = nav.day { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
+                .holdsWhileMoving("calendar")
+        }
+    }
+}
+#if canImport(UIKit)
+// Calendar settings laid out once in a hosting controller of its own, never in the window and never shown, then let go:
+// the page's types and the system's first lookups for them are made then, not in the turn of his tap (AlarmsTab).
+@MainActor enum SettingsPrewarm {
+    static var asked = false
+    static func run(_ model: ChumbyModel) {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        let t0 = CACurrentMediaTime()
+        let h = UIHostingController(rootView: CalendarWakeSettings().environmentObject(model))
+        h.view.frame = window.bounds
+        h.view.setNeedsLayout()
+        h.view.layoutIfNeeded()
+        SwipeLog.note(String(format: "settings prewarmed %.0f ms", (CACurrentMediaTime() - t0) * 1000))
+    }
+}
+#endif

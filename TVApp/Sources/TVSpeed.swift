@@ -351,6 +351,7 @@ enum Timing {
 enum SpeedMark {
     private static var started: [String: CFTimeInterval] = [:]
     static func begin(_ name: String) { guard Timing.on else { return }; started[name] = CACurrentMediaTime() }
+    static func cancel(_ name: String) { started[name] = nil }
     static func end(_ name: String) {
         guard Timing.on, let t0 = started.removeValue(forKey: name) else { return }
         // The frame after this one: the appearing page's first draw has been committed by then.
@@ -365,7 +366,7 @@ enum SpeedMark {
     }
 }
 #else
-enum SpeedMark { static func begin(_ name: String) {}; static func end(_ name: String) {} }
+enum SpeedMark { static func begin(_ name: String) {}; static func end(_ name: String) {}; static func cancel(_ name: String) {} }
 enum Timing {
     static func measure<T>(_ name: String, _ f: () throws -> T) rethrows -> T { try f() }
     static func body(_ name: String) {}
