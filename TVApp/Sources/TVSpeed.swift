@@ -335,6 +335,10 @@ enum Timing {
                     let what = w.stuckIn ?? Timing.now()
                     if g > 0.25 { w.stuckIn = nil }
                     w.lock.unlock()
+                    // The main thread is free again: what it names next must have run since. The last body drawn stayed the
+                    // label until another ran, so a push's first-build stall read "main stuck 275 ms in body card" with no
+                    // card drawn in the move (gate 2 on chumby-fix-1127: no "bodies: card" in any push's window).
+                    Timing.set("idle")
                     if g > 0.25 { MainActor.assumeIsolated { HitchLog.shared.note(String(format: "main stuck %.0f ms in %@", g * 1000, what)) } }
                 }
             }

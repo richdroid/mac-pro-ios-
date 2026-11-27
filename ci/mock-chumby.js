@@ -145,6 +145,11 @@ const liveMac = () => {
   for (; liveHist.at < n; liveHist.at++) for (const k of Object.keys(liveHist.v)) { const h = liveHist.v[k], b = liveHist.base[k]; h.push(b[(liveHist.at + k.length) % b.length] * (0.7 + (liveHist.at % 5) / 8)); h.shift(); }
   m.hist = JSON.parse(JSON.stringify(liveHist.v));
   m.temps.forEach((t, i) => { t.c = Math.round(t.c + ((n * (i + 3)) % 7) - 3); });
+  // Every 8 s a figure loses and gains a digit, for the films of a unit beside its rolling number (gate 2 on
+  // chumby-fix-1127): CPU 100 %, 99, 9, 10; the first sensor 100°F, then 99°F.
+  const step = n % 8;
+  if (step < 4) m.cpu.total = [100, 99, 9, 10][step];
+  if (step === 0) m.temps[0].c = 37.8; else if (step === 1) m.temps[0].c = 37.2;
   if (n % 2) m.apps.push({ name: 'TextEdit', pid: 18, cpu: 0, mem: 88000000 });
   if (n % 3 === 0) m.apps.splice(m.apps.findIndex(a => a.name === 'Music'), 1);
   return m;

@@ -18,6 +18,10 @@ struct FailNote: View {
     // A title over the reason, laid out as a MarkNote is: the title, "·", Retry and the ✕ on one line when they fit,
     // else Retry and the ✕ under the reason.
     var head: String?
+    // Under a Pandora station: its words start where the station names do, the warning in the play button's column (a
+    // Label at the rows' body size, as PandoraRow is). Laid out as words beside a small icon they started about 16 px left
+    // of the names (gate 2 on chumby-fix-1127).
+    var station = false
     var body: some View {
         if let head, let retry { titled(head, retry) } else { plain }
     }
@@ -51,13 +55,23 @@ struct FailNote: View {
         }
         .font(.subheadline)
     }
-    @ViewBuilder private var plain: some View {
-        let words = HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "exclamationmark.circle.fill")
-            Text(text).fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder private var words: some View {
+        if station {
+            Label {
+                Text(text).font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            } icon: { Image(systemName: "exclamationmark.circle.fill") }
+            .font(.body).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "exclamationmark.circle.fill")
+                Text(text).fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+            .accessibilityElement(children: .combine)
         }
-        .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-        .accessibilityElement(children: .combine)
+    }
+    @ViewBuilder private var plain: some View {
         if let retry {
             VStack(alignment: .leading, spacing: 4) {
                 words
@@ -946,6 +960,22 @@ struct AlarmsTab: View {
     // (it was swapped into the right pane open flat, with a Done of its own: Richard, 2026-11-23).
     func openDay(_ k: String) { let nav = AlarmsNav.shared; if nav.day != k { nav.day = k }; model.alarmsPage = true }
     func openSettings() { let nav = AlarmsNav.shared; if nav.day != nil { nav.day = nil }; model.alarmsPage = true }
+    // Calendar settings' views made once, in the window and never seen (PageWarm), half a second after Alarms first shows
+    // (soon enough for a tap just after launch), so the first push costs what every later one does: the first slid in 1.6
+    // to 2.4 s late on the build's Release films against about 0.2 s after, the runtime looking up the page's types for the
+    // first time (gate 2 on chumby-fix-1127). Not mid-scroll or mid-slide, and not if a page has opened first.
+    func prewarmSettings() {
+        #if canImport(UIKit)
+        guard !PageWarm.asked("settings") else { return }
+        let model = self.model
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            for _ in 0..<20 where ScrollHold.holding || NavTransit.shared.active { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard !AlarmsNav.shared.page, model.tab == 2, UIApplication.shared.applicationState == .active else { return }
+            PageWarm.run("settings", [AnyView(CalendarWakeSettings().environmentObject(model))])
+        }
+        #endif
+    }
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
@@ -1013,6 +1043,7 @@ struct AlarmsTab: View {
             // Coming back from Calendar settings or a day, the plan is already fresh, so Alarms doesn't read the calendar
             // again in the first frame of the slide back.
             if AlarmsNav.shared.returning { AlarmsNav.shared.returning = false } else { wake.refreshPlan() }
+            prewarmSettings()
             openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true

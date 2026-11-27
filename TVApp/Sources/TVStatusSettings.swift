@@ -27,10 +27,30 @@ struct SettingsPages: ViewModifier {
     @Environment(TVModel.self) var model
     @Environment(\.pagePush) private var pagePush
     @StateObject private var store = ManageStore()
+    @Environment(\.paneLayout) private var panes
     let tab: Int
     @MainActor static var scripted = false
+    // Settings and TV settings made once, in the window and never seen (PageWarm), two seconds after the first tab shows,
+    // so neither first push stops on a frozen frame: the first Settings push froze 200 to 346 ms in every posture and TV
+    // settings 274 to 422 ms, the runtime looking up the pages' types for the first time (gate 2 on chumby-fix-1127).
+    func warm() {
+        #if os(iOS)
+        guard !PageWarm.asked("tv settings") else { return }
+        let model = self.model, store = self.store, panes = self.panes
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            for _ in 0..<20 where NavTransit.shared.active { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard UIApplication.shared.applicationState == .active, !NavTransit.shared.active else { return }
+            PageWarm.run("tv settings", [
+                AnyView(TVSettingsPage().environment(model).environment(\.paneLayout, panes)),
+                AnyView(ManageSettingsView(store: store).environment(model).environment(\.paneLayout, panes)),
+            ])
+        }
+        #endif
+    }
     func body(content: Content) -> some View {
         content
+            .onAppear { warm() }
             // Each held at its size while the edge swipe moves it (Shared/Duo.swift HoldsWhileMoving).
             .navigationDestination(for: SettingsRoute.self) { r in
                 Group {

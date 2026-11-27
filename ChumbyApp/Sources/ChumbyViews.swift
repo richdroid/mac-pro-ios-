@@ -2786,10 +2786,10 @@ struct SoundsTab: View {
                 Section {
                     ForEach(model.state.pandora) { st in
                         PandoraRow(station: st)
-                        if st.id == model.pplayStation, let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).stationDivider().id("pplaynote") }
+                        if st.id == model.pplayStation, let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay"), station: true).stationDivider().id("pplaynote") }
                     }
                     // a station no longer on the list: the note under the list, as before
-                    if !model.state.pandora.contains(where: { $0.id == model.pplayStation }), let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).stationDivider().id("pplaynote") }
+                    if !model.state.pandora.contains(where: { $0.id == model.pplayStation }), let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay"), station: true).stationDivider().id("pplaynote") }
                 } header: { SectionHead(icon: "radio", text: "Pandora") }
                     .task { await PandoraPose.run(model) }
             }

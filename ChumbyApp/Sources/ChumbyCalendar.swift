@@ -322,8 +322,12 @@ struct LeadPicker: View {
                 Text(leadText($0) + suffix + ($0 == usual ? " · usual" : "")).monospacedDigit().tag($0)
             }
         } label: {
-            Text(title)
-            if let note { Text(note).monospacedDigit() }
+            // The note under the name in the other rows' note style: given to the menu bare, iOS drew it in the name's own
+            // colour and size ("Rings at 4:00 PM" read as a second title, gate 2 on chumby-fix-1127).
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let note { Text(note).font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
+            }
         }
         .pickerStyle(.menu)
         .onAppear { if opened == nil { opened = value } }
@@ -349,7 +353,7 @@ struct CalendarSettingsSections: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
     @State private var showCalendars = false
-    func leadRow(_ label: String, _ value: Binding<Int>, _ standard: Int) -> some View { LeadPicker(title: label, keep: [standard], value: value) }
+    func leadRow(_ label: String, _ value: Binding<Int>, _ standard: Int) -> some View { LeadPicker(title: label, keep: [standard], value: value).findSpot(label.lowercased()) }
     var body: some View {
         let calendars = wake.calendars
         let included = calendars.filter { !wake.rules.excludedCalendars.contains($0.title) }.count

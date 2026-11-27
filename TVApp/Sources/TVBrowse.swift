@@ -268,7 +268,13 @@ struct MediaCard: View {
     // A YouTube still is wide, so its card is: a 16:9 tile the row's cover height, the still filling it (YouTube's own stills
     // are 16:9, so nothing is cut off), rather than a wide picture shrunk into a poster's shape.
     var coverHeight: CGFloat { width / source.coverAspect }
-    var cardWidth: CGFloat { item.isYouTube ? (coverHeight * 16 / 9).rounded() : width }
+    var cardWidth: CGFloat { Self.cardWidth(width, source, wide: item.isYouTube) }
+    // A card's width on the row: the row's width, or a video's 16:9 at the cover's height. One function for the card and
+    // the waiting row's shapes (PlaceholderShelf), so a waiting card is the width its card will be (gate 2 on
+    // chumby-fix-1127: a wide skeleton about 268 pt grew to 314, then cut to the real 357).
+    static func cardWidth(_ width: CGFloat, _ source: MediaSource, wide: Bool) -> CGFloat {
+        wide ? (width / source.coverAspect * 16 / 9).rounded() : width
+    }
     @State private var band: Color?
     // No cover to be had (none given, or it wouldn't load): the card draws its own, never a blank tile.
     @State private var noArt = false

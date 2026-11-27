@@ -35,14 +35,22 @@ struct PaneReader<C: View>: View {
 // what they hold (Richard, 2026-11-10, a recording open flat: "weird resizing issues at times when going back on a
 // screen from another"). Now every page a stack is about to show reports in (viewWillAppear, which UIKit calls at the
 // start of any push or pop, before it moves anything), in all three apps, with nothing for an app to register.
+//
+// Not watched by any view (no Observation): the move is noted inside UIKit's layout (a page's viewWillAppear, a page's
+// geometry reading), and on iOS 26 UIKit tracks what a view reads while it lays out, so a watched flag written there
+// worked out every view that had read it, inside the same layout, over and over: the Calendar-settings push spent most
+// of a 0.7 to 47 s main-thread turn in SwiftUI's ObservationGraphMutation and UIKit's "feedback loop detected" (gate 2 on
+// chumby-fix-1127, the build's stall samples). A view reads the flags as it is worked out for reasons of its own; one
+// that must act on a move's start or end listens for `began` or `ended`.
 @MainActor @Observable final class NavTransit {
     static let shared = NavTransit()
-    private(set) var active = false
+    @ObservationIgnored private(set) var active = false
     // The move in flight is the edge swipe, under the finger. Only then does UIKit resize a page as it goes; a page taken
     // back with Back keeps its size and safe area the whole way (CI 8b7b68e, the hold off: not one reading of a page's
     // size changed through five pops), so only the swipe needs a page's size held.
-    private(set) var underFinger = false
-    // Posted as each move ends, for a view that wants the moment without being worked out again for it.
+    @ObservationIgnored private(set) var underFinger = false
+    // Posted as each move begins and ends, for a view that wants the moment without being worked out again for it.
+    nonisolated static let began = Notification.Name("duo.move.began")
     nonisolated static let ended = Notification.Name("duo.move.ended")
     // Called as each move ends: what an app kept back while a page was moving (a reading from its device) lands then.
     @ObservationIgnored var onEnd: (() -> Void)?
@@ -77,7 +85,11 @@ struct PaneReader<C: View>: View {
         current = c as AnyObject
         if SwipeLog.on { SwipeLog.note(String(format: "move began (%.2f s%@)", c.transitionDuration, c.isInteractive ? ", under the finger" : "")) }
         if underFinger != c.initiallyInteractive { underFinger = c.initiallyInteractive }
-        if !active { active = true }
+        if !active {
+            active = true
+            // Posted after this turn's layout, never inside it.
+            DispatchQueue.main.async { NotificationCenter.default.post(name: Self.began, object: nil) }
+        }
         let queued = c.animate(alongsideTransition: nil) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.current === (c as AnyObject) else { return }
@@ -135,7 +147,6 @@ extension UIViewController {
 // reading while a move is in flight (NavTransit), which still watches every move.
 struct HoldsWhileMoving: ViewModifier {
     let name: String
-    private var transit = NavTransit.shared
     struct Reading: Equatable { var size: CGSize; var insets: EdgeInsets }
     init(name: String) { self.name = name }
     func body(content: Content) -> some View {
@@ -144,13 +155,17 @@ struct HoldsWhileMoving: ViewModifier {
                 if SwipeLog.on {
                     Color.clear.ignoresSafeArea()
                         .onGeometryChange(for: Reading.self) { Reading(size: $0.size, insets: $0.safeAreaInsets) } action: { r in
-                            let moving = NavTransit.shared.moving()
+                            // Asked without noting anything: this runs inside the layout (see NavTransit).
+                            let moving = NavTransit.shared.inFlight
                             SwipeLog.note("\(name) \(moving ? "moving" : "rest") size \(Int(r.size.width))x\(Int(r.size.height)) insets t\(Int(r.insets.top)) l\(Int(r.insets.leading)) b\(Int(r.insets.bottom)) r\(Int(r.insets.trailing))")
                         }
                 }
             }
-            // Read only with the log on, so no page is worked out again as a move begins and ends on the phone.
-            .onChange(of: SwipeLog.on ? transit.active : false) { _, now in SwipeLog.note("\(name) transit \(now ? "began" : "ended")\(now && transit.underFinger ? " under the finger" : "")") }
+            // Heard, not watched, so no page is worked out again as a move begins and ends (see NavTransit).
+            .onReceive(NotificationCenter.default.publisher(for: NavTransit.began)) { _ in
+                if SwipeLog.on { SwipeLog.note("\(name) transit began\(NavTransit.shared.underFinger ? " under the finger" : "")") }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NavTransit.ended)) { _ in if SwipeLog.on { SwipeLog.note("\(name) transit ended") } }
     }
 }
 extension View {
@@ -1029,6 +1044,9 @@ extension View {
 // (iOS places it: the top of the side strip folded and open in landscape, the top bar open upright). The lines after
 // the first list every bar button seen, for the log.
 enum BackFinder {
+    // Controls a film must touch that the label tap can't find (Chumby's Work lead menu), each where it was last laid out,
+    // in the window's points; written as "spot NAME x y" lines.
+    @MainActor static var spots: [String: CGRect] = [:]
     @MainActor static func start() {
         #if canImport(UIKit)
         guard UserDefaults.standard.bool(forKey: "findBack") else { return }
@@ -1073,8 +1091,62 @@ enum BackFinder {
         let first = back.map { String(format: "%.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "none"
         let shut = close.map { String(format: "close %.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "close none"
         let tabLines = tabs.map { String(format: "tab %@ %.4f %.4f", $0.0, $0.1.midX / w.bounds.width, $0.1.midY / w.bounds.height) }
-        let text = ([first, shut, String(format: "window %.0fx%.0f", w.bounds.width, w.bounds.height)] + tabLines + seen).joined(separator: "\n") + "\n"
+        let spotLines = spots.sorted { $0.key < $1.key }.map { String(format: "spot %@ %.4f %.4f", $0.key, $0.value.midX / w.bounds.width, $0.value.midY / w.bounds.height) }
+        let text = ([first, shut, String(format: "window %.0fx%.0f", w.bounds.width, w.bounds.height)] + tabLines + spotLines + seen).joined(separator: "\n") + "\n"
         try? text.write(to: dir.appendingPathComponent("back-at.txt"), atomically: true, encoding: .utf8)
     }
     #endif
 }
+
+extension View {
+    // Where this control is, for the build's films (-findBack YES only): BackFinder writes it as a "spot" line.
+    @ViewBuilder func findSpot(_ name: String) -> some View {
+        if UserDefaults.standard.bool(forKey: "findBack") {
+            onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { BackFinder.spots[name] = $0 }
+        } else { self }
+    }
+}
+
+#if canImport(UIKit)
+// A pushed page's views made once ahead of his tap, so its first push costs what every later one does. The first push of
+// a page was its views' types being looked up by the runtime for the first time (swift_conformsToProtocol under SwiftUI's
+// DynamicPropertyCache and the layer commit): Chumby's Calendar settings slid in 1.6 to 2.4 s late on the build's Release
+// films against about 0.2 s after, and Mint Remote's Settings and TV settings each froze a frame for 0.15 to 0.4 s (gate 2
+// on chumby-fix-1127). Each page is hosted in the key window at the window's size, behind the app's own view and all but
+// transparent, laid out and committed, kept for a few frames, then let go. Out of a window a hosting view lays nothing
+// out (CI 6056476: "settings prewarmed 1 ms" and no change), so it must be in one. Once per page per launch; the caller
+// waits for the app to sit still first (no slide, no scroll).
+@MainActor enum PageWarm {
+    private static var done = Set<String>()
+    static func asked(_ name: String) -> Bool { done.contains(name) }
+    static func run(_ name: String, _ pages: [AnyView]) {
+        guard !done.contains(name), !pages.isEmpty,
+              let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        done.insert(name)
+        let t0 = CACurrentMediaTime()
+        let hosts = pages.map { page -> UIHostingController<AnyView> in
+            let h = UIHostingController(rootView: page)
+            h.view.frame = window.bounds
+            h.view.backgroundColor = .clear
+            h.view.alpha = 0.011
+            h.view.isUserInteractionEnabled = false
+            h.view.accessibilityElementsHidden = true
+            // Under the app's own view, so even the faint copy is covered.
+            window.insertSubview(h.view, at: 0)
+            return h
+        }
+        for h in hosts { h.view.setNeedsLayout(); h.view.layoutIfNeeded() }
+        let laid = CACurrentMediaTime()
+        // The layer commit, where much of a first push's time went: done now, not in the turn of his tap.
+        CATransaction.flush()
+        let committed = CACurrentMediaTime()
+        SwipeLog.note(String(format: "%@ prewarmed %.0f ms (layout %.0f, commit %.0f)", name, (committed - t0) * 1000, (laid - t0) * 1000, (committed - laid) * 1000))
+        Task { @MainActor in
+            // A few frames more, for anything SwiftUI makes on its next update, then gone.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            for h in hosts { h.view.removeFromSuperview() }
+            SwipeLog.note(String(format: "%@ prewarm let go after %.0f ms", name, (CACurrentMediaTime() - t0) * 1000))
+        }
+    }
+}
+#endif

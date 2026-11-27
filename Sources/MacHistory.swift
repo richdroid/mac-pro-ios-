@@ -486,12 +486,13 @@ struct HistoryReadout: View {
             // Its unit a Text of its own beside the number, as Status' tiles have it (WebTile.split), so a figure losing a
             // digit never draws its unit over the digit rolling away.
             let shown = picked.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–"
+            // Each second's reading rolls in, the unit kept clear of the digits (RollingFigure); under his finger (a value
+            // picked off the chart) it follows at once.
             let (number, unit) = WebTile.split(shown)
-            HStack(alignment: .firstTextBaseline, spacing: 0) { Text(number); if !unit.isEmpty { Text(unit) } }
+            let font = Font.system(size: 34, weight: .semibold).monospacedDigit()
+            RollingFigure(number: number, unit: unit, numberFont: font, unitFont: font,
+                          roll: picked == nil && !NavTransit.shared.active ? .easeOut(duration: 0.2) : nil)
                 .accessibilityElement(children: .ignore).accessibilityLabel(shown)
-                .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
-                // Each second's reading rolls in; under his finger (a value picked off the chart) it follows at once.
-                .animation(picked == nil && !NavTransit.shared.active ? .easeOut(duration: 0.2) : nil, value: current)
             Text(picked.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? (stale ? "Last reading" : "Now")).font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

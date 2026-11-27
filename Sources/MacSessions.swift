@@ -441,7 +441,8 @@ struct SessionTerminal: View {
             .animation(mode.kind == drawnKind ? RemoteScreenView.posture : nil, value: mode)
             .onChange(of: mode.kind, initial: true) { _, k in drawnKind = k }
             .onChange(of: live, initial: true) { _, m in if !NavTransit.shared.moving() { heldMode = m } }
-            .onChange(of: NavTransit.shared.active) { _, now in if !now { heldMode = live } }
+            // Heard as the move ends (NavTransit is watched by no view).
+            .onReceive(NotificationCenter.default.publisher(for: NavTransit.ended)) { _ in heldMode = live }
         }
         .holdsWhileMoving("session")
         .animation(Motion.fade, value: options)

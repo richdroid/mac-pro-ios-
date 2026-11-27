@@ -3170,8 +3170,7 @@ struct PlaceholderShelf: View {
     var wide: [Bool] = []
     @State private var breathe = false
     var shapes: [CGFloat] {
-        let cover = cardHeight - MediaCard.band(cardWidth)
-        return (wide.isEmpty ? Array(repeating: false, count: 4) : wide).map { $0 ? (cover * 16 / 9).rounded() : cardWidth }
+        (wide.isEmpty ? Array(repeating: false, count: 4) : wide).map { MediaCard.cardWidth(cardWidth, .stremio, wide: $0) }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: headed ? 8 : 10) {
@@ -3201,9 +3200,10 @@ struct PlaceholderShelf: View {
         // minWidth 0: four cards are wider than a folded column, and without it their width widened the whole page,
         // which then drew about 90 pt to the left and snapped back once the real row came (the Apps cold-entry jump).
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
-        // A plain repeating fade rather than a phase animator, which would lay this out at its natural size.
-        .opacity(breathe ? 1 : 0.5)
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: breathe)
+        // A plain repeating fade rather than a phase animator, which would lay this out at its natural size. The repeating
+        // animation is the opacity's alone: put on the whole row, it also eased the cards' widths as the page found its
+        // width, and a waiting card was still growing when the real row cut in (gate 2 on chumby-fix-1127).
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { $0.opacity(breathe ? 1 : 0.5) }
         .onAppear { breathe = true }
         .accessibilityHidden(true)
     }
