@@ -45,6 +45,17 @@ jobs:
           # The simulator build for the films job, kept as a zip (ditto keeps the bundle whole).
           ditto -c -k --keepParent build-sim/Build/Products/Debug-iphonesimulator/LastFM.app LastFM-sim.zip
       # A build that fails says why where the lead can read it without a token: its log on the release.
+      # The phone's build at once (2026-11-26): an instrumented build reaches him without waiting ~70 min for the shots.
+      - name: Publish the ipa early
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ci/lfm-sim.sh
+          release
+          cp dist/LastFM.ipa LastFM-early.ipa
+          echo "$GITHUB_SHA ipa run $GITHUB_RUN_NUMBER" > ipa.txt
+          upload LastFM-early.ipa ipa.txt
       - name: Publish the build log on failure
         if: failure()
         env:

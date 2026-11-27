@@ -112,7 +112,9 @@ struct Panel: Identifiable {
         startX = nil
         let n = Int((offset / max(w, 1)).rounded()) - Int((s / max(w, 1)).rounded())
         if let r = release {
-            HitchLog.shared.note(String(format: "land %d drag %.2f v %.2f settle_ms %.0f", n, r.drag, r.v, (Date().timeIntervalSinceReferenceDate - r.at) * 1000))
+            let line = String(format: "land %d drag %.2f v %.2f settle_ms %.0f", n, r.drag, r.v, (Date().timeIntervalSinceReferenceDate - r.at) * 1000)
+            HitchLog.shared.note(line)
+            MotionProbe.shared.note(line)
         } else {
             HitchLog.shared.note("land \(n)")
         }

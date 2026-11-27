@@ -18,7 +18,7 @@ struct HomeView: View {
                 FoldSplit {
                     Page {
                         VStack(alignment: .leading, spacing: S.head) {
-                            AppTitle(text: "rotation").modifier(order("title"))
+                            AppTitle(text: Home.title).modifier(order("title"))
                             StartTiles(width: nil, go: go)
                         }
                         .padding(.top, S.head)
@@ -116,6 +116,8 @@ struct HomeView: View {
 
 // The order things leave home in (top to bottom, left to right), for the turnstile out.
 enum Home {
+    // The panorama's title (Richard, 11-26 on build 80: "rotation should say last.fm"): plain white, WP7's size.
+    static let title = "last.fm"
     static let keys = ["title", "h-start", "now", "profile", "today", "charts", "library", "discover", "rediscover", "history", "scrobbling",
                        "h-menu"] + Hub.menu.map { "w-" + $0.rawValue } + ["h-played", "h-repeat"]
     static var count: Int { keys.count }
@@ -150,14 +152,14 @@ private struct HomePanorama: View {
                 // the tray and the items begin 0.97 of the size below it. Placed here from the face's own metrics.
                 let T0 = min(300, max(112, pw * 0.39)) * min(max(k, 0.9), 1.1)
                 // Always wider than the screen, as WP7's panorama title is (open upright a short name fitted inside it).
-                let w0 = textWidth("rotation", size: T0, tracking: -3, weight: -0.4, face: Z.lower())
+                let w0 = textWidth(Home.title, size: T0, tracking: -3, weight: -0.4, face: Z.lower())
                 let T = w0 > 0 && w0 < pw * 1.12 ? T0 * pw * 1.12 / w0 : T0
                 let m = Self.metrics(T)
                 let across = TopBar.across()
                 let tray = across?.maxY ?? insets.top
                 let titleTop = tray + T * 0.18 - (m.ascender - m.xHeight)
                 let sectionsTop = tray + T * 0.97
-                let titleW = textWidth("rotation", size: T, tracking: -3, weight: -0.4, face: Z.lower())
+                let titleW = textWidth(Home.title, size: T, tracking: -3, weight: -0.4, face: Z.lower())
                 let travel = max(1, sec * CGFloat(count - 1))
                 // The layers' rates from their widths (study §2: "the speed relates to the ratio of the content's width to
                 // the background's"): each crosses its own overhang once over the panorama's travel. The title, shorter,
@@ -171,7 +173,7 @@ private struct HomePanorama: View {
                 ZStack(alignment: .topLeading) {
                     PanoramaBackground(ref: Ground.hubs.pick?.ref, motion: motion, rate: bgRate, side: bgSide)
                         .modifier(TurnstileOut(index: 0, count: Home.count))
-                    PanoramaTitle(text: "rotation", size: T, motion: motion, rate: titleRate)
+                    PanoramaTitle(text: Home.title, size: T, motion: motion, rate: titleRate)
                         .padding(.leading, side.leading + 10)
                         .offset(y: titleTop)
                         .modifier(TurnstileOut(index: 0, count: Home.count))

@@ -473,6 +473,7 @@ enum Diag {
         l.add(to: .main, forMode: .common)
         link = l
         // And what the main thread was doing in each stall (LFMStalls.swift).
+        StallSampler.always = true; StallSampler.armed = true
         StallSampler.shared.start()
     }
     // Where a horizontal swipe came to rest, relative to where it began ("land 1" a page on, "land 0" sprung back), for

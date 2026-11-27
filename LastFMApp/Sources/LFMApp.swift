@@ -28,12 +28,16 @@ struct LastFMApp: App {
                         Scrobbler.shared.start()
                     } else if p == .background {
                         Store.shared.stop(); Scrobbler.shared.stop()
+                        #if canImport(UIKit)
+                        Task { await MotionProbe.shared.flush() }
+                        #endif
                     }
                 }
                 .onAppear {
                     LaunchLog.mark("root appeared"); Store.shared.start()
                     #if canImport(UIKit)
                     HitchLog.shared.start()
+                    MotionProbe.shared.start()
                     #endif
                 }
         }
@@ -99,6 +103,13 @@ struct RootView: View {
             .tint(.white)
         }
         .onOpenURL { links.open($0) }
+        #if canImport(UIKit)
+        // The screen in front, for the phone's motion telemetry (LFMMotion.swift).
+        .onChange(of: path) { old, p in
+            MotionProbe.screen = RootView.name(p.last)
+            MotionProbe.shared.note(p.count > old.count ? "push " + MotionProbe.screen : "pop to " + MotionProbe.screen)
+        }
+        #endif
         .onChange(of: links.go) { _, g in
             guard let g else { return }
             links.go = nil
@@ -114,6 +125,19 @@ struct RootView: View {
             case "artist": path.append(.page(Go(route: .artist(store.insights.week.first?.name ?? h.artist), zoom: nil)))
             case "album": path.append(.page(Go(route: .album(h.artist, h.album), zoom: nil)))
             default: path.append(.page(Go(route: .track(h), zoom: nil)))
+            }
+        }
+    }
+
+    static func name(_ n: Nav?) -> String {
+        switch n {
+        case nil: return "home"
+        case .hub(let h, _)?: return h.rawValue
+        case .page(let g)?:
+            switch g.route {
+            case .artist: return "artist"
+            case .album: return "album"
+            case .track: return "track"
             }
         }
     }

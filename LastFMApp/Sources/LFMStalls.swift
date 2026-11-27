@@ -16,6 +16,10 @@ final class StallSampler: @unchecked Sendable {
     // only shortens or lengthens one wait.
     nonisolated(unsafe) static var beat: CFTimeInterval = 0
     nonisolated(unsafe) static var origin: CFTimeInterval = 0
+    // Sampling only while armed: always in the build's films (HitchLog), only inside a touch's episode on the phone
+    // (MotionProbe, whose display link runs only then: with no heartbeat between episodes it would read as one stall).
+    nonisolated(unsafe) static var armed = false
+    nonisolated(unsafe) static var always = false
     private var main: thread_act_t = 0
     private let depth = 48
     private let capacity = 600_000
@@ -39,18 +43,18 @@ final class StallSampler: @unchecked Sendable {
         while true {
             usleep(2_000)
             let now = CACurrentMediaTime()
-            guard StallSampler.beat > 0, now - StallSampler.beat > 0.025 else { continue }
+            guard StallSampler.armed, StallSampler.beat > 0, now - StallSampler.beat > 0.025 else { continue }
             // A stall: sampled until the heartbeat moves again.
             let began = StallSampler.beat
             let from = used
             var n = 0
-            while StallSampler.beat == began, used + depth + 2 < capacity {
+            while StallSampler.beat == began, StallSampler.armed, used + depth + 2 < capacity {
                 sample(); n += 1
                 usleep(1_000)
                 if CACurrentMediaTime() - began > 8 { break }
             }
             let ms = (CACurrentMediaTime() - began) * 1000
-            if ms >= 40, n > 0 { write(from: from, to: used, start: began - StallSampler.origin, ms: ms) }
+            if ms >= 40, n > 0, StallSampler.armed { write(from: from, to: used, start: began - StallSampler.origin, ms: ms, at: began) }
             else { used = from }
         }
     }
@@ -113,15 +117,26 @@ final class StallSampler: @unchecked Sendable {
         return out
     }
 
-    private func write(from: Int, to: Int, start: Double, ms: Double) {
+    private func write(from: Int, to: Int, start: Double, ms: Double, at: CFTimeInterval) {
         var lines = [String(format: "stall t %.2f ms %.0f", start, ms)]
         var i = from
+        var stacks: [[String]] = []
         while i < to {
             let k = Int(buf[i + 1])
             var frames: [String] = []
             for j in 0..<k { frames.append(name(buf[i + 2 + j])) }
             lines.append("  " + frames.joined(separator: " | "))
+            stacks.append(frames)
             i += 2 + k
+        }
+        // On the phone: the stall's middle sample, with the episode it fell in (the app's frames as image+offset, read
+        // with atos against the CI build's binary).
+        if !StallSampler.always, !stacks.isEmpty {
+            #if canImport(UIKit)
+            MotionProbe.stall(ms, at: at, frames: stacks[stacks.count / 2])
+            #endif
+            used = from
+            return
         }
         used = from
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("stalls.txt")

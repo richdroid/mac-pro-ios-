@@ -62,7 +62,7 @@ struct HubPivot: View {
             FoldSplit {
                 Page {
                     VStack(alignment: .leading, spacing: 0) {
-                        AppTitle(text: title ?? hubName ?? "rotation").frame(height: ceil(20 * min(max(k, 0.9), 1.3)) + 2, alignment: .top).turnstile(0)
+                        AppTitle(text: title ?? hubName ?? Home.title).frame(height: ceil(20 * min(max(k, 0.9), 1.3)) + 2, alignment: .top).turnstile(0)
                         Text(first.header).font(.zuneLower(size: 58 * min(max(k, 0.9), 1.2))).tracking(-1).foregroundStyle(.white)
                             .lineLimit(1).fixedSize().padding(.leading, S.margin - 2).turnstile(0)
                             .accessibilityAddTraits(.isHeader)
