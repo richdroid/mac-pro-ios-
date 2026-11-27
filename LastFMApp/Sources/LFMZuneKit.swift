@@ -341,6 +341,11 @@ enum TopBar {
         #endif
     }
     #if canImport(UIKit)
+    // The app's navigation stack.
+    @MainActor static func navigation() -> UINavigationController? {
+        guard let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return nil }
+        return nav(w.rootViewController)
+    }
     @MainActor private static func nav(_ v: UIViewController?) -> UINavigationController? {
         guard let v else { return nil }
         if let n = v as? UINavigationController { return n }

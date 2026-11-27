@@ -355,13 +355,18 @@ struct NowBackdrop: View {
 // artist's photo behind now playing. The content is hosted once and moved as a layer by the render server at up to 30 Hz
 // (a speed under 1 pt a second needs no more), so nothing of it is laid out or drawn again in its frames: the drift of
 // run 39 ran on the main thread and redrew the screen 30 times a second (fault 8). Still under Reduce Motion.
+// Drawn off screen (HubWarm's ImageRenderer) it is the plain picture: a UIKit host made inside an ImageRenderer took the
+// app down a second after home appeared (run 84, every film that launched on home).
+private struct OffscreenKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var offscreen: Bool { get { self[OffscreenKey.self] } set { self[OffscreenKey.self] = newValue } } }
 struct Drifting<C: View>: View {
     let key: String
     @ViewBuilder let content: () -> C
     @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.offscreen) private var offscreen
     var body: some View {
         #if canImport(UIKit)
-        if still { content() } else { DriftHost(key: key, content: AnyView(content())) }
+        if still || offscreen { content() } else { DriftHost(key: key, content: AnyView(content())) }
         #else
         content()
         #endif

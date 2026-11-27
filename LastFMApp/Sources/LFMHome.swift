@@ -23,7 +23,6 @@ struct HomeView: View {
             }
         }
         .opacity(HomeLeave.shared.cleared ? 0 : 1)
-        .modifier(PageLeaveOut())
         // Home's entrance plays at launch only. Built any later (opened deep by a link or a build's pose, or made again by a
         // turn of the posture while a hub covers it), home is first seen under a Back, and there it must be whole at rest:
         // its parts waited at -80 degrees for the swipe to end, so the Back showed the bare ground and an edge-on title,
@@ -331,26 +330,14 @@ private struct PanIndicator: View {
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
             guard !Task.isCancelled, HomeLeave.shared.chosen == nil else { return }
-            let r = ImageRenderer(content: HubView(hub: h, panel: nil).environment(\.turnstileArrived, true).frame(width: 390, height: 844))
+            let r = ImageRenderer(content: HubView(hub: h, panel: nil).environment(\.turnstileArrived, true).environment(\.offscreen, true).frame(width: 390, height: 844))
             r.scale = 0.05
             _ = r.cgImage
             done.insert(h)
             if h == .profile { await Totals.warm() }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        // The artist, album and song pages once each, the same way (their first push paid its type lookups: 347-364 ms
-        // in the tap films on build 83).
-        guard !pagesDone, let s = Store.shared.hero else { return }
-        for v in [AnyView(ArtistPage(name: s.artist)), AnyView(AlbumPage(artist: s.artist, album: s.album)), AnyView(TrackPage(s: s))] {
-            guard !Task.isCancelled, HomeLeave.shared.chosen == nil, !Store.shared.scrolling, !HomeSwipe.moving else { return }
-            let r = ImageRenderer(content: v.environment(\.turnstileArrived, true).frame(width: 390, height: 844))
-            r.scale = 0.05
-            _ = r.cgImage
-            try? await Task.sleep(nanoseconds: 250_000_000)
-        }
-        pagesDone = true
     }
-    private static var pagesDone = false
 }
 
 // The panorama between a finger's touch and its rest (the landing included): a tap let go then is never an opening.

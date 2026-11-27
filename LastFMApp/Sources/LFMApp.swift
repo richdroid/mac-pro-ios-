@@ -1,5 +1,8 @@
 import SwiftUI
 import Metal
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @main
 struct LastFMApp: App {
@@ -86,14 +89,18 @@ struct RootView: View {
         opener.go = { g in
             guard !PageLeave.shared.leaving else { return }
             if UIAccessibilityReduceMotion.on { stack.wrappedValue.append(.page(g)); return }
-            withAnimation(Z.easeIn(PageLeave.time)) { PageLeave.shared.leaving = true }
+            PageLeave.shared.leaving = true
+            // The turn-out is the render server's, on the page's own layer: flipping a 3D effect onto the whole SwiftUI
+            // page rebuilt its layers at the tap and froze it ~0.45 s, so the turn-out never showed (run 84, tap-artist).
+            let turned = PageLeave.turnOut()
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(PageLeave.time * 1_000_000_000))
                 var t = Transaction(); t.disablesAnimations = true
                 withTransaction(t) { stack.wrappedValue.append(.page(g)) }
                 // The page under it put back flat once it's covered (it is found as it was on Back).
-                try? await Task.sleep(nanoseconds: 60_000_000)
-                withTransaction(t) { PageLeave.shared.leaving = false }
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                PageLeave.restore(turned)
+                PageLeave.shared.leaving = false
             }
         }
         opener.hub = { h, panel in
@@ -203,7 +210,6 @@ struct HubView: View {
         }
         .environment(\.hubName, hub == .nowPlaying ? nil : hub.word)
         .background { if hub == .nowPlaying { NowBackdrop(song: Store.shared.shown) } else { Backdrop(ref: Ground.hubs.pick?.ref) } }
-        .modifier(PageLeaveOut())
         // Under the edge swipe UIKit re-insets the page in every frame, and both pages were laid out again and their type
         // redrawn each frame of the drag (profile films: 41-48 fps through the swipe). Held at rest size while it moves.
         .holdsWhileMoving("hub")
@@ -218,17 +224,39 @@ extension EnvironmentValues {
 }
 
 // The page in front leaving for an artist, album or song page (WP7's turnstile out: 0 to 50 degrees about the left edge,
-// ease in). Read only by this modifier on each hub and page, so the leave redraws nothing inside them.
-@MainActor @Observable final class PageLeave {
+// ease in, faded), as a Core Animation animation on the top page's own layer: nothing of SwiftUI's changes at the tap.
+@MainActor final class PageLeave {
     static let shared = PageLeave()
     var leaving = false
     nonisolated static let time = 0.15
-}
-struct PageLeaveOut: ViewModifier {
-    func body(content: Content) -> some View {
-        let gone = PageLeave.shared.leaving
-        content
-            .rotation3DEffect(.degrees(gone ? 50 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: gone ? 0.55 : 0)
-            .opacity(gone ? 0 : 1)
+    #if canImport(UIKit)
+    static func turnOut() -> CALayer? {
+        guard let v = TopBar.navigation()?.topViewController?.view else { return nil }
+        let l = v.layer
+        let w = max(l.bounds.width, 1)
+        var p = CATransform3DIdentity; p.m34 = -1 / (w * 1.6)
+        let turn = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(w / 2, 0, 0),
+                                                          CATransform3DMakeRotation(50 * .pi / 180, 0, 1, 0)),
+                                       CATransform3DMakeTranslation(-w / 2, 0, 0))
+        let t = CABasicAnimation(keyPath: "transform")
+        t.fromValue = CATransform3DIdentity
+        t.toValue = CATransform3DConcat(turn, p)
+        let o = CABasicAnimation(keyPath: "opacity")
+        o.fromValue = 1; o.toValue = 0
+        let g = CAAnimationGroup()
+        g.animations = [t, o]
+        g.duration = time
+        g.timingFunction = CAMediaTimingFunction(controlPoints: 0.7, 0, 0.84, 0)
+        g.fillMode = .forwards
+        g.isRemovedOnCompletion = false
+        g.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        l.add(g, forKey: "leave")
+        CATransaction.flush()
+        return l
     }
+    static func restore(_ l: CALayer?) { l?.removeAnimation(forKey: "leave") }
+    #else
+    static func turnOut() -> AnyObject? { nil }
+    static func restore(_ l: AnyObject?) {}
+    #endif
 }

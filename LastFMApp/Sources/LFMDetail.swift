@@ -18,7 +18,6 @@ struct RoutePage: View {
         }
         // Turned in whole about its left edge (WP7's page turnstile), never zoomed out of a cover any more.
         .turnstile(0)
-        .modifier(PageLeaveOut())
         .holdsWhileMoving("page")
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
