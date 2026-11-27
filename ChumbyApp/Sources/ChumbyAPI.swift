@@ -1,0 +1,963 @@
+import Foundation
+import WidgetKit
+import Security
+
+// The Chumby's own CGI API. Reads are open on the network; writes need the device's token.
+struct Sys: Decodable, Equatable {
+    var up = 0, memFree = 0, memTotal = 0, pspFree = 0, wifi = -1, vol = -1, shuffle = 0, wall = 0, night = 0
+    var load = 0.0
+    var airplayOn = false
+    var chan = "", cp = "", lock = ""
+    // What the alarm panel is doing: "r\tname\tsound" while one rings, "s\tname\tsound" while one snoozes, else empty.
+    var ring = ""
+    // A nap the Chumby keeps itself (cmd nap): when it's due, in seconds since 1970, or 0.
+    var nap = 0
+    // How often the watchdog has had to unfreeze it, and when it last did.
+    var resets = 0, resetAt = 0
+    var tw: [String] = []
+    // How the X widget goes through each account's tweets: latest, popular or random (oldest only if the old web page set it).
+    var xorder = "latest"
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: Key.self)
+        up = try c.decodeIfPresent(Int.self, forKey: .up) ?? 0
+        memFree = try c.decodeIfPresent(Int.self, forKey: .memFree) ?? 0
+        memTotal = try c.decodeIfPresent(Int.self, forKey: .memTotal) ?? 0
+        pspFree = try c.decodeIfPresent(Int.self, forKey: .pspFree) ?? 0
+        wifi = try c.decodeIfPresent(Int.self, forKey: .wifi) ?? -1
+        vol = try c.decodeIfPresent(Int.self, forKey: .vol) ?? -1
+        shuffle = try c.decodeIfPresent(Int.self, forKey: .shuffle) ?? 0
+        wall = try c.decodeIfPresent(Int.self, forKey: .wall) ?? 0
+        night = try c.decodeIfPresent(Int.self, forKey: .night) ?? 0
+        load = try c.decodeIfPresent(Double.self, forKey: .load) ?? 0
+        airplayOn = try c.decodeIfPresent(Bool.self, forKey: .airplayOn) ?? false
+        chan = try c.decodeIfPresent(String.self, forKey: .chan) ?? ""
+        cp = try c.decodeIfPresent(String.self, forKey: .cp) ?? ""
+        lock = try c.decodeIfPresent(String.self, forKey: .lock) ?? ""
+        ring = (try? c.decodeIfPresent(String.self, forKey: .ring)) ?? ""
+        nap = (try? c.decodeIfPresent(Int.self, forKey: .nap)) ?? 0
+        resets = (try? c.decodeIfPresent(Int.self, forKey: .resets)) ?? 0
+        resetAt = (try? c.decodeIfPresent(Int.self, forKey: .resetAt)) ?? 0
+        tw = try c.decodeIfPresent([String].self, forKey: .tw) ?? []
+        xorder = (try? c.decodeIfPresent(String.self, forKey: .xorder)) ?? "latest"
+    }
+    enum Key: String, CodingKey { case up, memFree, memTotal, pspFree, wifi, vol, shuffle, wall, night, load, airplayOn, chan, cp, lock, tw, xorder, ring, nap, resets, resetAt }
+    // The alarm ringing or snoozing right now, from the panel's own report.
+    struct Ringing: Equatable { var snoozed: Bool; var name: String; var sound: String }
+    var ringing: Ringing? {
+        let parts = ring.components(separatedBy: "\t")
+        guard let k = parts.first, k == "r" || k == "s" else { return nil }
+        return Ringing(snoozed: k == "s", name: parts.count > 1 ? parts[1] : "", sound: parts.count > 2 ? parts[2] : "")
+    }
+}
+
+// Where the Chumby's clock is, when that isn't where the phone's is. A repeating alarm is "7:00 by the Chumby's clock":
+// worked out in the phone's own time zone while he's away, "rings in" was hours out and a skip was pinned to the wrong
+// ring (the minute sent is the ring's, and the Chumby matched the next ring at or after it: the following day's). Read
+// from each state the Chumby sends ("local" beside "now"). At home the two agree and the phone's own calendar is used,
+// which also knows when the clocks change.
+enum ChumbyClock {
+    private static let lock = NSLock()
+    private static var offset: Int?
+    static func note(local: String?, now: Double?) {
+        guard let local, let now, local.count >= 16 else { return }
+        var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let p = local.split { !$0.isNumber }.compactMap { Int($0) }
+        guard p.count >= 5, let wall = utc.date(from: DateComponents(year: p[0], month: p[1], day: p[2], hour: p[3], minute: p[4])) else { return }
+        // To the quarter hour: "local" carries no seconds.
+        let off = Int(((wall.timeIntervalSince1970 - now) / 900).rounded()) * 900
+        let here = TimeZone.current.secondsFromGMT(for: Date(timeIntervalSince1970: now))
+        lock.lock(); offset = off == here || abs(off) > 14 * 3600 ? nil : off; lock.unlock()
+    }
+    static func reset() { lock.lock(); offset = nil; lock.unlock() }
+    // The calendar alarms ring by.
+    static var calendar: Calendar {
+        lock.lock(); let off = offset; lock.unlock()
+        guard let off, let zone = TimeZone(secondsFromGMT: off) else { return .current }
+        var c = Calendar.current; c.timeZone = zone
+        return c
+    }
+}
+
+struct Alarm: Codable, Identifiable, Equatable {
+    var id = 0     // its place in the list, so rows keep their identity across refreshes
+    var name = "", enabled = "1", time = "420", when = "daily", type = "beep", arg = "Beep", param = ""
+    var param_description = "Beep", duration = "30", snooze = "9", auto_dismiss = "0"
+    // No stock backup beeper: it stops the control panel and beeps over the widgets with no alarm screen (a nap did that on
+    // 2026-11-05). His own alarms all carry backup 0; new ones and naps do too. The delay still has to be 1 to 120: the
+    // Chumby turns down a save with any other (do_save, "bad number"), and "0" there cost every nap and new alarm from 11-05.
+    var action = "", action_param = "", backup = "0", backupDelay = "5"
+    // "1" on a calendar alarm that keeps its own sound, snooze and length rather than the shared calendar set (chumby
+    // 2c90cc9: saved with I_own=1, read back as own="1"). Every save that carries it must send it again, or the Chumby
+    // puts the shared set back, which alarmForm does from this.
+    var own = ""
+    var isOwn: Bool { own == "1" && isCalendar }
+    enum CodingKeys: String, CodingKey { case name, enabled, time, when, type, arg, param, param_description, duration, snooze, auto_dismiss, action, action_param, backup, backupDelay, own }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        func s(_ k: CodingKeys, _ f: String) throws -> String { try c.decodeIfPresent(String.self, forKey: k) ?? f }
+        name = try s(.name, ""); enabled = try s(.enabled, "0"); time = try s(.time, "0"); when = try s(.when, "daily")
+        type = try s(.type, "beep"); arg = try s(.arg, ""); param = try s(.param, ""); param_description = try s(.param_description, "")
+        duration = try s(.duration, "30"); snooze = try s(.snooze, "9"); auto_dismiss = try s(.auto_dismiss, "0")
+        action = try s(.action, ""); action_param = try s(.action_param, ""); backup = try s(.backup, "1"); backupDelay = try s(.backupDelay, "5")
+        own = try s(.own, "")
+    }
+    var isPlaceholder: Bool { enabled == "0" && time == "0" && name.isEmpty && type == "beep" }
+    static let calendarPrefix = "Calendar: "
+    var isCalendar: Bool { name.hasPrefix(Alarm.calendarPrefix) }
+    // Made and cleared by the Chumby or the nap button; never switched off by a new alarm (chalarm.c is_helper).
+    var isHelper: Bool { name == "Catch-up" || name == "Nap" }
+    // How the Chumby tells one alarm from another when it decides what's new (chalarm.c newest_wins).
+    var key: String { name + "|" + when + "|" + time }
+    // The same alarm, wherever it sits in the list.
+    func same(_ o: Alarm) -> Bool { var x = o; x.id = id; return x == self }
+    // How another alarm sounds and what it does after, leaving this one's name, time, day and on or off alone.
+    mutating func takeSettings(from t: Alarm) {
+        type = t.type; arg = t.arg; param = t.param; param_description = t.param_description
+        duration = t.duration; snooze = t.snooze; auto_dismiss = t.auto_dismiss
+        action = t.action; action_param = t.action_param; backup = t.backup; backupDelay = t.backupDelay
+    }
+    var isOn: Bool { enabled == "1" }
+    // How a message names it: the calendar's by their event, your own by name or time.
+    var spoken: String {
+        if isCalendar { return "“" + name.dropFirst(Alarm.calendarPrefix.count) + "”" }
+        return name.isEmpty ? "your \(clock) \(meridiem) alarm" : "“\(name)”"
+    }
+    // Minutes after local midnight. A one-off stores absolute minutes since 1970.
+    var localMinutes: Int {
+        guard when == "once", let t = Double(time) else { return Int(time) ?? 0 }
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: Date(timeIntervalSince1970: t * 60))
+        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+    }
+    var clock: String {
+        let h = localMinutes / 60 % 24, m = localMinutes % 60
+        return String(format: "%d:%02d", h % 12 == 0 ? 12 : h % 12, m)
+    }
+    var meridiem: String { localMinutes / 60 % 24 < 12 ? "AM" : "PM" }
+    static let dayKeys = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+    var whenText: String {
+        switch when {
+        case "once": return Date(timeIntervalSince1970: (Double(time) ?? 0) * 60).formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+        case "daily": return "Every day"
+        case "weekday": return "Weekdays"
+        case "weekend": return "Weekends"
+        default: return Alarm.dayKeys.firstIndex(of: when).map { Calendar.current.weekdaySymbols[$0] + "s" } ?? when
+        }
+    }
+    // When it rings, unless its name already says so ("Weekend · Weekends" said nothing twice).
+    var whenUnlessNamed: String {
+        let w = whenText
+        return name.range(of: w, options: [.caseInsensitive, .diacriticInsensitive]) != nil || w.lowercased().hasPrefix(name.lowercased()) && !name.isEmpty ? "" : w
+    }
+    var soundText: String {
+        if type == "none" { return "Silent" }
+        if type == "beep" { return arg.isEmpty ? "Beep" : arg }
+        if type == "widget" { return "Chumby app" }
+        if arg == "directurl" { return param_description.isEmpty ? "Radio stream" : param_description }
+        if arg == "pandora" { return "Pandora: " + (param_description.isEmpty ? "station" : param_description) }
+        return param_description.isEmpty ? (arg.isEmpty ? "Music" : arg) : param_description
+    }
+    func nextFire(after now: Date = Date(), calendar cal: Calendar = ChumbyClock.calendar) -> Date? {
+        guard isOn, let t = Double(time) else { return nil }
+        if when == "once" { let d = Date(timeIntervalSince1970: t * 60); return d > now ? d : nil }
+        for i in 0..<8 {
+            guard let day = cal.date(byAdding: .day, value: i, to: now),
+                  let d = cal.date(bySettingHour: Int(t) / 60, minute: Int(t) % 60, second: 0, of: day), d > now else { continue }
+            let w = cal.component(.weekday, from: d) - 1
+            if when == "daily" || (when == "weekday" && w > 0 && w < 6) || (when == "weekend" && (w == 0 || w == 6)) || when == Alarm.dayKeys[w] { return d }
+        }
+        return nil
+    }
+}
+
+struct Stream: Codable, Identifiable, Equatable { var id = ""; var name = ""; var url = ""; var mimetype = "audio/mpeg"
+    var key: String { id + url } }
+struct NamedID: Decodable, Identifiable, Hashable { let id: String; let name: String }
+struct MineWidget: Decodable, Identifiable { let name: String; let secs: Int; var id: String { name } }
+struct ScheduleItem: Codable, Identifiable, Equatable { var id = 0; var time = "22:00"; var cmd = "night"; var val = "on"
+    enum CodingKeys: String, CodingKey { case time, cmd, val } }
+
+struct ChumbyState: Decodable {
+    var volume = 100, fade = -1, shuffle = 0
+    var pending = false
+    var alarms: [Alarm] = []
+    var streams: [Stream] = []
+    var tones: [String] = []
+    var channels: [NamedID] = []
+    var pandora: [NamedID] = []
+    var pandoraScan = "", channel = ""
+    // The last station asked for by its link (a=pstation): "KEY<TAB>ok<TAB>ID<TAB>NAME", "KEY<TAB>err<TAB>why" or
+    // "KEY<TAB>wait<TAB>", KEY being what the asker sent. Empty on a Chumby that can't, or hasn't been asked.
+    var pandoraAdd = ""
+    var schedule: [ScheduleItem] = []
+    var channelNames: [String] = []
+    var widgetNames: [String] = []
+    var mine: [MineWidget] = []
+    // Alarms that came due while it was frozen, off or restarting; `silent`: it rang, but the Chumby heard no sound from it.
+    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; var silent: Bool? = nil; let name: String; var id: String { "\(at) \(name)" } }
+    var missed: [Missed] = []
+    // The one set of settings every calendar alarm rings with, once one has been saved as it. Null until then.
+    var calTpl: Alarm?
+    // Whether a day the calendar wakes you keeps your repeating alarms quiet: 1 or 0. Missing on a Chumby too old for it.
+    var calOverride: Int?
+    // The one alarm time skipped by hand (the panel's own SKIP), until it passes. `skipKnown` is false on a Chumby too old to skip.
+    var skipped: SkippedAlarm?
+    var skipKnown = false
+    // The panel's own report of a ringing or snoozing alarm; `until` is when a snooze rings again (0 if not known).
+    var ringingNow: RingReport?
+    // The newest song Pandora logged (the Chumby adds it to its state), so a new one shows without reading the history.
+    var song: Song?
+    // The newest alarm to start ringing, or nil (a Chumby too old to log rings has no "rang").
+    var rang: Ring?
+    // Whether the panel's music player is playing something, from its own report ("music": {…, playing} or null).
+    var musicPlaying = false
+    // What it holds, when it holds something: for a Pandora station, its number and name (a station played from the app
+    // or from the Chumby's own Music screen, 11-25).
+    var music: MusicReport?
+    // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
+    var now: Double?
+    var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
+    // The ring watch's escalation, [FIRST, AGAIN] seconds (/psp/alarm_escalate); nil from a Chumby that doesn't say.
+    var escalate: [Int]?
+    // The days a calendar alarm came due while on, "YYYYMMDD" by the Chumby's clock (/psp/chalarm_caldays, the panel hook's
+    // chCalMark; 11-25). The panel switches a once alarm off as it comes due, so the list alone can't show these days.
+    var calDays: Set<String> = []
+    // How the newest rings ended, newest first (as a=hist "ends"), so a Stop on the Chumby reaches the backup alarm
+    // with any state read, not only by the Mac's quiet push.
+    var ends: [RingEnd] = []
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: Key.self)
+        now = (try? c.decodeIfPresent(Double.self, forKey: .now)) ?? nil
+        ChumbyClock.note(local: (try? c.decodeIfPresent(String.self, forKey: .local)) ?? nil, now: now)
+        // Unknown stays unknown (-1) and is never sent, so a save can't set his alarm volume to a default 100.
+        volume = (try? c.decodeIfPresent(Int.self, forKey: .volume)) ?? -1
+        fade = try c.decodeIfPresent(Int.self, forKey: .fade) ?? -1
+        shuffle = try c.decodeIfPresent(Int.self, forKey: .shuffle) ?? 0
+        pending = try c.decodeIfPresent(Bool.self, forKey: .pending) ?? false
+        alarms = try c.decodeIfPresent([Alarm].self, forKey: .alarms) ?? []
+        streams = try c.decodeIfPresent([Stream].self, forKey: .streams) ?? []
+        tones = try c.decodeIfPresent([String].self, forKey: .tones) ?? []
+        channels = try c.decodeIfPresent([NamedID].self, forKey: .channels) ?? []
+        pandora = try c.decodeIfPresent([NamedID].self, forKey: .pandora) ?? []
+        pandoraScan = try c.decodeIfPresent(String.self, forKey: .pandoraScan) ?? ""
+        pandoraAdd = (try? c.decodeIfPresent(String.self, forKey: .pandoraAdd)) ?? ""
+        channel = try c.decodeIfPresent(String.self, forKey: .channel) ?? ""
+        schedule = try c.decodeIfPresent([ScheduleItem].self, forKey: .schedule) ?? []
+        // The same time doing the same thing twice is one entry (his list held "22:00 night" twice on 11-10): shown
+        // once, and written back once at the next change.
+        var seen = Set<String>()
+        schedule = schedule.filter { seen.insert($0.time + "|" + $0.cmd + "|" + $0.val).inserted }
+        channelNames = try c.decodeIfPresent([String].self, forKey: .channelNames) ?? []
+        widgetNames = try c.decodeIfPresent([String].self, forKey: .widgetNames) ?? []
+        mine = try c.decodeIfPresent([MineWidget].self, forKey: .mine) ?? []
+        missed = try c.decodeIfPresent([Missed].self, forKey: .missed) ?? []
+        calTpl = (try? c.decodeIfPresent(Alarm.self, forKey: .calTpl)) ?? nil
+        calOverride = (try? c.decodeIfPresent(Int.self, forKey: .calOverride)) ?? nil
+        skipKnown = c.contains(.skipped)
+        skipped = (try? c.decodeIfPresent(SkippedAlarm.self, forKey: .skipped)) ?? nil
+        ringingNow = (try? c.decodeIfPresent(RingReport.self, forKey: .ringing)) ?? nil
+        song = (try? c.decodeIfPresent(Song.self, forKey: .song)) ?? nil
+        rang = (try? c.decodeIfPresent(Ring.self, forKey: .rang)) ?? nil
+        music = (try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil
+        musicPlaying = music?.playing ?? false
+        escalate = (try? c.decodeIfPresent([Int].self, forKey: .escalate)) ?? nil
+        calDays = Set((try? c.decodeIfPresent([String].self, forKey: .caldays)) ?? [])
+        ends = (try? c.decodeIfPresent([RingEnd].self, forKey: .ends)) ?? []
+        reindex()
+    }
+    mutating func reindex() {
+        for i in alarms.indices { alarms[i].id = i }
+        for i in schedule.indices { schedule[i].id = i }
+    }
+    enum Key: String, CodingKey { case caldays, ends, escalate, missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, pandoraAdd, local, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
+}
+
+// The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
+struct SkippedAlarm: Decodable, Equatable {
+    var name: String
+    var at: Double
+    var when: String
+    var date: Date { Date(timeIntervalSince1970: at) }
+}
+
+struct MusicReport: Decodable, Hashable {
+    var playing: Bool
+    // The panel's source: "pandora", "shoutcast", … ; its label (a Pandora station's name); and its state (a Pandora
+    // station's number, "NUMBER##NAME" from the hook before 11-25).
+    var source = "", label = "", state = ""
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        // The panel may say true/false or 1/0.
+        if let b = try? c.decode(Bool.self, forKey: .playing) { playing = b }
+        else { playing = ((try? c.decode(Int.self, forKey: .playing)) ?? 0) != 0 }
+        source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
+        label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? ""
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
+    }
+    enum K: String, CodingKey { case playing, source, label, state }
+    // The Pandora station playing, by its number; nil for anything else or nothing playing.
+    var pandoraStation: String? {
+        guard playing, source == "pandora", !state.isEmpty else { return nil }
+        return state.components(separatedBy: "##").first
+    }
+}
+// A song Pandora logged: in the history, and the newest one in the Chumby's own state. Here, so the widgets see it too.
+struct Song: Codable, Identifiable, Hashable { let t: Double; let title: String; let artist: String; let album: String; var id: String { "\(t)\(title)" } }
+// An alarm that started ringing, as the Chumby logs it (a=hist "rings", a=state "rang"): when, and the alarm's name. A
+// once-only calendar alarm leaves the alarm list after it fires, so "Woke up to" pairs songs with these, not the list.
+struct Ring: Codable, Hashable { let t: Double; let name: String }
+// How a ring ended, as the panel hook logs it (a=hist and a=state "ends"): "stop" (the alarm screen put away: his Stop on
+// the Chumby or the phone, or the auto dismiss), "snooze" (`until`: when it rings again), "played" (its length ran out),
+// "replaced". A ring cut off by a restart has no row.
+struct RingEnd: Codable, Hashable { let t: Double; let kind: String; let name: String; var until: Double? = nil }
+
+struct RingReport: Decodable, Equatable {
+    var state: String
+    var name: String
+    var until: Double?
+}
+
+// ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.
+struct ChannelList: Decodable, Equatable {
+    struct Channel: Decodable, Equatable { let id: String; let list: [[String]]; let conf: [[String]] }
+    let cur: String?; let channels: [Channel]; let names: [[String]]?
+}
+
+// Said one way everywhere (2026-11-10: it was "isn’t answering", "couldn’t reach", "can’t reach the Chumby" and "No
+// answer" for the same thing). The Mac not being reachable at all is a different fact, and keeps its own words.
+enum ChumbyWords {
+    static let notAnswering = "The Chumby isn’t answering"
+}
+
+enum ChumbyError: LocalizedError {
+    case message(String), deviceDown, waiting(String)
+    // Something answered at the address, but not the Chumby or its cache (a 404 for the Chumby's own path): the address
+    // is wrong, not the network. ChumbyModel puts the build's own address back rather than calling the Chumby unreachable.
+    case wrongPlace
+    // A save AlarmWriter turned down because it would have cost an alarm that's about to ring. Never retried on its own.
+    case refused(String)
+    // The Mac's cache answered 503: its one-at-a-time queue to the Chumby was jammed for 20 s. The Mac is there and the
+    // Chumby may be fine, so it's neither "Can't reach the Mac" nor "Not answering" (chumby_remote.py Busy, 2026-11-11).
+    case busy
+    var errorDescription: String? {
+        switch self {
+        case .message(let m), .refused(let m): return m
+        case .waiting(let why): return "Waiting: \(why)."
+        case .deviceDown: return ChumbyWords.notAnswering + "."
+        case .wrongPlace: return "No answer"
+        case .busy: return "The Chumby is busy. Try again in a moment."
+        }
+    }
+}
+
+actor ChumbyAPI {
+    static let appPath = "/cgi-bin/custom/app"
+    let base: URL
+    private var token: String?
+    init(base: URL) { self.base = base }
+
+    private func url(_ query: String) -> URL { URL(string: base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + ChumbyAPI.appPath + "?" + query)! }
+
+    // The bytes and how old the Mac's copy is, so an unchanged answer costs nothing.
+    func raw(_ action: String) async throws -> (data: Data, age: Double) {
+        var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 8
+        let (d, resp) = try await URLSession.shared.data(for: r)
+        guard let h = resp as? HTTPURLResponse else { throw ChumbyError.message("No answer") }
+        // The Mac answered, but says the Chumby itself isn't responding.
+        if h.statusCode == 502 { throw ChumbyError.deviceDown }
+        // 503 is the Mac too, saying the Chumby's queue was jammed for 20 s. Counted as no answer, it switched routes and
+        // said "Can't reach the Mac" of a Mac that was answering (11-25).
+        if h.statusCode == 503 { throw ChumbyError.busy }
+        if h.statusCode == 404 { throw ChumbyError.wrongPlace }
+        guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
+        return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)
+    }
+    // The Mac keeps answering with its last copy while the Chumby is frozen, and that copy can be hours old.
+    // It fetches a new one on being asked, so give it a moment; a Chumby that can't supply one is down.
+    // For the widgets and controls, which read after a quiet spell: the Mac's copy can then be many minutes old (a=state
+    // came back 21 minutes old on 2026-11-07 while a=sys was 2 s old), and asking is what starts its refresh. So an old
+    // copy is asked for again a couple of times, and the newest one had is used either way, never an error for its age.
+    func recent(_ action: String) async throws -> (data: Data, age: Double) {
+        // The Mac's new copy is there about two seconds after being asked (measured), so it's asked for in short steps
+        // rather than at two-second ones: a widget or control after a quiet spell answers in about 2 s, not 4.
+        var r = try await raw(action)
+        for _ in 0..<9 where r.age >= 30 {
+            try await Task.sleep(nanoseconds: 700_000_000)
+            if let n = try? await raw(action), n.age < r.age { r = n }
+        }
+        return r
+    }
+    func fresh(_ action: String) async throws -> Data {
+        // Short steps: straight after a save the Mac marks its copy old and reads a new one, which is there in about a
+        // second, so a save right behind another waits that second and not two (the same 8 s of patience in all).
+        var r = try await raw(action)
+        for _ in 0..<16 where r.age >= 30 {
+            try await Task.sleep(nanoseconds: 500_000_000)
+            r = try await raw(action)
+        }
+        guard r.age < 30 else { throw ChumbyError.deviceDown }
+        return r.data
+    }
+    // Only the Mac can say this: when the Chumby last answered it. Nil when going straight to the Chumby.
+    func lastSeen() async -> Date? {
+        struct Health: Decodable { let lastSeen: Double? }
+        guard let h = try? await get("health", as: Health.self), let t = h.lastSeen else { return nil }
+        return Date(timeIntervalSince1970: t)
+    }
+    func get<T: Decodable>(_ action: String, as: T.Type) async throws -> T {
+        var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 8
+        let (d, resp) = try await URLSession.shared.data(for: r)
+        // An error page must not read as an empty answer, or a failure looks like "no alarms".
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw ChumbyError.message("No answer") }
+        return try JSONDecoder().decode(T.self, from: d)
+    }
+    func text(_ query: String) async throws -> String {
+        var r = URLRequest(url: url(query)); r.timeoutInterval = 25
+        return String(decoding: try await URLSession.shared.data(for: r).0, as: UTF8.self)
+    }
+    func shot() async throws -> Data {
+        var r = URLRequest(url: url("a=shot&n=\(Int(Date().timeIntervalSince1970))")); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 6
+        let (data, response) = try await URLSession.shared.data(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ChumbyError.message("No picture") }
+        return data
+    }
+    private func getToken() async throws -> String {
+        if let token { return token }
+        struct T: Decodable { let t: String }
+        let t = try await get("tok", as: T.self).t
+        token = t
+        return t
+    }
+    static func enc(_ s: String) -> String {
+        var allowed = CharacterSet.alphanumerics; allowed.insert(charactersIn: "-._~")
+        return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+    }
+    static func form(_ pairs: [(String, String)]) -> String { pairs.map { enc($0.0) + "=" + enc($0.1) }.joined(separator: "&") }
+
+    @discardableResult
+    func post(_ action: String, extra: String = "", body: String = "", timeout: TimeInterval = 15) async throws -> [String: Any] {
+        let t = try await getToken()
+        var r = URLRequest(url: url("a=\(action)&t=\(t)\(extra)")); r.httpMethod = "POST"; r.timeoutInterval = timeout
+        r.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); r.httpBody = Data(body.utf8)
+        let (data, _) = try await URLSession.shared.data(for: r)
+        let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        guard j["ok"] as? Bool == true else {
+            if (j["error"] as? String)?.contains("token") == true { token = nil }
+            throw ChumbyError.message(j["error"] as? String ?? "No answer from the Chumby.")
+        }
+        return j
+    }
+    func cmd(_ c: String, _ v: String? = nil) async throws {
+        try await post("cmd", extra: "&c=\(c)" + (v.map { "&v=" + ChumbyAPI.enc($0) } ?? ""))
+    }
+    // Stop or Snooze (cmd ringoff / ringsnooze), with the Chumby's own answer kept (chalarm, 11-20): it now waits for
+    // its panel's line to change and says {ok, done, how, ring}, or ok:false "still ringing". It can take 7 s, and the
+    // Mac's relay asks once more itself, so it is given longer than any other command.
+    func ring(_ c: String) async throws -> RingAnswer {
+        RingAnswer(try await post("cmd", extra: "&c=\(c)", timeout: 22))
+    }
+    // The one way the Chumby's listening volume (0-100, its /psp/volume) is set, from the app, Shortcuts and Control
+    // Center alike. Never under an alarm: the ring sets its own volume and puts his back after, so a level sent then is
+    // lost. `checkRing` reads the Chumby first; the app, which already knows, passes false.
+    func setVolume(_ v: Int, checkRing: Bool = true) async throws {
+        if checkRing, let r = try? await raw("sys"), let s = try? JSONDecoder().decode(Sys.self, from: r.data), r.age < 30, let ring = s.ringing {
+            throw ChumbyError.refused(ring.snoozed ? "Not while an alarm is snoozing." : "Not while an alarm is ringing.")
+        }
+        // The Chumby refuses it too while one rings or snoozes (409 "an alarm is ringing"), said the same way.
+        do { try await cmd("volume", String(min(max(v, 0), 100))) }
+        catch ChumbyError.message(let m) where m.hasPrefix("an alarm is") { throw ChumbyError.refused("Not while \(m).") }
+    }
+}
+
+// The Chumby's answer to a Stop or Snooze (chalarm since 11-20): `done` true once its panel's own line changed, `how`
+// the way it went (the hook's own stop, the tap, "nothing ringing"), `ring` that line as it now stands. An older
+// Chumby answers a bare ok at once, before anything has happened: all three are then nil.
+struct RingAnswer: Sendable, Equatable {
+    var done: Bool?
+    var how: String?
+    var ring: String?
+    init(done: Bool? = nil, how: String? = nil, ring: String? = nil) { self.done = done; self.how = how; self.ring = ring }
+    init(_ j: [String: Any]) { done = j["done"] as? Bool; how = j["how"] as? String; ring = j["ring"] as? String }
+    enum Read: Equatable {
+        case confirmed(until: Double?), nothingRinging
+        // Not said yet: the Chumby's line is read until it is.
+        case wait
+    }
+    // What the answer says of the press. Only `done` with a line that agrees counts: a Stop whose line still shows the
+    // alarm, or a Snooze whose line still says ringing, is waited on like any other.
+    func read(stop: Bool) -> Read {
+        guard done == true else { return .wait }
+        if how == "nothing ringing" { return .nothingRinging }
+        guard let ring else { return .confirmed(until: nil) }
+        var sys = Sys(); sys.ring = ring
+        guard let r = sys.ringing else { return stop ? .confirmed(until: nil) : .nothingRinging }
+        guard !stop, r.snoozed else { return .wait }
+        let f = ring.components(separatedBy: "\t")
+        return .confirmed(until: f.count > 3 ? Double(f[3]).flatMap { $0 > 0 ? $0 : nil } : nil)
+    }
+    // "still ringing": the Chumby tried and its alarm went on. Asked once more, never a third time.
+    static func stillRinging(_ error: Error) -> Bool {
+        if case ChumbyError.message(let m) = error { return m.lowercased().contains("still ringing") }
+        return false
+    }
+    // How long its line is read for, and how often: each second for 10 s after a `done:false`; an older Chumby, which
+    // answers before anything has happened, in shorter steps for the 14 s it was always given.
+    var step: TimeInterval { done == nil ? 0.6 : 1 }
+    var wait: TimeInterval { done == nil ? 14 : 10 }
+}
+
+// What a reading's ring line is taken to say, given when the Chumby last confirmed a Stop and a Snooze (RingDesk.note).
+// The Mac's copy of the Chumby's status can be ten seconds old, so one taken before a confirmation still says
+// "ringing": believed, it put the ringing card and page back over an alarm just stopped, or "Ringing" and the Snooze
+// key back over a snooze the Chumby had confirmed (11-20). Only a copy taken after the confirmation (and the two
+// seconds the Chumby's own note of it can take) says anything about the ring.
+enum RingReading {
+    static let margin: TimeInterval = 2
+    // `line`: the reading's ring line; `shown`: the one on screen; `takenAt`: when the reading was taken.
+    static func believed(_ line: String, shown: String, takenAt: Date, stoppedAt: Date?, snoozedAt: Date?) -> String {
+        var read = Sys(); read.ring = line
+        guard let r = read.ringing else { return line }
+        if let t = stoppedAt, takenAt < t.addingTimeInterval(margin) { return "" }
+        var now = Sys(); now.ring = shown
+        if !r.snoozed, now.ringing?.snoozed == true, let t = snoozedAt, takenAt < t.addingTimeInterval(margin) { return shown }
+        return line
+    }
+}
+
+// A level he just set, held on screen until the Chumby confirms it (Richard, 11-19: the volume "still fucked", the slider
+// didn't stick). The panel takes the level about a second after the command, and the Mac's copy of `sys` can be ten
+// seconds old, so readings taken before the level could have landed say nothing either way and the held level shows.
+// A reading taken after that which says the level is in confirms it; two that say otherwise (the Chumby really is
+// elsewhere: the command was lost, or something put the volume back) are believed, as is anything once `patience` is up.
+// Before this, the hold went by when the reading arrived, not when it was taken, and readings parked while a page moved
+// skipped it altogether, so an old level came back after the slider had been let go.
+struct VolumeHold: Equatable {
+    static let settle: TimeInterval = 4, patience: TimeInterval = 20
+    let level: Int, sentAt: Date
+    var doubtedAt: Date?
+    init(level: Int, sentAt: Date) { self.level = level; self.sentAt = sentAt }
+    // The level to show for a reading of `reported` taken at `takenAt`, and the hold still to keep (nil: let go).
+    static func shown(reported: Int, takenAt: Date, hold: VolumeHold?, now: Date) -> (vol: Int, hold: VolumeHold?) {
+        guard var h = hold else { return (reported, nil) }
+        // Only a reading taken after the send confirms it: going 30, 0, 30, an old copy saying 30 isn't the new 30.
+        if reported == h.level, takenAt >= h.sentAt { return (reported, nil) }
+        if now.timeIntervalSince(h.sentAt) >= patience { return (reported, nil) }
+        if takenAt < h.sentAt.addingTimeInterval(settle) || reported < 0 || reported == h.level { return (h.level, h) }
+        // The same copy served twice is one reading, not two.
+        if let d = h.doubtedAt, takenAt.timeIntervalSince(d) >= 1 { return (reported, nil) }
+        if h.doubtedAt == nil { h.doubtedAt = takenAt }
+        return (h.level, h)
+    }
+}
+
+// MARK: - Alarm rules the Chumby applies, worked out the same way here so the phone never shows a list that flips later.
+extension ChumbyState {
+    // The Chumby's rule (chalarm.c newest_wins, as of 284c01f): saving an alarm that's on and new (its name, repeat and
+    // time weren't in the saved list) switches every other alarm off, Rick's rule of 11-02. Calendar alarms take no part
+    // either way, as he decided on 11-03: one is never the new alarm and never gets switched off, since the calendar only
+    // skips that day. Catch-up and Nap don't take part either.
+    // Returns the places in `sending` the Chumby will switch off, given `saved`, the list it holds now.
+    static func switchedOff(saved: [Alarm], sending: [Alarm]) -> [Int] {
+        let old = Set(saved.map(\.key))
+        func counts(_ a: Alarm) -> Bool { a.isOn && !a.isHelper && !a.isCalendar }
+        let added = sending.indices.filter { counts(sending[$0]) && !old.contains(sending[$0].key) }
+        guard !added.isEmpty else { return [] }
+        return sending.indices.filter { counts(sending[$0]) && !added.contains($0) }
+    }
+    // The next alarm that will really ring. On a day a calendar alarm is on, the Chumby keeps repeating alarms quiet unless
+    // that's switched off (calOverride 0), so they're passed over for that day (the panel hook's chCalSkip).
+    func nextRing(after now: Date = Date()) -> (alarm: Alarm, at: Date)? {
+        var best: (alarm: Alarm, at: Date)?
+        for a in alarms {
+            if let d = ring(of: a, after: now), best == nil || d < best!.at { best = (a, d) }
+        }
+        return best
+    }
+    // When this one alarm will really ring next: calendar days passed over for a repeating alarm (as above), and the
+    // time skipped by hand too unless `skip` is false.
+    func ring(of a: Alarm, after now: Date = Date(), skip: Bool = true) -> Date? {
+        guard a.isOn else { return nil }
+        let cal = ChumbyClock.calendar      // "that day" is the Chumby's day
+        let skipping = (calOverride ?? 0) != 0
+        // A calendar one-off that's on, or one whose time has come today by the Chumby's clock though it's off now: the
+        // panel switches a "once" alarm off when it rings or is skipped, and that day is still a calendar day (11-24: the
+        // phone's backup rang for omg at 11:00 after the 10:45 calendar alarm was skipped and switched off). Until the app
+        // reads the Chumby's own record of calendar days (/psp/chalarm_caldays), this is the closest it can tell.
+        let clock = chumbyNow ?? Date()
+        var calendarDays = Set(alarms.filter { $0.when == "once" && $0.isCalendar }.compactMap { a -> Date? in
+            guard let m = Double(a.time) else { return nil }
+            let t = Date(timeIntervalSince1970: m * 60)
+            guard a.isOn || (t <= clock && cal.isDate(t, inSameDayAs: clock)) else { return nil }
+            return cal.startOfDay(for: t)
+        })
+        // and the Chumby's own record of them (11-25), which holds even once the calendar alarm has left the list
+        for k in calDays { if let d = Self.day(k, cal) { calendarDays.insert(d) } }
+        var from = now
+        for _ in 0..<12 {
+            guard let d = a.nextFire(after: from) else { return nil }
+            if skipping && a.when != "once" && !a.isCalendar && calendarDays.contains(cal.startOfDay(for: d)) { from = d; continue }
+            // The one time skipped by hand doesn't ring either.
+            if skip, let s = skipped, s.name == a.name, abs(d.timeIntervalSince1970 - s.at) < 60 { from = d; continue }
+            return d
+        }
+        return nil
+    }
+    // "20261125" as the start of that day in `cal`
+    static func day(_ k: String, _ cal: Calendar) -> Date? {
+        guard k.count == 8, let n = Int(k) else { return nil }
+        return cal.date(from: DateComponents(year: n / 10000, month: n / 100 % 100, day: n % 100))
+    }
+    // A one-off or nap whose time is truly behind it by the Chumby's own clock (`chumby`, from its state), with two hours to
+    // spare for any snooze. Without the Chumby's clock nothing counts as expired. The Chumby clears its own Catch-up.
+    static func isExpired(_ a: Alarm, chumby: Date?) -> Bool {
+        guard let chumby, a.when == "once", a.name != "Catch-up", !a.isPlaceholder, let t = Double(a.time) else { return false }
+        return t * 60 < chumby.timeIntervalSince1970 - 2 * 3600
+    }
+    // So the 16 places don't fill up with alarms that can never ring again.
+    mutating func dropExpired(chumby: Date?) {
+        alarms.removeAll { Self.isExpired($0, chumby: chumby) }
+    }
+    static let maxAlarms = 16
+}
+
+// MARK: - Naps and the save form (here, so the widgets and the tests have them too)
+extension ChumbyState {
+    mutating func addNap(minutes: Int) { addNap(at: Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes) }
+    // A one-off beep named Nap, due at `at` (minutes since 1970), in the first free place.
+    // One nap at a time, from wherever it's set (app, widget, Control Center, Shortcuts): any nap still to come is replaced,
+    // and the same minute twice is a no-op, so a double press can't leave two naps ringing one after the other.
+    mutating func addNap(at: Int) {
+        let now = Int(Date().timeIntervalSince1970 / 60)
+        alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now && $0.time != String(at) }
+        if alarms.contains(where: { $0.name == "Nap" && $0.when == "once" && $0.time == String(at) }) { return }
+        var a = Alarm()
+        a.name = "Nap"; a.when = "once"; a.enabled = "1"
+        a.time = String(at)
+        let tone = tones.first ?? "Beep"
+        a.type = "beep"; a.arg = tone; a.param_description = tone; a.duration = "5"
+        if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
+    }
+    func alarmForm() -> [(String, String)] {
+        var o: [(String, String)] = [("n", "\(alarms.count)")]
+        if volume >= 0 { o.append(("v", "\(volume)")) }
+        o.append(("f", "\(fade)"))   // -1 is a real choice here: the Chumby's own default
+        for (i, a) in alarms.enumerated() {
+            // A tone marked to end by itself never rings at all on the Chumby ("cannot autoDismiss Beep-type alarm"),
+            // so no save, from anywhere, ever writes one.
+            var a = a
+            if a.type == "beep" { a.auto_dismiss = "0" }
+            o += [("\(i)_name", a.name), ("\(i)_enabled", a.enabled), ("\(i)_time", a.time), ("\(i)_when", a.when), ("\(i)_type", a.type), ("\(i)_arg", a.arg),
+                  ("\(i)_param", a.param), ("\(i)_param_description", a.param_description), ("\(i)_duration", a.duration), ("\(i)_snooze", a.snooze),
+                  ("\(i)_auto_dismiss", a.auto_dismiss), ("\(i)_action", a.action), ("\(i)_action_param", a.action_param), ("\(i)_backup", a.backup), ("\(i)_backupDelay", a.backupDelay)]
+            // A calendar day with its own sound says so on every save, or the Chumby puts the shared set back on it.
+            if a.isOwn { o.append(("\(i)_own", "1")) }
+        }
+        return o
+    }
+    // His usual alarm, for the one tap offered when nothing at all is set (the calendar's wake-ups switched off, and his
+    // own alarms off): of his own repeating alarms that are off, the one that rang most recently by the Chumby's ring
+    // log, else the first in his list. Never a calendar alarm, a nap, a catch-up or a one-off (which could be past).
+    func usualAlarm(rings: [Ring]) -> Alarm? {
+        let mine = alarms.filter { !$0.isOn && !$0.isCalendar && !$0.isHelper && !$0.isPlaceholder && $0.when != "once" }
+        func last(_ a: Alarm) -> Double { rings.filter { $0.name == a.name }.map(\.t).max() ?? 0 }
+        guard let newest = mine.max(by: { last($0) < last($1) }) else { return nil }
+        return last(newest) > 0 ? newest : mine.first
+    }
+    // What setting or replacing a nap may cost: the nap still to come, taken away by the user's own press.
+    func napPermit() -> SavePermit { SavePermit(userOff: Set(alarms.filter { $0.name == "Nap" && $0.when == "once" }.map(\.key))) }
+    // Whether `s` was answered after `since` by the Chumby's own clock: a copy the Mac kept from before a request is
+    // never read as the answer to it. With either clock unknown, any answer counts.
+    static func answered(_ s: ChumbyState, since: Date?) -> Bool {
+        guard let since, let now = s.chumbyNow else { return true }
+        return now > since
+    }
+}
+
+// What a save may cost, beyond the alarms it adds or changes. AlarmWriter checks every save against this.
+struct SavePermit {
+    // Alarms (by key) the user deleted, turned off or edited, that very alarm, by hand. Only these may go when due soon.
+    var userOff: Set<String> = []
+    // Calendar alarms (by key) the calendar sync found really gone: the event deleted, declined or canceled.
+    var deliberate: Set<String> = []
+    // A calendar sync: it may touch calendar alarms only, never another alarm, nor whether one is on.
+    var calendarOnly = false
+}
+
+// MARK: - The one way alarms are saved
+// Every alarm save, from the app, the calendar or Shortcuts, goes through here, one after another. Each reads the list fresh
+// from the Chumby, changes only what it means to, and sends that, so two writers can never undo each other and nothing is
+// ever saved from an old copy.
+actor AlarmWriter {
+    static let shared = AlarmWriter()
+    private var last: Task<Void, Never>?
+    struct Result { var state: ChumbyState; var saved: Bool }
+    // What the last save left on the Chumby and when, so the next one can tell a copy from before that save. The Mac
+    // answers reads from a copy it keeps, and for a moment after a save that copy is still the old list: a second save
+    // built on it silently undid the first (a "just this once" switched on straight after being added found no such
+    // alarm, changed nothing, and its usual alarm was then skipped with nothing in its place).
+    private var expect: (list: String, at: Date)?
+    private func expected() -> (list: String, at: Date)? { expect }
+    private func noteSaved(_ list: String) { expect = (list, Date()) }
+    // A list's alarms as one string: what's compared to tell an old copy from a new one.
+    static func listed(_ alarms: [Alarm]) -> String { alarms.filter { !$0.isPlaceholder }.map { $0.key + "|" + $0.enabled }.joined(separator: "\n") }
+    // The state, only if the answer really carries an alarm list and the Chumby's clock. A short or odd answer decoded
+    // as "no alarms" would let the next change write a list holding nothing but itself.
+    static func strict(_ data: Data) throws -> ChumbyState {
+        struct Must: Decodable { let alarms: [Alarm]; let now: Double }
+        guard (try? JSONDecoder().decode(Must.self, from: data)) != nil else { throw ChumbyError.message("No answer") }
+        return try JSONDecoder().decode(ChumbyState.self, from: data)
+    }
+    // Whether a list just read can be trusted after a save `since` seconds ago that left `expected`: yes when it is that
+    // list, or when enough time has passed for any copy to have been renewed (the Chumby may then really differ: an
+    // alarm that rang is switched off by the panel, a catch-up is added).
+    static func trusts(read: [Alarm], expected: String, since: TimeInterval) -> Bool { since > 6 || listed(read) == expected }
+
+    // `template` says, from the list as read, whether to send the first calendar alarm as the set every calendar alarm
+    // shares. `quiet` holds the save while an alarm rings or is due within 3 minutes, since a save restarts the alarm panel.
+    // `force` saves even when nothing else changed, as long as there's a set to send (the calendar settings themselves).
+    // `permit` says what the save may cost besides what it changes (see SavePermit and `check`).
+    func edit(_ api: ChumbyAPI, quiet: Bool = false, force: Bool = false, template: @escaping (ChumbyState) -> Bool = { _ in false },
+              permit: SavePermit = SavePermit(), _ change: @escaping (inout ChumbyState) -> Void) async throws -> Result {
+        try await edit(api, quiet: quiet, force: force, template: template, planned: { change(&$0); return permit })
+    }
+    // The same, for a change that works out its own permit from the list as read fresh.
+    func edit(_ api: ChumbyAPI, quiet: Bool = false, force: Bool = false, template: @escaping (ChumbyState) -> Bool = { _ in false },
+              planned change: @escaping (inout ChumbyState) throws -> SavePermit) async throws -> Result {
+        let before = last
+        let task = Task<Result, Error> {
+            await before?.value
+            let r = try await Self.run(api, quiet: quiet, force: force, template: template, expect: await self.expected(), change)
+            if r.saved { await self.noteSaved(Self.listed(r.state.alarms)) }
+            return r
+        }
+        last = Task { _ = try? await task.value }
+        return try await task.value
+    }
+
+    private static func run(_ api: ChumbyAPI, quiet: Bool, force: Bool, template: (ChumbyState) -> Bool, expect: (list: String, at: Date)?, _ change: (inout ChumbyState) throws -> SavePermit) async throws -> Result {
+        var s = try strict(await api.fresh("state"))
+        // Straight after a save, a copy that isn't what that save left is read again until it is (or the moment has passed).
+        if let expect {
+            for _ in 0..<8 where !trusts(read: s.alarms, expected: expect.list, since: Date().timeIntervalSince(expect.at)) {
+                try await Task.sleep(nanoseconds: 700_000_000)
+                s = try strict(await api.fresh("state"))
+            }
+        }
+        let saved = s.alarms
+        let was = s.alarmForm()
+        let permit = try change(&s)
+        let asTemplate = template(s)
+        guard (force && asTemplate) || ChumbyAPI.form(s.alarmForm()) != ChumbyAPI.form(was) else { s.reindex(); return Result(state: s, saved: false) }
+        if quiet {
+            if let sys = try? JSONDecoder().decode(Sys.self, from: await api.fresh("sys")), sys.ringing != nil { throw ChumbyError.waiting("an alarm is ringing") }
+            let soon = Date().addingTimeInterval(180)
+            if s.alarms.contains(where: { ($0.nextFire() ?? .distantFuture) < soon }) { throw ChumbyError.waiting("an alarm is due") }
+        }
+        s.dropExpired(chumby: s.chumbyNow)
+        guard s.alarms.count <= ChumbyState.maxAlarms else { throw ChumbyError.message(AlarmWriter.fullText) }
+        let forceKeep = try check(saved: saved, sending: s.alarms, permit: permit, clock: s.chumbyNow ?? Date())
+        var form = s.alarmForm()
+        // Never a day with its own sound: the shared set comes from an alarm that has it.
+        if asTemplate, let first = s.alarms.firstIndex(where: { $0.isCalendar && !$0.isOwn }) { form.append(("tpl", "\(first)")) }
+        // The Chumby keeps any calendar wake due within 24 h that a save drops (chalarm.c, 11-04), unless told this one is meant.
+        if forceKeep { form.append(("force", "1")) }
+        do { try await api.post("save", body: ChumbyAPI.form(form)) }
+        catch ChumbyError.message(let m) where m.contains("token") { try await api.post("save", body: ChumbyAPI.form(form)) }
+        // What the Chumby now holds, as it will read back: anything it switched off, off here too.
+        for i in ChumbyState.switchedOff(saved: saved, sending: s.alarms) { s.alarms[i].enabled = "0" }
+        if asTemplate, let first = s.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { s.calTpl = first }
+        s.reindex()
+        return Result(state: s, saved: true)
+    }
+
+    // The safety net, run on every save just before it's sent. `saved` is the list as read from the Chumby, `sending` what's
+    // about to go, and `clock` the Chumby's time. What the Chumby will hold afterwards includes the alarms its newest_wins
+    // rule switches off, so those count as lost too. It refuses (throws) when:
+    // - an alarm that's on and due within 3 hours would be removed or switched off, and the user didn't delete, turn off or
+    //   edit that very alarm by hand;
+    // - a calendar alarm that's on and due within 24 hours would go without the user or a really-gone event saying so;
+    // - a calendar sync would add, remove or switch on or off any alarm that isn't the calendar's.
+    // Returns whether the save drops a calendar wake due within 24 h on purpose, so the Chumby's own guard lets it go.
+    static func check(saved: [Alarm], sending: [Alarm], permit: SavePermit, clock: Date) throws -> Bool {
+        var after = sending
+        for i in ChumbyState.switchedOff(saved: saved, sending: sending) { after[i].enabled = "0" }
+        let stillOn = Set(after.filter(\.isOn).map(\.key))
+        var forceKeep = false
+        for a in saved where a.isOn && !stillOn.contains(a.key) {
+            guard let due = a.nextFire(after: clock) else { continue }
+            let byHand = permit.userOff.contains(a.key)
+            let when = due.formatted(date: .omitted, time: .shortened)
+            if due.timeIntervalSince(clock) <= 3 * 3600 && !byHand {
+                throw ChumbyError.refused("Not saved: that would have taken away \(a.spoken), due at \(when).")
+            }
+            if a.isCalendar && a.when == "once" && due.timeIntervalSince(clock) <= 86400 {
+                guard byHand || permit.deliberate.contains(a.key) else {
+                    throw ChumbyError.refused("Not saved: that would have taken away the calendar alarm \(a.spoken), due at \(when).")
+                }
+                forceKeep = true
+            }
+        }
+        if permit.calendarOnly {
+            // Every other alarm goes back exactly as it was read, on or off, apart from one-offs long past. And since none is
+            // new, the Chumby's newest_wins rule can't switch anything off either.
+            func own(_ l: [Alarm]) -> [String] { l.filter { !$0.isCalendar && !$0.isPlaceholder }.map { $0.key + "|" + $0.enabled }.sorted() }
+            let expected = own(saved.filter { !ChumbyState.isExpired($0, chumby: clock) })
+            guard own(sending) == expected, ChumbyState.switchedOff(saved: saved, sending: sending).isEmpty else {
+                throw ChumbyError.refused("Not saved: the calendar update would have changed your other alarms.")
+            }
+        }
+        return forceKeep
+    }
+
+    static let fullText = "The Chumby holds 16 alarms. Delete one, then try again."
+    // The Chumby's own reasons, in words.
+    static func explain(_ e: Error) -> String {
+        switch e {
+        case ChumbyError.waiting(let why): return "Waiting: \(why)."
+        case ChumbyError.deviceDown: return ChumbyWords.notAnswering + "."
+        case ChumbyError.refused(let why): return why
+        case ChumbyError.message(let m):
+            switch m {
+            case "bad count": return fullText
+            case "bad text": return "The Chumby can’t keep that label. Try a shorter one."
+            case "can't write": return "The Chumby couldn’t write it. Its storage may be full."
+            case "No answer", "No answer from the Chumby.": return ChumbyWords.notAnswering + "."
+            case "no such alarm": return "That alarm is no longer on the Chumby. Nothing was changed."
+            case "too soon": return "It’s about to ring, so nothing was changed. Snooze it when it does."
+            case "an alarm is ringing": return "An alarm is ringing, so nothing was changed."
+            case "can't read": return "The Chumby couldn’t read its alarms. Nothing was changed."
+            default: return m.hasPrefix("bad ") ? "The Chumby turned that down (\(m))." : m
+            }
+        case is URLError: return ChumbyWords.notAnswering + "."
+        default: return e.localizedDescription
+        }
+    }
+}
+
+// MARK: - Just this once, as the Chumby holds it (shared with the widgets; the writing side is in ChumbyJustOnce.swift)
+enum JustOnce {
+    static let suffix = " (just this once)"
+    // How far after the usual time it may go: never past the next morning's.
+    static let longest = 12 * 60
+    static func isOne(_ a: Alarm) -> Bool { a.when == "once" && a.name.hasSuffix(suffix) }
+    static func name(for a: Alarm) -> String {
+        let base = a.isCalendar ? String(a.name.dropFirst(Alarm.calendarPrefix.count)) : a.name.isEmpty ? "\(a.clock) \(a.meridiem) alarm" : a.name
+        return String(base.prefix(40)).trimmingCharacters(in: .whitespaces) + suffix
+    }
+}
+
+// A "just this once" on the Chumby, and how it stands: the alarm it replaces, that alarm's usual ring, and whether the
+// Chumby's one skip is on that ring.
+struct JustOnceNow {
+    var alarm: Alarm
+    var at: Date
+    var original: Alarm?
+    var usual: Date?
+    var pinned: Bool
+    var skip: SkippedAlarm?
+    // The skip it stands behind, when that's where the Chumby's skip is.
+    var replaces: SkippedAlarm? { pinned ? skip : nil }
+    // Removing it leaves the usual alarm to ring (skip taken back first, when it's pinned), as long as that's still ahead.
+    var canUndo: Bool { usual.map { $0 > Date() } ?? false }
+    // Not standing behind its skip: the usual one rings as well (the skip moved elsewhere), or it's alone because the
+    // usual one has gone (turned off, deleted, its calendar day dropped).
+    var orphan: Bool { !pinned && (usual == nil || usual! > Date()) }
+}
+
+extension ChumbyState {
+    // The first "just this once" still to ring.
+    func justOnce(now: Date = Date()) -> JustOnceNow? {
+        guard let (one, at) = alarms.filter({ JustOnce.isOne($0) && $0.isOn }).compactMap({ a in a.nextFire(after: now).map { (a, $0) } }).min(by: { $0.1 < $1.1 }) else { return nil }
+        // The alarm it stands in for: same name before the suffix, with a ring in the 12 hours up to it.
+        let from = at.addingTimeInterval(-Double(JustOnce.longest * 60) - 60)
+        let candidates = alarms.filter { !JustOnce.isOne($0) && JustOnce.name(for: $0) == one.name }
+            .compactMap { a in ring(of: a, after: from, skip: false).flatMap { $0 <= at ? (a, $0) : nil } }
+        let best = candidates.max { $0.1 < $1.1 }
+        let skip = skipped.flatMap { $0.date > now ? $0 : nil }
+        let pinned = best.map { b in skip.map { $0.name == b.0.name && abs($0.date.timeIntervalSince(b.1)) < 60 } ?? false } ?? false
+        return JustOnceNow(alarm: one, at: at, original: best?.0, usual: best?.1, pinned: pinned, skip: skip)
+    }
+}
+
+// The address the app reaches the Mac (or the Chumby) through, kept in the Keychain as well as the app's settings. A new
+// install of the same app (a TestFlight build replacing a Mac-signed one, or the app deleted and put back) starts with
+// empty settings, but the Keychain keeps its items for the same team and bundle, so the address comes back on its own
+// (Richard, 2026-11-10: "make sure that doesnt happen in the future").
+//
+// Its own Keychain item since 2026-11-20. The old one ("local.macpro.address", account "address") is the same item the
+// Mac Pro and TV apps keep their address in, and the App Store signing gives every app the team's whole Keychain (the
+// profile's "TEAM.*" group, store-sign.sh), so the apps read and replaced each other's. The Chumby app took the Mac Pro
+// app's bridge address as its own and sent every reading there (the bridge's log: GET /cgi-bin/custom/app 404, in bursts
+// whenever the app was open). At home its Wi-Fi route straight to the Chumby hid it; on cellular it said "Can't reach the
+// Mac" while the Chumby's cache was answering (Richard, 11-20: "proxy reliability is like the most important thing").
+// The old item is never read, written or deleted from here again, and the Mac's bridge is never taken for the Chumby's.
+enum SavedAddress {
+    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.chumby.address", kSecAttrAccount as String: "address"]
+    static var builtIn: String { Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "" }
+    // Settings first, then the Keychain, then the address baked into this build; never one that is the Mac's bridge.
+    static var value: String {
+        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
+        for a in [stored, sharedValue() ?? "", keychain() ?? ""] where usable(a) { return a }
+        return builtIn
+    }
+    static func usable(_ a: String) -> Bool { !a.trimmingCharacters(in: .whitespaces).isEmpty && !isMacBridge(a) }
+    // The Mac's own bridge (MacAddress, baked at signing): it has no Chumby path, so an address naming it is a mix-up.
+    static func isMacBridge(_ a: String) -> Bool {
+        guard let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String, let m = URL(string: mac), let mh = m.host,
+              let u = URL(string: a.trimmingCharacters(in: .whitespaces)), let uh = u.host else { return false }
+        func port(_ x: URL) -> Int { x.port ?? (x.scheme == "https" ? 443 : 80) }
+        return mh.lowercased() == uh.lowercased() && port(m) == port(u)
+    }
+    // The address shared with this app's widgets, controls and share sheet: a Keychain item in the app's shared access
+    // group ("<team>.local.macpro.Chumby.shared"), which the TestFlight signing (store-sign.sh) gives the app and each of
+    // its extensions. Their own settings and Keychain are their own, so before this they only ever had the address
+    // baked into the build. No group (a simulator build, no team in the bundle id): nil, and nothing changes.
+    static var sharedGroup: String? {
+        // The team, as the signing writes it into Info.plist (AppIdentifierPrefix, "TEAM."), else from the bundle id it gives.
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) else { return nil }
+        return "\(team).local.macpro.Chumby.shared"
+    }
+    static func sharedValue() -> String? {
+        guard let g = sharedGroup else { return nil }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+    static func share(_ s: String) {
+        guard let g = sharedGroup, sharedValue() != s else { return }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        SecItemDelete(q as CFDictionary)
+        guard !s.isEmpty else { return }
+        q[kSecValueData as String] = Data(s.utf8)
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // The widgets redraw with the new address rather than at their next refresh.
+        if SecItemAdd(q as CFDictionary, nil) == errSecSuccess { WidgetCenter.shared.reloadAllTimelines() }
+    }
+    static func save(_ s: String) {
+        UserDefaults.standard.set(s, forKey: "address")
+        share(s)
+        guard keychain() != s else { return }
+        SecItemDelete(base as CFDictionary)
+        guard !s.isEmpty else { return }
+        var add = base
+        add[kSecValueData as String] = Data(s.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+    }
+    static func keychain() -> String? {
+        var q = base
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+}
