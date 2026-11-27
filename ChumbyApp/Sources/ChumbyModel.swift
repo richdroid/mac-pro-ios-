@@ -104,7 +104,11 @@ final class ChumbyModel: ObservableObject {
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
     // controls out in another place of the tree when the phone opens flat, and a sheet held by the view went with it.
     @Published var justOnceSheetOpen = false
-    @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() }; if alarmsPage != oldValue { SwipeLog.note("alarmsPage \(alarmsPage)") } } }
+    // Kept on AlarmsNav, so a push or pop works out only the views that show it (see AlarmsNav).
+    var alarmsPage: Bool {
+        get { AlarmsNav.shared.page }
+        set { AlarmsNav.shared.page = newValue }
+    }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
@@ -180,6 +184,14 @@ final class ChumbyModel: ObservableObject {
         } else { lastHeard = nil }
         CalendarWake.shared.saved = { [weak self] s in self?.adopt(s) }
         ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
+        // A page opening over Alarms gets anything parked, once it has slid in: landed in the turn the push began, the
+        // readings worked out every tab again on top of building the page, and the slide started late.
+        AlarmsNav.shared.opened = { [weak self] in
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                self?.releaseHeld()
+            }
+        }
     }
     // Polled readings that came in while a page was moving under his finger, put on screen the moment it settles: a
     // row changing height under a page pulled past its end snaps it back instead of letting it spring (2026-11-08).
@@ -1301,3 +1313,19 @@ actor OneAtATime {
     static func warm() { light.prepare(); medium.prepare(); heavy.prepare(); note.prepare() }
 }
 #endif
+
+// Calendar settings or a calendar day pushed over Alarms. Its own object rather than the model's: as one of the model's
+// published values, every push and pop worked out again each view that reads the model (the root and every tab opened so
+// far) in the very turn the page should start sliding in (CI films of 11-26 and 11-27: the push's first frame 0.6 to 7 s
+// late). Only Alarms, which pushes the page, watches it.
+@MainActor final class AlarmsNav: ObservableObject {
+    static let shared = AlarmsNav()
+    @Published var page = false {
+        didSet {
+            guard page != oldValue else { return }
+            SwipeLog.note("alarmsPage \(page)")
+            if page { opened?() }
+        }
+    }
+    var opened: (() -> Void)?
+}

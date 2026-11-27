@@ -910,6 +910,10 @@ struct WokeUpTo: View {
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
+    @ObservedObject private var nav = AlarmsNav.shared
+    // Coming back from Calendar settings or a day, the plan is already fresh (a rule changed there plans again at once),
+    // so Alarms doesn't read the calendar again in the first frame of the slide back.
+    @State private var backFromPage = false
     @State private var turningOn = false
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
@@ -1003,7 +1007,7 @@ struct AlarmsTab: View {
         // Back on this tab with the rows behind the Chumby (a change that came while it was away): put right at once.
         .onAppear { if napSwap == nil, napRowShown != (model.napDue != nil) { napRows = model.napDue != nil; napFaded = false } }
         .environment(\.openCalendarSettings, { openSettings() })
-        .navigationDestination(isPresented: $model.alarmsPage) {
+        .navigationDestination(isPresented: $nav.page) {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
                 .holdsWhileMoving("calendar")
         }
@@ -1013,8 +1017,9 @@ struct AlarmsTab: View {
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         .onChange(of: model.openAlarm) { _, k in openAsked(k) }
+        .onChange(of: nav.page) { _, open in if open { backFromPage = true } }
         .onAppear {
-            wake.refreshPlan()
+            if backFromPage { backFromPage = false } else { wake.refreshPlan() }
             openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true
@@ -1022,6 +1027,25 @@ struct AlarmsTab: View {
             // A moment late: on the first appearance the posture isn't read yet (PaneReader starts wide), and open
             // upright the pose opened the pane that isn't shown there instead of pushing the page.
             case "calsettings": Task { try? await Task.sleep(nanoseconds: 1_200_000_000); openSettings() }
+            // For the build's timings of the push: once the launch has settled, Calendar settings opened, taken back and
+            // opened again twice, so the first open and the later ones are each timed in the swipe log.
+            case "calpushes":
+                Task {
+                    try? await Task.sleep(nanoseconds: 7_000_000_000)
+                    for i in 0..<3 {
+                        SwipeLog.note("push \(i + 1) asked")
+                        openSettings()
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if i < 2 { SwipeLog.note("pop \(i + 1) asked"); model.alarmsPage = false; try? await Task.sleep(nanoseconds: 2_500_000_000) }
+                    }
+                }
+            // A day with a lead of its own and a label (the row then shows no "· usual"); "caldayusual" puts it back on film.
+            case "caldaylead", "caldayusual":
+                if let w = wake.plan.first {
+                    wake.rules.leadOverrides[w.key] = w.ruleLead == 120 ? 90 : 120
+                    wake.rules.dayEdits[w.key] = DayEdit(label: "Early start")
+                    openDay(w.key)
+                }
             case "template": openSettings()
             case "calday": if let k = wake.plan.first?.key { openDay(k) }
             // A day with its own settings: a set time 25 minutes earlier than usual and a label of its own.
