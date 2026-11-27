@@ -1055,14 +1055,28 @@ struct WebTile: View {
     // "ready to install" with itself as its shorter form took the app down in every upgrade state but "room", wherever
     // the tiles were laid out (CI c43e051's crash report).
     static func distinct(_ a: [String]) -> [String] { var seen = Set<String>(); return a.filter { seen.insert($0).inserted } }
-    func figureText(_ value: String) -> Text {
+    // The number and its unit ("48" and "%", "3.2" and " MB/s"); the whole as the number when it isn't a figure.
+    static func split(_ value: String) -> (number: String, unit: String) {
+        guard value.first?.isNumber == true else { return (value, "") }
+        if value.hasSuffix("%") { return (String(value.dropLast()), "%") }
+        guard let gap = value.lastIndex(of: " ") else { return (value, "") }
+        return (String(value[..<gap]), String(value[gap...]))
+    }
+    // The unit is a Text of its own beside the number, not part of it: in one Text, a figure losing a digit (100% to 99%)
+    // drew its unit over the digit rolling away (designer gate on polish-1127). On its own it moves aside with the
+    // number's width, on the same ease.
+    func figureText(_ value: String) -> some View {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
         let small = Font.system(size: 17, weight: .semibold)
-        guard value.first?.isNumber == true else { return Text(value).font(big) }
-        if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
-        guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
-        return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
+        let (number, unit) = Self.split(value)
+        return HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(number).font(big)
+            if !unit.isEmpty { Text(unit).font(small) }
+        }
+        .accessibilityElement(children: .ignore).accessibilityLabel(value)
     }
+    // How a new reading comes in: rolled on a short ease, but simply there mid-slide or on arriving (below).
+    var roll: Animation? { NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2) }
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1093,14 +1107,19 @@ struct WebTile: View {
                 // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                 // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                 // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
-                .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
+                .animation(roll, value: value)
             }
-            // The longest that fits whole, never cut with an ellipsis.
+            // The longest that fits whole, never cut with an ellipsis. It rolls with the figure, on the same ease in the same
+            // moment: swapped in a frame, CPU's "Load" changed about 100 ms before the figure above it was seen to roll
+            // (designer gate on polish-1127). Kept by place, as the figure's forms are, so a new line rolls rather than cuts.
             ViewThatFits(in: .horizontal) {
-                ForEach(Self.distinct([detail] + details), id: \.self) { d in Text(d).lineLimit(1).fixedSize() }
+                let lines = Self.distinct([detail] + details)
+                ForEach(lines.indices, id: \.self) { i in Text(lines[i]).lineLimit(1).fixedSize() }
                 Text(details.last ?? detail).lineLimit(1)
             }
             .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+            .contentTransition(.numericText())
+            .animation(roll, value: detail)
             if spark.count > 1 {
                 // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                 // Sliding along by each second's sample, as the figure rolls (never mid-slide or on arriving).
@@ -1165,8 +1184,13 @@ struct TempDials: View {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
-                        Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit()
-                            .contentTransition(.numericText(value: Double(Heat.shown(t.c))))
+                        // The degree sign beside the number, not in it, as the tiles' units (a sensor going from 100° to 99°).
+                        HStack(spacing: 0) {
+                            Text("\(Heat.shown(t.c))").contentTransition(.numericText(value: Double(Heat.shown(t.c))))
+                            Text("°")
+                        }
+                        .font(.system(.body).weight(.semibold)).monospacedDigit()
+                        .accessibilityElement(children: .ignore).accessibilityLabel("\(Heat.shown(t.c))°")
                             // Rolled to each reading, as the tiles' figures; simply there on arriving or mid-slide.
                             .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.25), value: Heat.shown(t.c))
                     }

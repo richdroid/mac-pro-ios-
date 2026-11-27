@@ -10,7 +10,14 @@ enum SettingsRoute: Hashable { case root, box }
 
 // A tab's page pushing onto its own stack when asked from outside a link (Settings asked for as tab 9). An existential, so
 // NavigationPath.append opens it to the concrete type its destination is registered for (never AnyHashable).
-struct PagePush { var push: (any Hashable) -> Void = { _ in }; var pop: () -> Void = {} }
+struct PagePush: Equatable {
+    var push: (any Hashable) -> Void = { _ in }
+    var pop: () -> Void = {}
+    // The tab whose stack it pushes on. Two made for one stack are the same, so a tab's page worked out again doesn't
+    // work out every view that reads this (the lip) for a new pair of closures that do the same thing.
+    var stack = -1
+    static func == (a: PagePush, b: PagePush) -> Bool { a.stack == b.stack }
+}
 private struct PagePushKey: EnvironmentKey { static let defaultValue = PagePush() }
 extension EnvironmentValues { var pagePush: PagePush { get { self[PagePushKey.self] } set { self[PagePushKey.self] = newValue } } }
 
@@ -140,6 +147,8 @@ struct TVSettingsPage: View {
         .background { Ambience() }
         .navigationTitle("Settings").toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         .barPage()
+        // "open settings N ms" in the build's hitch log, from the gear's tap to the page's first frame (Page.push).
+        .onAppear { SpeedMark.end("settings") }
     }
 }
 

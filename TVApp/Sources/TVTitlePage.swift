@@ -206,6 +206,8 @@ struct TitlePage: View {
     }
     // MARK: the card
     var art: String { st.item.art }
+    // The card's corner, here and in his hand (HandOverlay), so it keeps its shape as it lifts.
+    static let cardRadius: CGFloat = 16
     var wideArt: Bool { st.item.isYouTube || st.target.send != nil || st.item.kind == "link" }
     func card(maxH: CGFloat, maxW: CGFloat) -> some View {
         let aspect: CGFloat = wideArt ? 16.0 / 9 : st.target.source == .mint ? 1 : 2.0 / 3
@@ -222,8 +224,8 @@ struct TitlePage: View {
             chip.padding(10)
         }
         .frame(width: w, height: h)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.12)) }
+        .clipShape(RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous).strokeBorder(.white.opacity(0.12)) }
         // The carry is read in a modifier of its own: each frame under his finger redraws the card and nothing else on
         // the page (not the streams, not the episodes).
         .modifier(Carried(carry: carry))
@@ -289,9 +291,9 @@ struct TitlePage: View {
         else if st.ref != nil {
             if let s = st.stream { chipText(StreamWords.chip(s), icon: nil, lit: false) }
             else if st.noStreams { chipText("No streams", icon: nil, lit: false) }
-            // The same word as the row under it: none listed, or the Mac didn't answer (gate of 80d0ecb: "No episodes" over
-            // "Couldn't get the episodes").
-            else if st.isSeries && st.meta == nil { chipText(st.episodesFailed ? (st.episodesEmpty ? "No episodes" : "Couldn’t load") : "Finding episodes…", icon: nil, lit: false) }
+            // Episodes that didn't come are said once, by the Episodes row under the card with its Try Again: said on the
+            // card as well, "Couldn't load" sat over "Couldn't get the episodes" (designer gate on polish-1127).
+            else if st.isSeries && st.meta == nil { if !st.episodesFailed { chipText("Finding episodes…", icon: nil, lit: false) } }
             else { chipText("Finding streams…", icon: nil, lit: false) }
             // Nothing to resume on a card that can't be thrown: a show whose episodes haven't come.
             if let p = st.progress, p > 0.01, p < 0.97, !(st.isSeries && st.meta == nil) {
@@ -321,7 +323,7 @@ struct TitlePage: View {
         // same carry, so every move, spring and flight below drives it as before.
         if !art.isEmpty, Hand.shared.lifted == nil, carry.rest.width > 4 {
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest, carry: carry) }
+            withTransaction(t) { Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest, carry: carry, radius: Self.cardRadius) }
         }
         carry.down()
         // The TV is told the moment he has it: wake and get ready, and resolve what the card carries.
@@ -383,7 +385,7 @@ struct TitlePage: View {
             hand.adopt(carry)
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) {
-                Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest)
+                Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest, radius: Self.cardRadius)
                 carry.hideForFlight()
             }
             // On the next turn, once the window's layer has drawn the card where his finger left it: flown in the same turn
