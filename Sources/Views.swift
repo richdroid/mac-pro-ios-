@@ -794,10 +794,12 @@ struct Screen<Content: View>: View {
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
                 // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
-                if let (t, to) = ["forcequit": (1, "open"), "appsfail": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
+                if let (t, to) = ["forcequit": (1, "open"), "appsfail": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power"), "music": (6, "mac-music")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     // The This Mac card is drawn only once its first reads land: waited for, or the scroll found nothing
                     // and the open portrait and folded shots never showed it (CI d9c229c).
+                    // The Dashboard's Music section appears once the Mac has said it has music routes.
+                    if to == "mac-music" { for _ in 0..<40 where !MacMusicStore.shared.available { try? await Task.sleep(nanoseconds: 250_000_000) } }
                     if to == "macctl" { for _ in 0..<40 where ConsoleSummary.shared.links.value == nil { try? await Task.sleep(nanoseconds: 250_000_000) } }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     proxy.scrollTo(to, anchor: .top)
