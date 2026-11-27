@@ -840,7 +840,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvwaking|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|rcycle|ridle|repisode|rfilm|rjoin|rstall|rnoruntime|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal|wsparse)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvwaking|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|rcycle|ridle|repisode|rfilm|rjoin|rstall|rnoruntime|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowhome|slowdev|outage|fslowlist|freal|wsparse)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
@@ -855,6 +855,8 @@ function tvPose(q, s) {
   // /slowdev: the box slow to answer (its readings take 4 s), so leaving Status or pushing Settings cuts a request short,
   // as on a slow tunnel: nothing may be said for that (gate HOLD of 8446178).
   if (scene === 'slowdev' && path === '/api/tv/device' && !q.delayed) { q.delayed = true; setTimeout(() => { if (!s.destroyed) tvRoute(q, s); }, 4000); return true; }
+  // /slowhome: Stremio's home answered after 5 s, so Watch's waiting row (its skeleton cards) is filmed at rest.
+  if (scene === 'slowhome' && path === '/api/tv/stremio' && !query.get('q') && !q.delayed) { q.delayed = true; setTimeout(() => { if (!s.destroyed) tvRoute(q, s); }, 5000); return true; }
   // /outage: the Mac gone from 10 s to 50 s after GET /outage/reset (every connection dropped, as with Tailscale down),
   // then back. Nothing may be said for about 25 s; then a calm amber "Can't reach the Mac", cleared on its return.
   if (scene === 'outage' && path === '/reset') { tvPose.outage = query.has('far') ? Date.now() + 1e9 : Date.now(); return json({ ok: true }); }
