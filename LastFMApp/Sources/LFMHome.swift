@@ -124,16 +124,13 @@ enum Home {
     static func order(_ k: String) -> Int { keys.firstIndex(of: k) ?? 0 }
 }
 
-// The panorama: its title, then its sections, each paged to the left margin with WP7's paging; the title slides at
-// a fraction of the sections' rate, so its end comes into view only as the last section does.
+// The panorama: its title, then its sections on a ring (LFMPanorama.swift, UIKit since build 81): each section lands at
+// the left margin by WP7's paging, the last one is followed by the first, and the title slides at a fraction of the
+// sections' rate, leaving and coming back round the wrap.
 private struct HomePanorama: View {
     let go: (String, Hub, Int?) -> Void
-    @State private var motion = PagerMotion()
-    @State private var pos = ScrollPosition(edge: .leading)
-    // Where the panorama rests, kept out of view state: as state, the lift redrew the whole panorama in the first frame
-    // of its settle. The tick has a small view of its own.
-    @State private var rest = Rest()
-    final class Rest { var section = 0 }
+    @Environment(\.openRoute) private var open
+    @Environment(\.zoomSpace) private var space
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     private var store: Store { Store.shared }
     var body: some View {
@@ -166,93 +163,42 @@ private struct HomePanorama: View {
                 // is the slowest; the background (as tall as the screen, square) next; the sections 1:1.
                 let titleRate = max(0.05, (titleW + 10 - pw) / travel)
                 let bgRate = max(titleRate + 0.05, min(0.9, (H * 1.02 - pw) / travel))
-                // Wide enough for the whole travel at that rate (gate on build 78: a black band down the last section
-                // folded, the picture shorter than the distance it slid).
-                // The whole width, side strip included (folded the strip is at the right: run 79 still ended short there).
+                // Wide enough for the whole travel at that rate, the side strip included (gate on build 78 and run 79).
                 let bgSide = max(H * 1.02, W + bgRate * travel + 40)
-                ZStack(alignment: .topLeading) {
-                    PanoramaBackground(ref: Ground.hubs.pick?.ref, motion: motion, rate: bgRate, side: bgSide)
+                let h = H - sectionsTop
+                #if canImport(UIKit)
+                PanoramaStrip(
+                    geo: PanoGeo(sec: sec, count: count, W: W, H: H, leading: side.leading, sectionsTop: sectionsTop,
+                                 titleTop: titleTop, titleW: titleW, titleH: ceil(T * 1.45),
+                                 titleRate: titleRate, bgRate: bgRate, bgSide: bgSide),
+                    start: max(0, min(count - 1, Int(UserDefaults.standard.string(forKey: "section") ?? "") ?? 0)),
+                    background: AnyView(PanoramaBackground(side: bgSide)
+                        .modifier(TurnstileOut(index: 0, count: Home.count))),
+                    title: AnyView(PanoramaTitle(text: Home.title, size: T)
                         .modifier(TurnstileOut(index: 0, count: Home.count))
-                    PanoramaTitle(text: Home.title, size: T, motion: motion, rate: titleRate)
-                        .padding(.leading, side.leading + 10)
-                        .offset(y: titleTop)
-                        .modifier(TurnstileOut(index: 0, count: Home.count))
-                        .turnstile(0)
-                    ScrollView(.horizontal) {
-                        HStack(alignment: .top, spacing: 0) {
-                            section("start", key: "h-start", 0, sec, H - sectionsTop, side) { StartTiles(width: sec - S.margin - 12, go: go) }
-                            section("menu", key: "h-menu", 1, sec, H - sectionsTop, side) { MenuWords { go($0, $1, $2) } }
-                            section("just played", key: "h-played", 2, sec, H - sectionsTop, side) {
-                                AlbumTiles(title: nil, items: Quickplay.albums(store.recent), width: sec - S.margin - 12)
-                            }
-                            section("on repeat", key: "h-repeat", 3, sec, H - sectionsTop, side) {
-                                ArtistTiles(title: nil, list: store.insights.week, width: sec - S.margin - 12)
-                            }
-                        }
-                        // WP7's panorama stops hard at both ends.
-                        .background(alignment: .topLeading) { NoBounce(); FastSettle(lander: motion.lander) }
-                        .padding(.leading, side.leading)
-                        // Room after the last section so it, too, rests at the left margin.
-                        .padding(.trailing, pw - sec + side.trailing)
-                        .scrollTargetLayout()
-                    }
-                    .scrollTargetBehavior(WPPaging(width: sec, count: count, motion: motion))
-                    .scrollPosition($pos)
-                    .scrollIndicators(.hidden)
-                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in if !motion.landing { motion.x = x; motion.sample(x) } }
-                    // Let go: the section chosen (WPPaging) is reached by the lander in 0.35 s, the tick as it starts.
-                    .onScrollPhaseChange { old, p in
-                        motion.phase = p
-                        if p == .interacting, old != .interacting { motion.began() }
-                        if old == .idle, p != .idle { Store.shared.scrolling = true; HomeSwipe.moving = true }
-                        if p == .interacting { motion.lander.stop() }
-                        guard p == .idle else { return }
-                        if let t = motion.target {
-                            motion.target = nil
-                            arrive(max(0, min(count - 1, t)), sec)
-                        } else if !motion.lander.active {
-                            settle(sec, count)
-                        }
-                    }
-                    .frame(width: W, height: H - sectionsTop)
-                    .offset(y: sectionsTop)
-                    .background { PagerTick(motion: motion) }
-                }
-                .frame(width: W, height: H, alignment: .topLeading)
-                .clipped()
-                // The build's poses: opened on a later section (-section n).
-                .task {
-                    let n = Int(UserDefaults.standard.string(forKey: "section") ?? "") ?? 0
-                    guard n > 0 else { return }
-                    // Again as the panorama settles (run 61: once, too early, and the shot stayed on start).
-                    for _ in 0..<4 {
-                        try? await Task.sleep(nanoseconds: 600_000_000)
-                        var t = Transaction(); t.disablesAnimations = true
-                        withTransaction(t) { pos.scrollTo(x: CGFloat(min(n, count - 1)) * sec) }
-                    }
-                    rest.section = n
-                }
+                        .turnstile(0)),
+                    sections: [
+                        hosted(section("start", key: "h-start", 0, sec, h, side) { StartTiles(width: sec - S.margin - 12, go: go) }),
+                        hosted(section("menu", key: "h-menu", 1, sec, h, side) { MenuWords { go($0, $1, $2) } }),
+                        hosted(section("just played", key: "h-played", 2, sec, h, side) {
+                            AlbumTiles(title: nil, items: Quickplay.albums(store.recent), width: sec - S.margin - 12)
+                        }),
+                        hosted(section("on repeat", key: "h-repeat", 3, sec, h, side) {
+                            ArtistTiles(title: nil, list: store.insights.week, width: sec - S.margin - 12)
+                        }),
+                    ])
+                .frame(width: W, height: H)
+                #else
+                Color.black
+                #endif
             }
             .ignoresSafeArea(.container, edges: .all)
         }
     }
 
-    private func arrive(_ t: Int, _ sec: CGFloat) {
-        if t != rest.section { motion.landed += 1 }
-        rest.section = t
-        let x = CGFloat(t) * sec
-        if !motion.lander.land(to: x, done: { settle(sec, 4) }) {
-            withAnimation(Z.easeOut(0.35)) { pos.scrollTo(x: x) } completion: { settle(sec, 4) }
-        }
-    }
-    private func settle(_ sec: CGFloat, _ count: Int) {
-        let x = motion.offset
-        let r = max(0, min(count - 1, Int((x / max(sec, 1)).rounded())))
-        if abs(x - CGFloat(r) * sec) > 1, motion.lander.land(to: CGFloat(r) * sec, done: { settle(sec, count) }) { return }
-        motion.rested(w: sec, slots: count)
-        rest.section = r
-        Store.shared.scrolling = false
-        HomeSwipe.moving = false
+    // A hosted section keeps what the stack hands down (its own hosting controller doesn't inherit it).
+    private func hosted<V: View>(_ v: V) -> AnyView {
+        AnyView(v.environment(\.openRoute, open).environment(\.zoomSpace, space).environment(\.paneLayout, false).tint(.white))
     }
 
     // A section: its name (WP7's panorama header, Semilight 42.667 px, lowercase), then its content, which scrolls on its
@@ -287,14 +233,12 @@ private struct HomePanorama: View {
 private struct PanoramaTitle: View {
     let text: String
     let size: CGFloat
-    let motion: PagerMotion
-    let rate: CGFloat
     var body: some View {
         Text(text)
             .font(.zuneLower(size: size)).tracking(-3)
             .foregroundStyle(.white)
             .lineLimit(1).fixedSize()
-            .offset(x: -motion.x * rate)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -318,11 +262,10 @@ extension HomePanorama {
 // The panorama's picture (the ground: one per visit, Ground.hubs), square, as tall as the screen, darkened, sliding at
 // its width's rate. A new artist's picture fades in over the old one (1.2 s), never cut.
 private struct PanoramaBackground: View {
-    let ref: ArtRef?
-    let motion: PagerMotion
-    let rate: CGFloat
     let side: CGFloat
     var body: some View {
+        // Read here, in its own hosting view, so the ground's change fades in this view's own update.
+        let ref = Ground.hubs.pick?.ref
         GeometryReader { g in
             ZStack(alignment: .topLeading) {
                 Color.black
@@ -338,9 +281,9 @@ private struct PanoramaBackground: View {
                     .frame(width: side, height: g.size.height)
             }
             .frame(width: side, height: g.size.height, alignment: .topLeading)
-            .offset(x: -motion.x * rate)
+            .clipped()
+            .animation(.easeInOut(duration: Ground.fade), value: ref?.key)
         }
-        .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

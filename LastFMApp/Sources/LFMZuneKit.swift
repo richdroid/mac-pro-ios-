@@ -797,7 +797,9 @@ private struct Compressed: ViewModifier {
         // fifth: a long pull flattens no more). The same modifiers at rest, as nothing (one structure: a pull's start
         // never rebuilds the list).
         let span = p.by > 0 ? max(p.far, 1) : max(p.height - p.far, 1)
-        let s = p.by == 0 ? 1 : max(0.8, 1 - abs(p.by) / span)
+        // Build 81 pass (gate on 78: the list squashed to 80 % in film, a squash rather than WP7's slight compression):
+        // half the pull's share of the span, never past 8 %.
+        let s = p.by == 0 ? 1 : max(0.92, 1 - 0.5 * abs(p.by) / span)
         content
             .scaleEffect(x: 1, y: s, anchor: UnitPoint(x: 0.5, y: min(1, p.far / max(p.height, 1))))
             .offset(y: -p.by)
