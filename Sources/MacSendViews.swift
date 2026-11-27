@@ -145,7 +145,8 @@ struct SendSection: View {
         } header: { Text("Send to Mac") } footer: {
             Text("Files land in Downloads › From iPhone on the Mac. In other apps, Share › Send to Mac Pro does the same.")
         }
-        .task {
+        // Only while Control is the tab in front (CI 1bed5e1: three /api/files/recent in 40 s on Status after a visit).
+        .taskInFront {
             if model.pose == "send" { sends.pose() }
             while !Task.isCancelled {
                 if !model.screenOpen { await sends.loadRecent() }
