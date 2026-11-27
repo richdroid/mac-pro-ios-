@@ -72,10 +72,12 @@ struct PaneReader<C: View>: View {
               let b = class_getInstanceMethod(c, #selector(UIViewController.duoWillAppear(_:))) else { return }
         method_exchangeImplementations(a, b)
     }()
-    func register(_ n: UINavigationController) { if !off { stacks.add(n) } }
+    func register(_ n: UINavigationController) { if !off, !ignored.contains(n) { stacks.add(n) } }
     // A page is about to show in this stack: if the stack is moving it there, the move begins now.
+    // Stacks that aren't his: PageWarm's hidden first push, which must not count as a move.
+    @ObservationIgnored let ignored = NSHashTable<UINavigationController>.weakObjects()
     func appearing(in n: UINavigationController) {
-        guard !off else { return }
+        guard !off, !ignored.contains(n) else { return }
         stacks.add(n)
         if let c = n.transitionCoordinator { begin(c) }
     }
@@ -1045,7 +1047,7 @@ extension View {
 // the first list every bar button seen, for the log.
 enum BackFinder {
     // Controls a film must touch that the label tap can't find (Chumby's Work lead menu), each where it was last laid out,
-    // in the window's points; written as "spot NAME x y" lines.
+    // in the window's points; written as "spot NAME x y trailing-x" lines (a menu row opens from its trailing value).
     @MainActor static var spots: [String: CGRect] = [:]
     @MainActor static func start() {
         #if canImport(UIKit)
@@ -1091,7 +1093,7 @@ enum BackFinder {
         let first = back.map { String(format: "%.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "none"
         let shut = close.map { String(format: "close %.4f %.4f", $0.midX / w.bounds.width, $0.midY / w.bounds.height) } ?? "close none"
         let tabLines = tabs.map { String(format: "tab %@ %.4f %.4f", $0.0, $0.1.midX / w.bounds.width, $0.1.midY / w.bounds.height) }
-        let spotLines = spots.sorted { $0.key < $1.key }.map { String(format: "spot %@ %.4f %.4f", $0.key, $0.value.midX / w.bounds.width, $0.value.midY / w.bounds.height) }
+        let spotLines = spots.sorted { $0.key < $1.key }.map { String(format: "spot %@ %.4f %.4f %.4f", $0.key, $0.value.midX / w.bounds.width, $0.value.midY / w.bounds.height, max($0.value.midX, $0.value.maxX - 40) / w.bounds.width) }
         let text = ([first, shut, String(format: "window %.0fx%.0f", w.bounds.width, w.bounds.height)] + tabLines + spotLines + seen).joined(separator: "\n") + "\n"
         try? text.write(to: dir.appendingPathComponent("back-at.txt"), atomically: true, encoding: .utf8)
     }
@@ -1123,6 +1125,7 @@ extension View {
         guard !done.contains(name), !pages.isEmpty,
               let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
         done.insert(name)
+        firstPush(window)
         let t0 = CACurrentMediaTime()
         let hosts = pages.map { page -> UIHostingController<AnyView> in
             let h = UIHostingController(rootView: page)
@@ -1146,6 +1149,29 @@ extension View {
             try? await Task.sleep(nanoseconds: 250_000_000)
             for h in hosts { h.view.removeFromSuperview() }
             SwipeLog.note(String(format: "%@ prewarm let go after %.0f ms", name, (CACurrentMediaTime() - t0) * 1000))
+        }
+    }
+    // UIKit's own first animated push, once per launch, in a stack of its own behind the app and never seen: the first
+    // push of all also set up UIKit's transition classes (+initialize of the parallax transition and its animators), about a
+    // third of Mint Remote's first Settings push on the build's Release run (CI e49abf6, open upright).
+    private static func firstPush(_ window: UIWindow) {
+        guard !done.contains("first push") else { return }
+        done.insert("first push")
+        let t0 = CACurrentMediaTime()
+        let nav = UINavigationController(rootViewController: UIViewController())
+        NavTransit.shared.ignored.add(nav)
+        nav.view.frame = window.bounds
+        nav.view.alpha = 0.011
+        nav.view.isUserInteractionEnabled = false
+        nav.view.accessibilityElementsHidden = true
+        window.insertSubview(nav.view, at: 0)
+        nav.view.layoutIfNeeded()
+        nav.pushViewController(UIViewController(), animated: true)
+        nav.view.layoutIfNeeded()
+        SwipeLog.note(String(format: "first push prewarmed %.0f ms", (CACurrentMediaTime() - t0) * 1000))
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            nav.view.removeFromSuperview()
         }
     }
 }

@@ -251,7 +251,8 @@ jobs:
             sleep 3
             xcrun simctl launch "$DEVICE" $CH -address $(addr $CH) -findBack YES -swipeLog YES -tab 2 -pose calsettings > /dev/null
             sleep 10
-            at=$(backlog $CH | awk '$1 == "spot" && $2 == "work" {print $3" "$4}')
+            # At the row's trailing value: a menu row in a list opens only from there (CI e49abf6 touched mid-row; no menu).
+            at=$(backlog $CH | awk '$1 == "spot" && $2 == "work" {print $5" "$4}')
             echo "leadmenu$x: work at ${at:-none}"
             if [ -n "$at" ]; then
               snap $d chumby-leadmenu$x-0closed

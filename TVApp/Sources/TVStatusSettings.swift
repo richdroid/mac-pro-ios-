@@ -45,6 +45,11 @@ struct SettingsPages: ViewModifier {
                 AnyView(TVSettingsPage().environment(model).environment(\.paneLayout, panes)),
                 AnyView(ManageSettingsView(store: store).environment(model).environment(\.paneLayout, panes)),
             ])
+            // TV settings again once the TV's settings are in: made before they came, only its waiting rows were made, and
+            // the push from Settings still stopped 317 ms open upright on the build's Release run (CI e49abf6).
+            for _ in 0..<40 where store.state == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard store.state != nil, !NavTransit.shared.active else { return }
+            PageWarm.run("tv manage", [AnyView(ManageSettingsView(store: store).environment(model).environment(\.paneLayout, panes))])
         }
         #endif
     }
