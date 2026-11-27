@@ -4,7 +4,7 @@ name: Mac Pro navigation check (mp-nav-1126)
 # pushed, swiped back from the edge (a slow partial swipe let go, then a slow full one, a still taken mid-swipe) and
 # taken back with Back tapped; an animated push and pop; the tabs with the island taken (the TV app's Live Activity, as
 # his recording's island was); a fold-unfold-turn film. Chumby and Mint Remote, which share the shell: every tab and a
-# back film per posture. Published to the mp-nav-shots prerelease. Never runs on main.
+# back film per posture. Published to the mp-nav-shots prerelease. Never runs on main. (Run fd7e1da lost its runner.)
 on:
   push:
     branches: [mp-nav-1126]
