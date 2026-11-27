@@ -1,6 +1,7 @@
 {
   "_about": "What's new in each build, as Version History in the Mac Pro app shows it. A build listed here replaces the lines the Mac reads from that build's commits ('What's new:' lines, or 'What's new (TV):' for one app). Second person, what you'd notice, about 12 words, no internal names.",
   "TV.ipa": {
+    "319": ["Pages keep their full size while you swipe back, instead of shrinking under your finger", "Every tab stays visible in every posture, with no More list"],
     "317": ["The wake key says it's waking the TV as soon as you press it, and gives the TV time to come on", "The Speaker list updates in one go after you pick a speaker", "A show whose episodes couldn't load says so the same way everywhere on its page", "The Remote stays quiet through short drops, then says Reconnecting, and clears when the Mac is back"],
     "204": ["Pages opened from a tab show their name once", "The Remote's search always brings up the keyboard"],
     "200": ["Back works like other Duo apps: top of the side bar, or swipe from the edge", "When a flick lands, one quick ring flashes off the TV"],
@@ -32,6 +33,7 @@
     "125": ["Watch always loads", "Episode titles show whole, with their running times"]
   },
   "MacPro.ipa": {
+    "319": ["All six tabs are always in the side bar or tab bar; no more … list", "Pages keep their full size while you swipe back, instead of shrinking under your finger"],
     "317": ["No more false Sign in for a moment after the Mac's bridge restarts", "Send to Mac no longer asks you to sign in when Tailscale is slow to answer"],
     "204": ["Readings and pages open without waiting for scrolling to stop"],
     "200": ["Back works like other Duo apps: top of the side bar, or swipe from the edge", "A darker icon, the Mac Pro on near black"],
