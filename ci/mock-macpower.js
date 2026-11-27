@@ -49,10 +49,26 @@ const feeds = {
 const consoleState = { running: true, frontmost: true, fullscreen: true, page: 'temps', board: null, rotate: false, rotateSecs: 45, mode: 'desk', rotating: ['machine', 'media', 'home', 'work', 'tonight'], animations: 'full', display: 'awake', glance: false, at: Date.now() };
 module.exports = (q, s) => {
   const u = new URL(q.url, 'http://x');
-  // Music on the Mac (the Dashboard's Music section): port 9061 is a Mac whose lyrics session is on (the Console sent aside), any other has it off.
-  const lyricsOn = q.socket.localPort === 9061;
-  if (u.pathname === '/api/mac/music/now') { s.end(JSON.stringify(lyricsOn ? { state: 'playing', title: 'Sample Song', artist: 'Sample Artist', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: true } } : { state: 'stopped', session: { on: false } })); return true; }
-  if (u.pathname === '/api/mac/audio') { s.end(JSON.stringify({ outputs: [{ id: 'hk', name: 'HK Invoke_C20142', connected: lyricsOn }, { id: 'mbp', name: 'Mac Pro Speakers', connected: false }], preferred: 'hk' })); return true; }
+  // Music on the Mac (the Dashboard's Music section), one state per port (ci/mock-chumby.js listens on each):
+  // 9061 lyrics on, a song playing; 9062 lyrics on, waiting for a song; 9063 lyrics on, the speaker didn't connect;
+  // 9064 lyrics on, a long real song title, and a press the Mac takes 40 s to answer ("Asking the Mac…");
+  // 9065 lyrics off, and a press the Mac refuses (its answer in the footer); 9066 below. Any other port: lyrics off.
+  const mp = q.socket.localPort;
+  const lyricsOn = mp >= 9061 && mp <= 9064;
+  const musicNow = {
+    9061: { state: 'playing', title: 'Sample Song', artist: 'Sample Artist', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: true } },
+    9062: { state: 'stopped', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: true } },
+    9063: { state: 'stopped', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: false, speakerSay: 'HK Invoke didn’t connect. It may be playing for another device.' } },
+    9064: { state: 'playing', title: 'Everything Now (Continued) [Live at Madison Square Garden, New York, 2018] – 2024 Remaster', artist: 'Arcade Fire', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: true } },
+  }[mp] || { state: 'stopped', session: { on: false } };
+  // 9066: lyrics off, its first answer 8 s late, for the cold open's "Checking…".
+  if (u.pathname === '/api/mac/music/now') { if (mp === 9066) { setTimeout(() => s.end(JSON.stringify(musicNow)), 8000); return true; } s.end(JSON.stringify(musicNow)); return true; }
+  if (u.pathname === '/api/mac/audio') { s.end(JSON.stringify({ outputs: [{ id: 'hk', name: 'HK Invoke_C20142', connected: lyricsOn && mp !== 9063 }, { id: 'mbp', name: 'Mac Pro Speakers', connected: false }], preferred: 'hk' })); return true; }
+  if (q.method === 'POST' && (u.pathname === '/api/mac/music/session' || u.pathname.startsWith('/api/mac/audio/'))) {
+    if (mp === 9064) { setTimeout(() => s.end(JSON.stringify({ ok: true })), 40000); return true; }
+    if (mp === 9065) { s.end(JSON.stringify({ ok: false, say: 'Apple Music didn’t open on the Mac. Try again in a moment.' })); return true; }
+    s.end(JSON.stringify({ ok: true })); return true;
+  }
   if (u.pathname === '/api/mac/console' && q.method === 'GET') { s.end(JSON.stringify(lyricsOn ? { ...consoleState, frontmost: false } : consoleState)); return true; }
   if (u.pathname === '/api/mac/console' && q.method === 'GET') { s.end(JSON.stringify(consoleState)); return true; }
   // The actions mirror and shared dismissals (2026-11-13): nothing under way; a dismissal is taken.

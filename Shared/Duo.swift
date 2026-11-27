@@ -530,6 +530,10 @@ extension View { func tabBarRoom() -> some View { modifier(TabBarRoom()) } }
 // all six polled the Mac).
 private struct DuoTabFrontKey: EnvironmentKey { static let defaultValue = true }
 extension EnvironmentValues { var duoTabFront: Bool { get { self[DuoTabFrontKey.self] } set { self[DuoTabFrontKey.self] = newValue } } }
+// Whether DuoTabs has its tabs down the side strip (folded, open flat, folded on its side) rather than along the foot
+// (open upright): a page's own items (Mint Remote's gear) go where iOS puts bar items in that strip.
+private struct DuoTabsSideKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var duoTabsSide: Bool { get { self[DuoTabsSideKey.self] } set { self[DuoTabsSideKey.self] = newValue } } }
 // A `.task` that runs while its tab is in front: started when the page appears in front, ended when another tab comes in
 // front, started afresh when its tab comes back, as a page in the system's TabView did.
 struct TaskInFront: ViewModifier {
@@ -602,11 +606,12 @@ struct DuoTabs<Content: View>: View {
     static var foot: CGFloat { 26 }
     static var width: CGFloat { cell + inset * 2 }
     // Open upright: the system's floating bar, icons over their names, measured on main's shot (CI 6d22d62,
-    // macpro-tab0-portrait): 21 pt clear of the display's foot, about 374 pt wide for six, hugging its cells.
+    // macpro-tab0-portrait): 21 pt clear of the display's foot, about 396 pt wide for six, hugging its cells (designer
+    // gate on mp-nav-1126: 61 pt cells made it 370 pt, the names crowded; 65 pt matches).
     static var barHeight: CGFloat { 54 }
     static var barInset: CGFloat { 4 }
     static var barFoot: CGFloat { 21 }
-    static var barCell: CGFloat { 61 }
+    static var barCell: CGFloat { 65 }
     static var barTotal: CGFloat { barHeight + barInset * 2 }
     var body: some View {
         ZStack {
@@ -625,6 +630,7 @@ struct DuoTabs<Content: View>: View {
         // Down the side the strip already keeps every page clear of the capsule (it stands inside the strip's 84 pt);
         // along the foot each page keeps the bar's room, none with the keyboard up (the bar is behind it then).
         .environment(\.tabBarRoom, footRoom)
+        .environment(\.duoTabsSide, side)
         .onGeometryChange(for: Strip.self) { g in
             Strip(leading: g.safeAreaInsets.leading, trailing: g.safeAreaInsets.trailing, bottom: g.safeAreaInsets.bottom, height: g.size.height + g.safeAreaInsets.top + g.safeAreaInsets.bottom)
         } action: { strip = $0 }
@@ -684,8 +690,6 @@ struct DuoTabs<Content: View>: View {
                         .foregroundStyle(front ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                         .frame(width: Self.cell, height: cellHeight)
                         .reportsTabFrame(it.title)
-                        // Always there, shown or not: put in and taken out, it trailed the tint by a tab in the films.
-                        .background { Capsule().fill(scheme == .dark ? Color.black.opacity(0.38) : Color.primary.opacity(0.08)).opacity(front ? 1 : 0) }
                         .overlay(alignment: .topTrailing) { badgeView(it.value).offset(x: 2, y: 1) }
                         .contentShape(Rectangle())
                 }
@@ -696,9 +700,21 @@ struct DuoTabs<Content: View>: View {
                 .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
             }
         }
+        // One pill under the tab in front, sliding from cell to cell on a short spring as the system's does (designer gate
+        // on mp-nav-1126). Always there: put in and taken out per cell, it trailed the tint by a tab in the films.
+        .background(alignment: .top) {
+            Capsule().fill(pillFill)
+                .frame(width: Self.cell, height: cellHeight)
+                .offset(y: CGFloat(frontIndex) * cellHeight)
+                .animation(Self.pillSpring, value: selection)
+        }
         .padding(Self.inset)
         .glassEffect(.regular.interactive(), in: Capsule())
     }
+    // The selected pill as the system draws its own: dark in dark mode (main's system bar, CI 6d22d62), grey in light.
+    private var pillFill: Color { scheme == .dark ? Color.black.opacity(0.5) : Color.primary.opacity(0.09) }
+    static var pillSpring: Animation { .spring(duration: 0.3, bounce: 0.12) }
+    private var frontIndex: Int { items.firstIndex { $0.value == selection } ?? 0 }
     private var bar: some View {
         HStack(spacing: 0) {
             ForEach(items) { it in
@@ -712,7 +728,6 @@ struct DuoTabs<Content: View>: View {
                     // One width for every cell, the longest name ("Dashboard") with air either side, as the system's.
                     .frame(width: Self.barCell, height: Self.barHeight)
                     .reportsTabFrame(it.title)
-                    .background { Capsule().fill(Color.primary.opacity(scheme == .dark ? 0.14 : 0.08)).opacity(front ? 1 : 0) }
                     .overlay(alignment: .top) { badgeView(it.value).offset(x: 14, y: 3) }
                     .contentShape(Capsule())
                 }
@@ -722,6 +737,12 @@ struct DuoTabs<Content: View>: View {
                 .accessibilityValue(badge(it.value) > 0 ? "\(badge(it.value))" : "")
                 .accessibilityAddTraits(front ? [.isSelected, .isButton] : .isButton)
             }
+        }
+        .background(alignment: .leading) {
+            Capsule().fill(pillFill)
+                .frame(width: Self.barCell, height: Self.barHeight)
+                .offset(x: CGFloat(frontIndex) * Self.barCell)
+                .animation(Self.pillSpring, value: selection)
         }
         .padding(Self.barInset)
         .glassEffect(.regular.interactive(), in: Capsule())

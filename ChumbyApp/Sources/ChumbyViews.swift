@@ -2467,6 +2467,19 @@ struct NowPlaying: View {
     }
 }
 
+// A note among the stations: its divider starts where the stations' names do, as theirs do, not at the note's own icon
+// (later list 11-24). A station row's Label, unseen and flat, carries the line's start; the note itself stays put.
+extension View {
+    func stationDivider() -> some View {
+        ZStack(alignment: .topLeading) {
+            Label {
+                Color.clear.frame(width: 1, height: 0).alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+            } icon: { Image(systemName: "play.fill") }
+            .frame(height: 0).clipped().hidden().accessibilityHidden(true)
+            self
+        }
+    }
+}
 // A Pandora station, played on the Chumby with a tap: the one starting shows its spinner, the one playing its sound.
 struct PandoraRow: View {
     @EnvironmentObject var model: ChumbyModel
@@ -2773,10 +2786,10 @@ struct SoundsTab: View {
                 Section {
                     ForEach(model.state.pandora) { st in
                         PandoraRow(station: st)
-                        if st.id == model.pplayStation, let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).id("pplaynote") }
+                        if st.id == model.pplayStation, let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).stationDivider().id("pplaynote") }
                     }
                     // a station no longer on the list: the note under the list, as before
-                    if !model.state.pandora.contains(where: { $0.id == model.pplayStation }), let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).id("pplaynote") }
+                    if !model.state.pandora.contains(where: { $0.id == model.pplayStation }), let f = model.failed("pplay") { FailNote(text: f, dismiss: model.dismissal("pplay")).stationDivider().id("pplaynote") }
                 } header: { SectionHead(icon: "radio", text: "Pandora") }
                     .task { await PandoraPose.run(model) }
             }

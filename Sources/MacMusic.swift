@@ -90,13 +90,16 @@ struct MacMusicSection: View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).fixedSize(horizontal: false, vertical: true)
-                Text(note).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // A long song's name and artist take two lines at most, then end in an ellipsis.
+                Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(2).truncationMode(.tail)
             }
         } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
     }
     private var lyricsOn: Bool { store.now?.session?.on == true }
     private var lyricsNote: String {
         if store.busy == "lyrics" { return "Asking the Mac…" }
+        // Opened cold, before the Mac's first answer: not "off" when it may be on (designer gate on mac-appliance-1125).
+        if store.now == nil { return "Checking…" }
         guard lyricsOn else { return "Full screen on the Mac, through the speaker" }
         if store.now?.session?.speakerConnected == false { return store.now?.session?.speakerSay ?? "The speaker didn’t connect" }
         if let t = store.now?.title, store.now?.state == "playing" { return [t, store.now?.artist].compactMap { $0 }.joined(separator: " · ") }
@@ -123,6 +126,8 @@ struct MacMusicSection: View {
                     row("Lyrics", lyricsNote, "quote.bubble")
                 }
                 .accessibilityIdentifier("switch.lyrics")
+                // Not to be pressed before the Mac has said where it is.
+                .disabled(store.now == nil)
                 .id("mac-music")
                 if store.speaker != nil {
                     Toggle(isOn: Binding(get: { store.asked["speaker"] ?? (store.speaker?.connected == true) }, set: { w in Task { await store.speaker(model, w) } })) {
@@ -134,13 +139,24 @@ struct MacMusicSection: View {
             .disabled(store.busy != nil || model.stale)
             .haptic(.done, trigger: store.answered)
             .haptic(.warn, trigger: store.refused)
+            // For the build's shots only (-musicPress lyrics|speaker): the switch pressed once the Mac has answered, so
+            // "Asking the Mac…" and a refusal in the footer are seen. Never on the phone.
+            .task {
+                guard let which = UserDefaults.standard.string(forKey: "musicPress") else { return }
+                for _ in 0..<40 where store.now == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if which == "speaker" { await store.speaker(model, !(store.speaker?.connected ?? false)) } else { await store.lyrics(model, !lyricsOn) }
+            }
         }
     }
 }
 
 // The section's reads run while the Dashboard is up (its own task, apart from the Console remote's).
+// Only while the Dashboard is the tab in front: DuoTabs keeps a visited tab in place unseen, and its reads went on behind
+// Status (designer gate on mac-appliance-1125).
 struct MacMusicLoop: ViewModifier {
     var on = true
     @EnvironmentObject var model: AppModel
-    func body(content: Content) -> some View { content.task(id: on) { if on { await MacMusicStore.shared.loop(model) } } }
+    @Environment(\.duoTabFront) private var front
+    func body(content: Content) -> some View { content.task(id: on && front) { if on && front { await MacMusicStore.shared.loop(model) } } }
 }

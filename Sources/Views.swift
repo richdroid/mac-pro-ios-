@@ -763,7 +763,9 @@ struct Screen<Content: View>: View {
                 // The row's foot sits 14 pt below the title, out of the corner the list rounds off: the A of Apps lost its left foot to
                 // it (designer gate, 2026-11-14). The gap to the next block gives the 14 pt back.
                 Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0)).listRowSeparator(.hidden)
-                    .listSectionSpacing(.custom(tab == 0 ? 14 : 3))
+                    // With the "Can't reach the Mac" banner under it, the gap above the banner is Status's on every tab: it
+                    // sat 8 pt higher on the Dashboard than on Status (later list 11-24).
+                    .listSectionSpacing(.custom(tab == 0 || (side != .right && Notice.shows(model)) ? 14 : 3))
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = shown ?? model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -931,10 +933,17 @@ extension View {
 // A hand-drawn page's left edge, where the lists' cards are: 20 pt from the display's edge in every posture. Open flat
 // the split has already moved the left pane 14 pt in, and the macOS tab added its 20 on top, so its title and cards
 // started 14 pt right of every other tab's (designer, 2026-11-11: one page inset for every tab's left pane).
+// Folded on its side the strip's safe area (about 84 pt) is already wider than 20 pt, and an inset list puts its cards at
+// that edge alone: the 20 pt added on top put macOS's title and cards 20 pt right of every other tab (designer gate on
+// mp-nav-1126). The lead is what's left of 20 pt after the safe area and the split have given theirs.
 struct PageLead: ViewModifier {
     @Environment(\.paneOuter) private var outer
+    @State private var safeLeading: CGFloat = 0
     let on: Bool
-    func body(content: Content) -> some View { content.padding(.leading, on ? max(0, 20 - outer) : 0) }
+    func body(content: Content) -> some View {
+        content.padding(.leading, on ? max(0, 20 - outer - safeLeading) : 0)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.leading } action: { safeLeading = $0 }
+    }
 }
 // The pages a tab's stack can show. Alone here, watching the open pages (NavStore), so a page opening or closing works
 // out this and nothing else: the tab under it is handed through untouched.
@@ -1067,13 +1076,17 @@ struct WebTile: View {
                 // window glyph is the Show key's and Screen's). The chevron stays: the tile still opens.
                 Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
-            // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
+            // The figure rolls to each new reading and the little chart slides along under it (SparkLine).
             // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
             // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
             HStack(spacing: 7) {
                 if good == false { Circle().fill(Color.orange).frame(width: 9, height: 9).accessibilityLabel("Needs a look") }
+                // Each form kept by its place, not its words: keyed by the figure itself, every reading was a new view, and
+                // the digits cut from one to the next instead of rolling (Richard, 2026-11-27: "the way the numbers are
+                // updating is slow and choppy").
                 ViewThatFits(in: .horizontal) {
-                    ForEach(Self.distinct([value] + figures), id: \.self) { v in figureText(v).lineLimit(1).fixedSize() }
+                    let forms = Self.distinct([value] + figures)
+                    ForEach(forms.indices, id: \.self) { i in figureText(forms[i]).lineLimit(1).fixedSize() }
                     figureText(figures.last ?? value).lineLimit(1)
                 }
                 .contentTransition(.numericText())
@@ -1090,7 +1103,8 @@ struct WebTile: View {
             .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             if spark.count > 1 {
                 // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
-                SparkLine(values: spark, top: top)
+                // Sliding along by each second's sample, as the figure rolls (never mid-slide or on arriving).
+                SparkLine(values: spark, top: top, slide: NavTransit.shared.active || AppModel.justArrived ? nil : min(MacPrefs.liveEvery, 2))
                     .frame(height: 42).padding(.top, 8)
             }
         }
@@ -1151,7 +1165,10 @@ struct TempDials: View {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
-                        Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+                        Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit()
+                            .contentTransition(.numericText(value: Double(Heat.shown(t.c))))
+                            // Rolled to each reading, as the tiles' figures; simply there on arriving or mid-slide.
+                            .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.25), value: Heat.shown(t.c))
                     }
                     // The hottest sensor's name stands out, so the one to watch is found at a glance (Richard, 2026-11-12:
                     // "iterate on the features u removed and make it even better").

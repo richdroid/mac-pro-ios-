@@ -1,0 +1,326 @@
+name: Polish check (polish-1127)
+# Branch-only check for the 11-27 polish pass over Mac Pro, Chumby and Mint Remote (Richard, 2026-11-26: "do a polish
+# pass through everything", "also focus a lot on tv"). Every posture in main's macpro.yml order (open upright, open
+# flat, folded, folded on its side): every tab of each app; Mint Remote's screens and states, its tab strip tapped and
+# dragged (now the drawn bar), back films, a held title card carried into the lip, the speaker sheet, first visits;
+# Mac Pro's live figures filmed, its Music section in every state; Chumby's back film open upright and its station note.
+# Published to the polish-1127-shots prerelease. Never runs on main; removed before the branch merges.
+on:
+  push:
+    branches: [polish-1127]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: polish-1127-shots
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: xcode-27
+    timeout-minutes: 175
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the launch art
+        run: |
+          swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+          swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        timeout-minutes: 35
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          for APP in MacPro Chumby TV; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+          done
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 130
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          P=build-sim/Build/Products/Debug-iphonesimulator
+          for A in MacPro Chumby TV; do xcrun simctl install "$DEVICE" $P/$A.app; done
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          # With "path" added (ci/flick-hands): one finger held, then carried, for the flicks.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 \
+            && F=$(grep -rl 'args\[1\] == "touch" || args\[1\] == "drag"' Sources) \
+            && python3 -c 'import sys; f,p=sys.argv[1:]; m="if args[1] == \"touch\" || args[1] == \"drag\" {"; s=open(f).read(); assert m in s; open(f,"w").write(s.replace(m, open(p).read()+m, 1))' "$F" $GITHUB_WORKSPACE/ci/flick-hands/devicehub-path.swift \
+            && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          MAC=local.macpro.MacPro; CH=local.macpro.Chumby; TV=local.macpro.TV
+          M=http://127.0.0.1:9002
+          addr() { case $1 in $MAC) echo http://127.0.0.1:9001;; $CH) echo http://127.0.0.1:9000;; $TV) echo $M;; esac; }
+          name() { case $1 in $MAC) echo macpro;; $CH) echo chumby;; $TV) echo tv;; esac; }
+          snap() { xcrun simctl io "$DEVICE" screenshot --display=$1 dist/$2.png > /dev/null 2>&1; }
+          # Which way the display stands, said in the log, so a posture's files are proven by their size.
+          probe() { snap $1 probe-$2; echo "posture $2: $(sips -g pixelWidth -g pixelHeight dist/probe-$2.png | awk '/pixel/ {printf "%s ", $2}')"; }
+          # One launch, one still: bundle, display, file name, seconds, address, then the app's arguments.
+          shot() {
+            local b=$1 d=$2 n=$3 w=$4 a=$5; shift 5
+            xcrun simctl launch "$DEVICE" $b -address $a "$@" > /dev/null
+            sleep $w; snap $d $n
+            xcrun simctl terminate "$DEVICE" $b || true
+          }
+          tabshots() {
+            local b=$1 d=$2 x=$3 tabs=$4 T; shift 4
+            for T in $tabs; do shot $b $d $(name $b)-tab$T$x 8 ${ADDR:-$(addr $b)} -tab $T "$@"; done
+          }
+          backlog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" $1 data 2>/dev/null) && cat "$c/Library/Caches/back-at.txt" 2>/dev/null; }
+          backat() { local a; a=$(backlog $1 | head -1); case "$a" in none|"") echo "$FALLBACK";; *) echo "$a";; esac; }
+          swipelog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" $1 data 2>/dev/null) || return 0; [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/$2-swipe.log; }
+          # A pushed page taken back, filmed (from mp-nav-1126): a slow partial edge swipe let go at a third (the page
+          # springs back whole), a slow full swipe back with stills mid-way, then relaunched and Back tapped.
+          navfilm() {
+            local n=$1 d=$2 b=$3 at; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $b -address $(addr $b) -findBack YES -swipeLog YES "$@" > /dev/null
+            sleep 10
+            snap $d $n-1page
+            echo "$n partial at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" drag 0.01 ${DRAGY:-0.5} 0.33 ${DRAGY:-0.5} 2.0 & DR=$!
+            sleep 1.6; snap $d $n-2partial-mid; wait $DR
+            sleep 2; snap $d $n-3partial-after
+            echo "$n swipe at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" drag 0.01 ${DRAGY:-0.5} 0.92 ${DRAGY:-0.5} 2.6 & DR=$!
+            sleep 1.9; snap $d $n-4swipe-mid1; sleep 0.6; snap $d $n-4swipe-mid2; sleep 0.6; snap $d $n-4swipe-mid3; wait $DR
+            sleep 2.5; snap $d $n-5swipe-after
+            swipelog $b $n
+            xcrun simctl terminate "$DEVICE" $b || true
+            sleep 1
+            xcrun simctl launch "$DEVICE" $b -address $(addr $b) -findBack YES -swipeLog YES "$@" > /dev/null
+            sleep 10
+            at=$(backat $b); echo "$n tap Back at $at"
+            $D "$DEVICE" touch $at 0.08 || echo "tap failed"
+            sleep 0.25; snap $d $n-6tap-mid
+            sleep 2.5; snap $d $n-7tap-after
+            swipelog $b $n-tap
+            xcrun simctl terminate "$DEVICE" $b || true
+            kill -INT $REC; wait $REC
+            ls -la dist/$n.mp4 || echo "::warning::no film $n"
+          }
+          # Every tab tapped where the app drew it (the -findBack log's "tab" lines), a still after each (the selected pill
+          # slides); then a fling on the first tab and the next tapped 0.15 s after; then a drag that starts on the strip
+          # and leaves it (must not reset or scroll the page under it). Later list 11-24: "swipes register on rest of screen".
+          taptest() {
+            local n=$1 d=$2 b=$3 i=0 label x y; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $b -address ${TAPADDR:-$(addr $b)} -findBack YES "$@" > /dev/null
+            sleep 10
+            backlog $b | grep '^tab ' > dist/$n-tabs.log
+            echo "$n: $(wc -l < dist/$n-tabs.log) tabs found"
+            while read -r _ label x y; do
+              i=$((i + 1)); $D "$DEVICE" touch $x $y 0.08 || echo "tap failed"; sleep 1.4; snap $d $n-$i-$label
+            done < dist/$n-tabs.log
+            local t1 t2; t1=$(sed -n 1p dist/$n-tabs.log | awk '{print $3" "$4}'); t2=$(sed -n 2p dist/$n-tabs.log | awk '{print $3" "$4}')
+            if [ -n "$t2" ]; then
+              $D "$DEVICE" touch $t1 0.08; sleep 1.5
+              $D "$DEVICE" drag 0.35 0.75 0.35 0.3 0.12; sleep 0.15; $D "$DEVICE" touch $t2 0.08; sleep 1.4; snap $d $n-afterfling
+              # The first tab's page scrolled down a little, then a drag that starts on its own tab and leaves the strip:
+              # the page must stay where it was (it jumped to its top on the system's bar).
+              $D "$DEVICE" touch $t1 0.08; sleep 1.5
+              $D "$DEVICE" drag 0.5 0.7 0.5 0.45 0.5; sleep 1.5; snap $d $n-stripdrag-before
+              set -- $t1; $D "$DEVICE" drag $1 $2 $1 $(echo "$2 - 0.25" | bc -l) 0.3; sleep 1.5; snap $d $n-stripdrag-after
+            fi
+            xcrun simctl terminate "$DEVICE" $b || true
+            kill -INT $REC; wait $REC
+          }
+          # Mac Pro: Status against a Mac whose figures change every second (9021), left to run: the figures roll and the
+          # little charts slide. Then the Fans & heat page.
+          livefilm() {
+            local d=$1 x=$2
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/macpro-live$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:9021 -tab 0 -swipeLog YES > /dev/null
+            sleep 16; snap $d macpro-live$x-end
+            xcrun simctl terminate "$DEVICE" $MAC || true
+            kill -INT $REC; wait $REC
+          }
+          # The Dashboard's Music section in each state (ci/mock-macpower.js ports): playing, waiting for a song, the speaker
+          # not connected, a long song title, "Asking the Mac…" (a press the Mac answers after 40 s), a refusal in the
+          # footer, and the cold open's "Checking…" (the Mac's first answer 8 s late). And the boards dimmed under lyrics.
+          music() {
+            local d=$1 x=$2
+            shot $MAC $d macpro-music-playing$x 9 http://127.0.0.1:9061 -tab 6 -pose music
+            shot $MAC $d macpro-music-boards-lyrics$x 9 http://127.0.0.1:9061 -tab 6
+            shot $MAC $d macpro-music-waiting$x 9 http://127.0.0.1:9062 -tab 6 -pose music
+            shot $MAC $d macpro-music-speakerfail$x 9 http://127.0.0.1:9063 -tab 6 -pose music
+            shot $MAC $d macpro-music-longtitle$x 9 http://127.0.0.1:9064 -tab 6 -pose music
+            shot $MAC $d macpro-music-asking$x 9 http://127.0.0.1:9064 -tab 6 -pose music -musicPress lyrics
+            xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:9065 -tab 6 -pose music -musicPress lyrics > /dev/null
+            sleep 5.5; snap $d macpro-music-refused$x-a; sleep 1.5; snap $d macpro-music-refused$x-b
+            xcrun simctl terminate "$DEVICE" $MAC || true
+            shot $MAC $d macpro-music-checking$x 4 http://127.0.0.1:9066 -tab 6 -pose music
+          }
+          # Mint Remote: one launch filmed, ACT (a function) run mid-film; the hand's, hitch and sends logs kept beside it.
+          tvfilm() {
+            local n=$1 d=$2 secs=$3 a=$4; shift 4
+            local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            rm -f /tmp/tv-home-applied.log /tmp/tv-flick-sends.log
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $TV -address $a -swipeLog YES "$@" > /dev/null
+            if [ -n "$ACT" ]; then $ACT; fi
+            sleep $secs
+            snap $d tv-$n-end
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" $TV || true
+            sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-$n-hitches.log 2>/dev/null || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" $TV data 2>/dev/null) && [ -f "$c/Library/Caches/hand-log.txt" ] && mv "$c/Library/Caches/hand-log.txt" dist/tv-$n-hand.log
+            cp /tmp/tv-flick-sends.log dist/tv-$n-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$n-sends.log
+            ACT=
+          }
+          cardAt() { grep -o 'what=card&x=0\.[0-9]*&y=0\.[0-9]*' /tmp/tv-home-applied.log 2>/dev/null | grep -v 'x=0\.000' | tail -1; }
+          # A real finger on the card: held still 0.7 s, then thrown up fast, or carried slowly up into the lip over 1.5 s
+          # and rested there (a still taken mid-carry: the card must be over the lip, not under it).
+          hand() {
+            sleep 10
+            local at x y; at=$(cardAt)
+            [ -z "$at" ] && { echo "no card position ($1)"; return; }
+            x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+            case $1 in
+              throw) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.12 0 || echo "path failed" ;;
+              carry) ( sleep 2.6; snap ${WD:-1} tv-held$WX ) & local s=$!
+                     $D "$DEVICE" path $x $y 0.7 $x 0.1 1.5 0 $x 0.1 0.6 0 || echo "path failed"; wait $s ;;
+            esac
+          }
+          throwIt() { hand throw; }; carryIt() { hand carry; }
+          speakerIt() {
+            sleep 9; $D "$DEVICE" tap "Speaker" || echo "Speaker not found"
+            sleep 3; snap ${WD:-1} tv-speaker$WX
+            sleep 2; $D "$DEVICE" tap "Done" || $D "$DEVICE" tap "Close" || echo "sheet close not found"
+          }
+          # Every tab once after launch (the "tour" pose): first visits are timed in the app ("open tab N ms").
+          tourfilm() {
+            local d=$1 x=$2
+            ACT= tvfilm tour$x $d 22 $M -tab 0 -pose tour
+          }
+          tvset() {
+            local d=$1 x=$2
+            tabshots $TV $d $x "3 0 6"
+            for S in rfilm repisode roffline ridle rmint; do shot $TV $d tv-remote-$S$x 9 $M/$S -tab 0; done
+            curl -s $M/real/reset > /dev/null; shot $TV $d tv-title-series$x 14 $M/real -tab 3 -pose realseries
+            curl -s $M/real/reset > /dev/null; shot $TV $d tv-title-nometa$x 16 $M/nometa -tab 3 -pose realseries
+            shot $TV $d tv-search$x 12 $M -tab 6 -pose search
+            shot $TV $d tv-settings$x 10 $M -tab 9 -pose tvsettings
+            shot $TV $d tv-watch-sparse$x 10 $M/wsparse -tab 3
+            shot $TV $d tv-watch-offline$x 10 $M/roffline -tab 3
+          }
+          tvmotion() {
+            local d=$1 x=$2
+            WD=$d; WX=$x
+            ACT=speakerIt tvfilm speaker$x $d 2 $M/ridle -tab 0
+            curl -s $M/fnormal/reset > /dev/null; ACT=carryIt tvfilm carry-title$x $d 8 $M/fnormal -tab 3 -pose flick-starting
+            curl -s $M/fnormal/reset > /dev/null; ACT=throwIt tvfilm throw-shelf$x $d 10 $M/fnormal -tab 3 -pose shelf
+            navfilm tv-back$x $d $TV -tab 9 -pose tvsettings
+            taptest tv-taps$x $d $TV -tab 3
+            tourfilm $d $x
+          }
+          macset() {
+            local d=$1 x=$2
+            tabshots $MAC $d $x "0 1 2 4 5 6"
+            shot $MAC $d macpro-away-status$x 9 $(addr $MAC) -tab 0 -pose unreachable
+            shot $MAC $d macpro-away-dashboard$x 9 $(addr $MAC) -tab 6 -pose unreachable
+          }
+          macmotion() {
+            local d=$1 x=$2
+            livefilm $d $x
+            navfilm macpro-back-tx$x $d $MAC -tab 0 -openHistory tx
+            taptest macpro-taps$x $d $MAC -tab 0
+          }
+          chset() {
+            local d=$1 x=$2
+            tabshots $CH $d $x "0 1 2 3 4"
+            shot $CH $d chumby-pandoranote$x 12 http://127.0.0.1:9000/soundsrefused -tab 3 -pose pandoramid
+          }
+          chmotion() {
+            local d=$1 x=$2
+            navfilm chumby-back$x $d $CH -tab 2 -pose calsettings
+            taptest chumby-taps$x $d $CH -tab 0
+          }
+          date
+          # Main's posture order (macpro.yml): opened, turned upright, turned flat; then folded, and folded on its side.
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          probe 3 upright
+          # Open upright first: the posture he holds. Mint Remote leads.
+          FALLBACK="0.065 0.049"; DRAGY=0.5
+          tvset 3 -upright; tvmotion 3 -upright
+          macset 3 -upright; music 3 -upright; macmotion 3 -upright
+          shot $MAC 3 macpro-fans-upright 10 http://127.0.0.1:9021 -tab 5 -pose fans
+          chset 3 -upright; chmotion 3 -upright
+          date
+          # Dark and light, and Dynamic Type one size up, open upright.
+          xcrun simctl ui "$DEVICE" appearance dark; sleep 2
+          ADDR= tabshots $CH 3 -upright-dark "0 2 3"
+          shot $TV 3 tv-tab3-upright-dark 8 $M -tab 3; shot $MAC 3 macpro-tab0-upright-dark 8 $(addr $MAC) -tab 0
+          xcrun simctl ui "$DEVICE" appearance light; sleep 2
+          shot $TV 3 tv-tab3-upright-light 8 $M -tab 3; shot $MAC 3 macpro-tab0-upright-light 8 $(addr $MAC) -tab 0
+          xcrun simctl ui "$DEVICE" content_size extra-large; sleep 2
+          tabshots $MAC 3 -upright-xl "0 1 5 6"; tabshots $CH 3 -upright-xl "0 2 3"; tabshots $TV 3 -upright-xl "3 0 6"
+          shot $TV 3 tv-remote-rfilm-upright-xl 9 $M/rfilm -tab 0
+          xcrun simctl ui "$DEVICE" content_size large; sleep 2
+          date
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          probe 3 flat
+          FALLBACK="0.948 0.222"; DRAGY=0.5
+          tvset 3 -flat; tvmotion 3 -flat
+          macset 3 -flat; macmotion 3 -flat
+          chset 3 -flat; chmotion 3 -flat
+          date
+          $D "$DEVICE" pose closed || true; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          probe 1 folded
+          # Folded the swipe starts low: the drag tool rests the finger a second before it moves, which a chart takes as a
+          # hold to read a value (CI 5a48486).
+          FALLBACK="0.895 0.292"; DRAGY=0.85
+          tvset 1 -folded; tvmotion 1 -folded
+          macset 1 -folded; music 1 -folded; macmotion 1 -folded
+          chset 1 -folded; chmotion 1 -folded
+          date
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          probe 1 foldedside
+          tabshots $TV 1 -foldedside "3 0 6"
+          shot $TV 1 tv-remote-rfilm-foldedside 9 $M/rfilm -tab 0
+          tabshots $MAC 1 -foldedside "0 1 2 4 5 6"
+          tabshots $CH 1 -foldedside "0 1 2 3 4"
+          taptest tv-taps-foldedside 1 $TV -tab 3
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
+          grep -h "open tab" dist/tv-tour-*-hitches.log 2>/dev/null || true
+          date
+          ls dist | wc -l; du -sh dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films-tv.zip . -i 'tv-*.mp4' || zip -q ../films-tv.zip /dev/null)
+          (cd dist && zip -qr0 ../films-mac.zip . -i 'macpro-*.mp4' || zip -q ../films-mac.zip /dev/null)
+          (cd dist && zip -qr0 ../films-chumby.zip . -i 'chumby-*.mp4' || zip -q ../films-chumby.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          ls -la *.zip
+          (cd dist && ls *.mp4 > ../films-list.txt 2>/dev/null; ls -l *.mp4 >> ../films-list.txt 2>/dev/null) || true
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view polish-1127-shots >/dev/null 2>&1 || gh release create polish-1127-shots --prerelease --title "Polish check (polish-1127)" --notes "Branch polish-1127: shots, films and logs of Mac Pro, Chumby and Mint Remote in every posture."
+          for f in shots.zip films-tv.zip films-mac.zip films-chumby.zip logs.zip films-list.txt status.txt; do
+            for i in 1 2 3; do gh release upload polish-1127-shots "$f" --clobber && break; sleep 15; done
+          done

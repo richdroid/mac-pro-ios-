@@ -61,6 +61,8 @@ struct Lip: View {
     @Environment(TVModel.self) private var model
     @Environment(\.pagePush) private var pagePush
     @Environment(\.paneLayout) private var panes
+    // With the tabs down the side the gear is the system's bar item in the strip (Page); the lip keeps it open upright.
+    @Environment(\.duoTabsSide) private var stripSide
     // The tab it sits on: only the one showing says where the lip is.
     let tab: Int
     static let height: CGFloat = 56
@@ -163,7 +165,7 @@ struct Lip: View {
             let shown = model.shownPlaying(now.playing)
             LipKey(icon: shown == true ? "pause.fill" : "play.fill", label: shown == true ? "Pause" : "Play") { model.togglePlay(shown: shown) }
         }
-        LipKey(icon: "gearshape", label: "Settings") { pagePush.push(SettingsRoute.root) }
+        if !stripSide { LipKey(icon: "gearshape", label: "Settings") { pagePush.push(SettingsRoute.root) } }
     }
 }
 

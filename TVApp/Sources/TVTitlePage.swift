@@ -176,7 +176,10 @@ struct TitlePage: View {
             model.titleGrounds.removeAll { $0.id == groundID }
             model.titleGrounds.append(.init(id: groundID, tab: model.tab, art: st.item.art))
         }
-        .onDisappear { model.titleGrounds.removeAll { $0.id == groundID } }
+        .onDisappear {
+            model.titleGrounds.removeAll { $0.id == groundID }
+            if Hand.shared.lifted?.carry === carry { Hand.shared.lifted = nil }
+        }
         .onChange(of: st.item.art) { _, a in
             if let i = model.titleGrounds.firstIndex(where: { $0.id == groundID }) { model.titleGrounds[i] = .init(id: groundID, tab: model.titleGrounds[i].tab, art: a) }
         }
@@ -249,6 +252,10 @@ struct TitlePage: View {
                 if !touching, carry.phase == .held { HandLog.note("touch cancelled: home"); carry.springHome(.zero) }
             }
         }
+        // Home again (let go below the line, or the touch taken away): the page draws it again, where it already is.
+        .onChange(of: carry.phase) { _, p in
+            if p == .rest, Hand.shared.lifted?.carry === carry { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { Hand.shared.lifted = nil } }
+        }
         // For the build's films: where the card is, so a real touch can pick it up.
         .shotSpot("card", pose: UserDefaults.standard.string(forKey: "pose") ?? "-")
         .accessibilityElement(children: .combine)
@@ -310,6 +317,12 @@ struct TitlePage: View {
     }
     func touchDown() {
         committedOnce = false
+        // In his hand the card is drawn by the window's layer, over the lip it goes toward, from the first moment: the
+        // same carry, so every move, spring and flight below drives it as before.
+        if !art.isEmpty, Hand.shared.lifted == nil, carry.rest.width > 4 {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { Hand.shared.lifted = .init(id: "title:" + st.item.id, art: art, wide: wideArt, rect: carry.rest, carry: carry) }
+        }
         carry.down()
         // The TV is told the moment he has it: wake and get ready, and resolve what the card carries.
         if let r = st.ref {
@@ -385,8 +398,14 @@ struct TitlePage: View {
             }
             return
         }
+        let held = carry
         carry.fly(v) {
             Hand.shared.land(title: title, art: st.item.art, tint: tint)
+            // Back to the page once its fade into the lip is done.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                if Hand.shared.lifted?.carry === held { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { Hand.shared.lifted = nil } }
+            }
             carry.reappear()
             send?()
         }
@@ -420,7 +439,9 @@ struct TitlePage: View {
                     .task(id: n.at) { try? await Task.sleep(nanoseconds: 6_000_000_000); withAnimation { st.note = nil } }
             }
             if st.ref != nil {
-                SectionTitle("Streams")
+                // A show whose episodes haven't come (still finding them, or they failed) shows that here, under its
+                // right name: "Streams" over "Couldn't get the episodes" read wrong (later list 11-26).
+                SectionTitle(st.isSeries && st.meta == nil ? "Episodes" : "Streams")
                 streamList
             }
             if st.isSeries, st.meta != nil {
@@ -545,7 +566,8 @@ struct Carried: ViewModifier {
             .scaleEffect(carry.scale)
             .rotationEffect(.degrees(carry.tilt))
             .offset(carry.offset)
-            .opacity(carry.opacity)
+            // Drawn by the window's layer while it's there (TitlePage.touchDown): here it waits unseen.
+            .opacity(Hand.shared.lifted?.carry === carry ? 0 : carry.opacity)
     }
 }
 

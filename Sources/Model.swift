@@ -379,7 +379,8 @@ final class AppModel: ObservableObject {
         // Only the live views watch this, so the other tabs and lists stay still.
         // Also while the Mac counts as away: its live figures are the quickest sign it's back (a 6 s ask, every second),
         // where the full status could sit 25 s on a request sent while the link was down.
-        guard tab == 0, !address.isEmpty else { return }
+        // Status, or a history opened from the Dashboard (its own stack), whose figure is the live one too.
+        guard tab == 0 || (tab == 6 && nav.dashHistory != nil), !address.isEmpty else { return }
         // A reading that failed to come back drops the last one, so the tiles fall back to the full status
         // rather than holding an old number over newer ones.
         // Missed once, the last reading stays: it's dropped only when the Mac counts as unreachable (missed).

@@ -751,7 +751,9 @@ struct FanDial: View {
                 Text(tag).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(Int(fan.rpm.rounded()))").font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit().contentTransition(.numericText())
+                Text("\(Int(fan.rpm.rounded()))").font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .contentTransition(.numericText(value: fan.rpm.rounded()))
+                    .animation(.easeOut(duration: 0.3), value: Int(fan.rpm.rounded()))
                 Text("rpm").font(.title3).foregroundStyle(.secondary)
             }
             // Its range, slowest to fastest, with the speed on it.
@@ -925,9 +927,10 @@ struct FansView: View {
         }
         .taskInFront {
             if MacConsole.pose == "fanready" { fans.set(Self.posedReady); return }
-            await fans.loop(model, every: 3)
+            await fans.loop(model, every: 2)
         }
-        .taskInFront { await temps.loop(model, every: 3) }
+        // Every 2 s, as often as the Mac reads its sensors: at 3 s every other reading was missed and the figures stepped.
+        .taskInFront { await temps.loop(model, every: 2) }
         .task(id: fans.value?.fans.map(\.index) ?? []) {
             for f in fans.value?.fans ?? [] where history[f.index] == nil {
                 if let p = try? await model.api.trend("fan:\(f.index)") { history[f.index] = p }

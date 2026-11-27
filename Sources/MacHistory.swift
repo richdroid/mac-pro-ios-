@@ -485,6 +485,8 @@ struct HistoryReadout: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(picked.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–")
                 .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
+                // Each second's reading rolls in; under his finger (a value picked off the chart) it follows at once.
+                .animation(picked == nil && !NavTransit.shared.active ? .easeOut(duration: 0.2) : nil, value: current)
             Text(picked.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? (stale ? "Last reading" : "Now")).font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

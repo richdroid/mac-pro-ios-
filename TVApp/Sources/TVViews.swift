@@ -268,15 +268,13 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("body root")
         PaneReader {
-            // The system's own tabs, placed by iOS: down the side strip folded and open in landscape, a bar along the foot
-            // open upright (HIG, iPhone Duo, "Vertical controls"; Richard, 2026-11-23: "in line with latest ios
-            // documentation on everything").
-            TabView(selection: tabBinding) {
-                ForEach(Self.railItems) { it in
-                    Tab(value: it.value) {
-                        tabPage(it.value).environment(\.tabInFront, model.tab == it.value)
-                    } label: { it.label }
-                }
+            // The tabs where iOS puts its own (down the side strip folded and open in landscape, a bar along the foot open
+            // upright; HIG, iPhone Duo, "Vertical controls"), drawn as the Mac Pro app draws them (Shared/Duo.swift
+            // DuoTabs). The system's bar took a drag that started on it and left it as the tab in front tapped again, and
+            // threw Watch to its top (designer gate on mp-nav-1126; later list 11-24, "swipes register on rest of
+            // screen"); a drawn key that the finger leaves is no tap at all. One bar in all three apps.
+            DuoTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }) { v in
+                tabPage(v).environment(\.tabInFront, model.tab == v)
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
@@ -434,7 +432,12 @@ struct Page<C: View>: View {
     // 43 px at 3x (Status' words at 114 px against 71 px). Every attempt to measure it live (insets, an empty stack, the
     // heading's own frame) missed by 9 pt or more by posture, or chased its own move (gates of b01454f to bc5d7cd).
     @Environment(\.horizontalSizeClass) private var hSize
-    var barRoom: CGFloat { showsBar && !(hSize == .regular && !panes) ? 43.0 / 3 : 0 }
+    // The tabs down the side strip (folded, open flat, folded on its side): Settings is the system's bar item there, at
+    // the strip's top under the clock, as the Mac Pro app's gear (HIG, iPhone Duo: actions under the status area). Open
+    // upright the lip is the page's top bar and keeps the gear at its right end.
+    @Environment(\.duoTabsSide) private var stripSide
+    var barShown: Bool { showsBar || stripSide }
+    var barRoom: CGFloat { barShown && !(hSize == .regular && !panes) ? 43.0 / 3 : 0 }
     var body: some View {
         // The lip: the TV, along the top of this tab and of every page opened on it. Above the stack, not in it, so a push
         // moves under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
@@ -446,6 +449,8 @@ struct Page<C: View>: View {
         NavigationStack(path: $path) {
             content()
                 .underFlick(warms: alwaysInline)
+                // Clear of the tab bar drawn along the foot open upright (DuoTabs), each pushed page too.
+                .tabBarRoom()
                 .modifier(TabBarFade())
                 .environment(\.backToTop, top)
                 .environment(\.pageScroll, alwaysInline ? nil : scrolled)
@@ -466,23 +471,33 @@ struct Page<C: View>: View {
                 // under it measures itself again; its foot reaches down as far.
                 .padding(.bottom, -barRoom)
                 .offset(y: -barRoom)
-                .toolbar(showsBar ? .automatic : .hidden, for: .navigationBar)
+                .toolbar(barShown ? .automatic : .hidden, for: .navigationBar)
+                .toolbar {
+                    if stripSide {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button { model.tick(); push(SettingsRoute.root) } label: { Label("Settings", systemImage: "gearshape") }
+                                .accessibilityIdentifier("gear")
+                        }
+                    }
+                }
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
-                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true) }
+                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).tabBarRoom() }
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
                 .navigationDestination(for: TitleRoute.self) { r in
-                    if let t = TitleRoutes.target(r) { TitlePage(target: t).holdsWhileMoving("title") }
+                    if let t = TitleRoutes.target(r) { TitlePage(target: t).holdsWhileMoving("title").tabBarRoom() }
                 }
                 .modifier(SettingsPages(tab: tab))
                 .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
+                // The page draws its own name (MovingTitle); with the bar shown for the gear, the bar draws none.
+                .toolbar(removing: .title)
                 // Large open as well as folded, so every page's name leads the headings under it, as in the Mac Pro app
                 // (Richard, 2026-11-05). Only the Remote, which has no headings and no room to spare, keeps it in the bar.
-                .navigationBarTitleDisplayMode(alwaysInline ? .inline : .large)
+                .navigationBarTitleDisplayMode(alwaysInline || barShown ? .inline : .large)
         }
         }
         .onChange(of: model.titleAsks) { _, _ in
@@ -2302,30 +2317,30 @@ struct Transport: View {
     var failed: Bool { starting?.failed == true }
     // An episode on whose next can't be worked out yet: ⏭ stays lit and works it out on the press (r18: dimmed on S2 E3 of 4).
     var episodeOn: Bool { model.status?.session?.seasonEpisode != nil || (starting?.line?.hasPrefix("S") ?? false) }
-    // Nothing after this (a film, or the last episode): four keys, never a dead ⏭ (TV polish designer, 2026-11-11). The
-    // four keep the five places' outer edges, so they still line up with the keys above them.
-    @State private var rowWidth: CGFloat = 0
+    // Nothing after this (a film, or the last episode): never a dead ⏭ (TV polish designer, 2026-11-11), and its place
+    // stays, empty, so every key keeps its place and play stays in the middle (later list 11-26: spread out as four, play
+    // sat off-centre; 11-22 ruling: keys keep fixed places in every state).
     var body: some View {
         let stremio = playing == nil && (model.status?.session?.pkg == "com.stremio.one" || starting != nil)
         let four = stremio && nextUp.next == nil && !(episodeOn && nextUp.series == nil)
-        let slot: CGFloat? = four ? nil : .infinity
-        let inset = four ? max(0, (rowWidth / 5 - size) / 2) : 0
+        let slot: CGFloat? = .infinity
         HStack(spacing: 0) {
             Group {
                 if stremio { GlassButton(icon: "backward.end.fill", label: nextUp.previous.map { "Start over, or \($0.subtitle)" } ?? "Start over", size: size) { StremioBack.press(model) } }
                 else { GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: size) }
             }.frame(maxWidth: slot)
-            if four { Spacer(minLength: 0) }
             Group {
                 if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: size) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: size) }
             }.frame(maxWidth: slot)
-            if four { Spacer(minLength: 0) }
             // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
             // Held, it stops: the flick's own control screen is gone, and Stop went with it to here.
             // A start shows pause from the throw on (r19: the key changed glyph mid-start for no reason). Failed, nothing is
             // playing, so it says play, with the row dimmed, never a dimmed pause over nothing (review of dfd490e); what the
             // TV says is on, if anything, decides it.
-            PlayKey(playing: ended ? false : playing ?? (failed ? (model.status?.session?.playing ?? false) : starting != nil ? true : model.staleStatus ? nil : model.status?.session?.playing), size: playSize, glow: glow)
+            // Dimmed with the row, it doesn't glow; with the TV out of reach it's grey, not a teal key that looks live
+            // (later list 11-26).
+            PlayKey(playing: ended ? false : playing ?? (failed ? (model.status?.session?.playing ?? false) : starting != nil ? true : model.staleStatus ? nil : model.status?.session?.playing),
+                    tint: unreachable ? Color(white: 0.62) : TVLook.accent, size: playSize, glow: glow && !(failed || connecting || unreachable))
                 .contextMenu {
                     Button("Stop", systemImage: "stop.fill") {
                         // Held while a flicked film is still starting, it calls the start off too.
@@ -2335,11 +2350,10 @@ struct Transport: View {
                     }
                 }
                 .frame(maxWidth: slot)
-            if four { Spacer(minLength: 0) }
             Group {
                 if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: size) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: size) }
             }.frame(maxWidth: slot)
-            if !four {
+            if four { Color.clear.frame(width: size, height: size).frame(maxWidth: .infinity).accessibilityHidden(true) } else {
             Group {
                 if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: size) }
                 else if let next = nextUp.next {
@@ -2354,8 +2368,6 @@ struct Transport: View {
             }.frame(maxWidth: .infinity)
             }
         }
-        .padding(.horizontal, inset)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in if abs(w - rowWidth) > 0.5 { rowWidth = w } }
         // Failed: nothing to control but stopping, which is the held ⏯.
         // Connecting (nothing heard from the TV yet this launch, and no start under way): the row waits at 40 %, like the
         // bar's place in a start, rather than a bright ▶ saying it's paused when it may be playing (r33: ▶, then ⏸ a
@@ -2369,6 +2381,8 @@ struct Transport: View {
         .settledAnimation(.easeOut(duration: 0.2), value: stremio)
     }
     var connecting: Bool { playing == nil && starting == nil && model.staleStatus }
+    // The Mac or the TV out of reach: nothing this row sends would land.
+    var unreachable: Bool { playing == nil && (!model.reachable || (!model.staleStatus && model.status?.online == false)) }
 }
 
 // ⏭ for an episode whose next isn't worked out yet: the light runs round the key from the press until the next one is
@@ -2645,7 +2659,7 @@ struct AppsTab: View {
     }
     var body: some View {
         let _ = SwipeLog.mark("body apps")
-        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true) }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).tabBarRoom() }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
             #endif
@@ -2938,8 +2952,11 @@ struct DiscoverColumn: View {
         if spare.count >= 4 || (out.isEmpty && !spare.isEmpty) { out.append(MediaRow(title: "More to watch", items: spare)) }
         return out
     }
+    // Open on its side the shelves alternate between the panes. Continue watching leads the left one, so it counts as the
+    // left's first shelf: with one other shelf that shelf goes right, never a right pane left empty (later list 11-26).
     var shown: [MediaRow] {
-        part == .all ? rows : rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
+        let lead = continuing != nil || waitingForContinue ? 1 : 0
+        return part == .all ? rows : rows.enumerated().filter { (($0.offset + lead) % 2 == 0) == (part == .left) }.map(\.element)
     }
     // Continue watching leads, as large cards, about two and a half across: what he throws most nights (brief 3.3).
     var leadWidth: CGFloat { paneWidth < 1 ? 150 : max(132, min(190, (paneWidth - 40 - 20) / 2.5)) }

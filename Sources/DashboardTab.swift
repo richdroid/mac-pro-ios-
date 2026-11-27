@@ -76,7 +76,8 @@ struct DashboardTab: View {
         switch seen {
         case .looking: return ("Looking at the Mac…", .secondary, false)
         case .unsupported: return ("This Mac has no dashboard to drive yet", .secondary, false)
-        case .away: return ("Can’t reach the Mac", .secondary, false)
+        // With the banner above already saying the Mac can't be reached, the card doesn't say it again (later list 11-24).
+        case .away: return (Notice.shows(model) ? "Where it was last seen" : "Can’t reach the Mac", .secondary, false)
         case .off: return ("Not running on the Mac", .secondary, false)
         case .asleep: return ("The Mac’s display is off", .secondary, false)
         case .aside: return ("Out of the way while Screen is open", .secondary, false)
@@ -246,8 +247,11 @@ struct DashboardTab: View {
                 } label: { cell(page?.name ?? "Pages", page?.symbol ?? "square.grid.2x2", on: page != nil, busy: remote.busy == "page", menu: true) }
                 .accessibilityIdentifier("board.pages")
             }
-            .disabled(!ready || !running)
-            .opacity(ready && running ? 1 : 0.4)
+            // Apple Music's lyrics cover the Mac's screen: a board put up now would sit behind them, so the six wait,
+            // dimmed, until Lyrics is off (designer gate on mac-appliance-1125).
+            .disabled(!ready || !running || seen == .lyrics)
+            .opacity(ready && running && seen != .lyrics ? 1 : 0.4)
+            .animation(.easeOut(duration: 0.2), value: seen == .lyrics)
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         } header: { Text("Put on the Mac") }
     }

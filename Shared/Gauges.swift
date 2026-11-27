@@ -104,26 +104,55 @@ struct SparkLine: View {
     let values: [Double]
     var top: Double?
     var color: Color = macBlue
+    // Live charts: a reading that adds samples at the right end (and drops as many at the left) slides the line along by
+    // them over this long, instead of redrawing it a step over in one frame (Richard, 2026-11-27: "the way the numbers
+    // are updating is slow and choppy"). nil: drawn as it comes.
+    var slide: TimeInterval? = nil
+    // The samples that went off the left end in the last slide, drawn there until they've gone.
+    @State private var gone: [Double] = []
+    @State private var shift: CGFloat = 0
     // Shapes, not a Canvas, for the same reason as the dials' ticks: never a blank chart for a frame.
     var body: some View {
         if values.count > 1 {
             let hi = max(top ?? values.max() ?? 1, 0.0001)
+            let drawn = gone + values
             ZStack {
-                SparkPath(values: values, hi: hi, closed: true).fill(color.opacity(0.18))
-                SparkPath(values: values, hi: hi, closed: false).stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                SparkPath(values: drawn, hi: hi, closed: true, lead: gone.count, shift: shift).fill(color.opacity(0.18))
+                SparkPath(values: drawn, hi: hi, closed: false, lead: gone.count, shift: shift).stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            }
+            .clipped()
+            .onChange(of: values) { old, new in
+                guard let slide, slide > 0, let k = Self.added(old, new) else {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { gone = []; shift = 0 }
+                    return
+                }
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { gone = Array(old.prefix(k)); shift = CGFloat(k) }
+                withAnimation(.linear(duration: slide)) { shift = 0 }
             }
         }
+    }
+    // How many samples the new reading added at the end (1 to 4), the rest of the line the same: nil for anything else.
+    static func added(_ old: [Double], _ new: [Double]) -> Int? {
+        guard old.count == new.count, old.count > 4 else { return nil }
+        for k in 1...4 where Array(old.dropFirst(k)) == Array(new.dropLast(k)) { return k }
+        return nil
     }
 }
 struct SparkPath: Shape {
     let values: [Double]
     let hi: Double
     let closed: Bool
+    // The first `lead` values are off the left edge at rest; `shift` steps the whole line right (sliding to 0).
+    var lead = 0
+    var shift: CGFloat = 0
+    var animatableData: CGFloat { get { shift } set { shift = newValue } }
     func path(in rect: CGRect) -> Path {
         var line = Path()
-        let step = rect.width / CGFloat(values.count - 1)
+        let step = rect.width / CGFloat(max(values.count - lead - 1, 1))
         for (i, v) in values.enumerated() {
-            let p = CGPoint(x: rect.minX + CGFloat(i) * step, y: rect.minY + rect.height * (1 - CGFloat(min(v / hi, 1))) * 0.92 + 1.5)
+            let p = CGPoint(x: rect.minX + (CGFloat(i - lead) + shift) * step, y: rect.minY + rect.height * (1 - CGFloat(min(v / hi, 1))) * 0.92 + 1.5)
             if i == 0 { line.move(to: p) } else { line.addLine(to: p) }
         }
         if closed { line.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY)); line.addLine(to: CGPoint(x: rect.minX, y: rect.maxY)); line.closeSubpath() }
