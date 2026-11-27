@@ -131,13 +131,19 @@ http.createServer((q, s) => macRoutes(q, s, () => macStatus.replace('"healthBad"
 // its end and let go while readings land (Richard, 2026-11-08: "it doesnt bounce back naturally its like a sudden move
 // back"): the CPU and memory figures, the history lines, a reading that's seldom there, and an app that comes and goes
 // in Open on the Mac, so rows change height. Only on its own port: every other shot keeps the still Mac.
+const liveHist = { v: null, at: 0 };
 const liveMac = () => {
   const n = Math.floor(Date.now() / 1000), m = JSON.parse(macStatus);
   m.cpu.total = 8 + (n * 7) % 41; m.cpu.per = m.cpu.per.map((v, i) => 3 + ((n * 13 + i * 5) % 57));
   m.mem.used = 1.2e10 + ((n * 11) % 23) * 2e8;
   m.load = [0.8 + (n % 9) / 4, 1.1, 0.9];
   m.net.rxRate = 20000 + ((n * 17) % 61) * 3000; m.net.txRate = 4000 + ((n * 5) % 13) * 900;
-  for (const k of Object.keys(m.hist)) { const h = m.hist[k]; h.push(h[(n + k.length) % h.length] * (0.7 + (n % 5) / 8)); h.shift(); }
+  // One rolling history, a sample added and the oldest dropped each second, as the bridge's own ring.
+  // Each new sample from the still Mac's own history (never from the rolling one, whose products decayed to nothing
+  // within the hour: the charts lay flat at the foot open flat, gate on 5dea295).
+  if (!liveHist.v) { liveHist.v = JSON.parse(JSON.stringify(m.hist)); liveHist.base = JSON.parse(macStatus).hist; liveHist.at = n; }
+  for (; liveHist.at < n; liveHist.at++) for (const k of Object.keys(liveHist.v)) { const h = liveHist.v[k], b = liveHist.base[k]; h.push(b[(liveHist.at + k.length) % b.length] * (0.7 + (liveHist.at % 5) / 8)); h.shift(); }
+  m.hist = JSON.parse(JSON.stringify(liveHist.v));
   m.temps.forEach((t, i) => { t.c = Math.round(t.c + ((n * (i + 3)) % 7) - 3); });
   if (n % 2) m.apps.push({ name: 'TextEdit', pid: 18, cpu: 0, mem: 88000000 });
   if (n % 3 === 0) m.apps.splice(m.apps.findIndex(a => a.name === 'Music'), 1);
@@ -210,6 +216,8 @@ http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon
 // And that Mac sitting idle: after the 2 x 2 answer nothing on it changes, so it sends nothing until asked again.
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9013, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, 'idle'));
 // The Screen as video (mp-screen): the bridge's H.264 path, replayed from a stream its own helper made.
+// A Mac with Apple Music's lyrics up (ci/mock-macpower.js reads the port): the Dashboard's Music section with its card aside.
+for (const p of [9061, 9062, 9063, 9064, 9065, 9066]) http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(p, '127.0.0.1');
 http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(9014, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, false, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
@@ -832,7 +840,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvwaking|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|rcycle|ridle|repisode|rfilm|rjoin|rstall|rnoruntime|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvwaking|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|rcycle|ridle|repisode|rfilm|rjoin|rstall|rnoruntime|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal|wsparse)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
@@ -862,7 +870,10 @@ function tvPose(q, s) {
   }
   if (path === '/api/tv/discover' && !query.get('q') && !query.get('genre')) {
     tvPose.discover = tvPose.discover || JSON.parse(fs.readFileSync(__dirname + '/tv-discover.json'));
-    return json(tvPose.discover[query.get('type') === 'series' ? 'series' : 'movie']);
+    const kindRows = tvPose.discover[query.get('type') === 'series' ? 'series' : 'movie'];
+    // /wsparse: a catalogue with only two lists (Watch open on its side must not leave a pane empty).
+    if (scene === 'wsparse') return json({ ...kindRows, rows: kindRows.rows.slice(0, 2) });
+    return json(kindRows);
   }
   // A still taken after a key press: the same picture here, at once.
   if (path === '/api/tv/shot' && q.url !== '/api/tv/shot') { s.setHeader('content-type', 'image/png'); s.end(homeStill); return true; }

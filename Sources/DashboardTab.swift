@@ -11,6 +11,7 @@ import SwiftUI
 struct DashboardTab: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var remote = ConsoleRemote.shared
+    @ObservedObject private var music = MacMusicStore.shared
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -20,7 +21,7 @@ struct DashboardTab: View {
     var ready: Bool { remote.read && !remote.unsupported && !model.stale }
 
     // Where the dashboard is, as the Console and the bridge last said. Never a guess.
-    enum Seen { case looking, unsupported, away, off, asleep, aside, behind, on }
+    enum Seen { case looking, unsupported, away, off, asleep, aside, lyrics, behind, on }
     var seen: Seen {
         if remote.unsupported { return .unsupported }
         if !remote.read { return .looking }
@@ -28,6 +29,8 @@ struct DashboardTab: View {
         guard let st, st.running else { return .off }
         if st.display == "asleep" { return .asleep }
         if st.screenStepAside == true { return .aside }
+        // Apple Music's lyrics on the Mac's screen (the music session): the dashboard is aside on purpose.
+        if music.now?.session?.on == true, st.frontmost != true { return .lyrics }
         if st.frontmost == false { return .behind }
         return .on
     }
@@ -44,13 +47,14 @@ struct DashboardTab: View {
     var body: some View {
         Group {
             switch side {
-            case .all: now; boards; switches
+            case .all: now; boards; switches; MacMusicSection()
             // Open flat: what's on and the boards on the left, the switches on the right.
             case .left: now; boards
-            case .right: switches
+            case .right: switches; MacMusicSection()
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
+        .modifier(MacMusicLoop(on: side != .left))
         .onChange(of: remote.busy) { _, b in if b == nil { asked = [:] } }
         // Done when the Console answers yes, warn when it says no or can't be reached: once per press, on the answer.
         .haptic(.done, trigger: remote.answered) { _, _ in side != .right }
@@ -72,10 +76,12 @@ struct DashboardTab: View {
         switch seen {
         case .looking: return ("Looking at the Mac…", .secondary, false)
         case .unsupported: return ("This Mac has no dashboard to drive yet", .secondary, false)
-        case .away: return ("Can’t reach the Mac", .secondary, false)
+        // With the banner above already saying the Mac can't be reached, the card doesn't say it again (later list 11-24).
+        case .away: return (Notice.shows(model) ? "Where it was last seen" : "Can’t reach the Mac", .secondary, false)
         case .off: return ("Not running on the Mac", .secondary, false)
         case .asleep: return ("The Mac’s display is off", .secondary, false)
         case .aside: return ("Out of the way while Screen is open", .secondary, false)
+        case .lyrics: return ("Lyrics are on the Mac’s screen", .secondary, false)
         case .behind: return ("Behind another app on the Mac", .secondary, false)
         case .on: return ("On the Mac’s screen", .green, false)
         }
@@ -162,7 +168,7 @@ struct DashboardTab: View {
                 BigKey("Next", "chevron.right", busy: remote.busy == "next", filled: false, trailingIcon: true) { step(1) }
             }
         }
-        .disabled(!ready || (seen == .on && st?.glance == true))
+        .disabled(!ready || (seen == .on && st?.glance == true) || seen == .lyrics)
     }
 
     // A wide key, one height everywhere on the remote; its wait is drawn in the glyph's place, so it never changes size.
@@ -241,8 +247,11 @@ struct DashboardTab: View {
                 } label: { cell(page?.name ?? "Pages", page?.symbol ?? "square.grid.2x2", on: page != nil, busy: remote.busy == "page", menu: true) }
                 .accessibilityIdentifier("board.pages")
             }
-            .disabled(!ready || !running)
-            .opacity(ready && running ? 1 : 0.4)
+            // Apple Music's lyrics cover the Mac's screen: a board put up now would sit behind them, so the six wait,
+            // dimmed, until Lyrics is off (designer gate on mac-appliance-1125).
+            .disabled(!ready || !running || seen == .lyrics)
+            .opacity(ready && running && seen != .lyrics ? 1 : 0.4)
+            .animation(.easeOut(duration: 0.2), value: seen == .lyrics)
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         } header: { Text("Put on the Mac") }
     }

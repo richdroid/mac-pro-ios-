@@ -109,7 +109,10 @@ enum ThrowRules {
         let art: String
         let wide: Bool
         let rect: CGRect
-        static func == (a: Lifted, b: Lifted) -> Bool { a.id == b.id && a.rect == b.rect }
+        // A page's own carry, drawn here while it's held (the title page's card): inside the navigation stack it was cut
+        // off at the page's top edge, under the lip, as he lifted it toward the TV (later list 11-26).
+        var carry: Carry? = nil
+        static func == (a: Lifted, b: Lifted) -> Bool { a.id == b.id && a.rect == b.rect && a.carry === b.carry }
     }
     let liftCarry = Carry(lifted: true)
     func land(title: String, art: String, tint: Color?) {
@@ -695,7 +698,7 @@ struct HandOverlay: View {
         let hand = Hand.shared
         ZStack {
             if let l = hand.lifted {
-                let c = hand.liftCarry
+                let c = l.carry ?? hand.liftCarry
                 Art(url: URL(string: l.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() }
                     .frame(width: l.rect.width, height: l.rect.height)
                     .clipShape(RoundedRectangle(cornerRadius: l.wide ? 10 : 8, style: .continuous))

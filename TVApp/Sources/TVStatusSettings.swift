@@ -31,9 +31,9 @@ struct SettingsPages: ViewModifier {
                     case .root: TVSettingsPage()
                     case .box: BoxPage()
                     }
-                }.holdsWhileMoving("settings")
+                }.holdsWhileMoving("settings").tabBarRoom()
             }
-            .navigationDestination(for: AppsRoute.self) { _ in AppsPage().holdsWhileMoving("apps") }
+            .navigationDestination(for: AppsRoute.self) { _ in AppsPage().holdsWhileMoving("apps").tabBarRoom() }
             .navigationDestination(for: ManagePage.self) { page in
                 Group {
                     switch page {
@@ -41,7 +41,7 @@ struct SettingsPages: ViewModifier {
                     case .settings: ManageSettingsView(store: store)
                     case .connection: ConnectionView()
                     }
-                }.holdsWhileMoving("manage")
+                }.holdsWhileMoving("manage").tabBarRoom()
             }
             // For the build's film where touches can't reach: Settings pushed and popped, then TV settings, at a finger's pace.
             .onAppear {
