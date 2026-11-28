@@ -290,10 +290,16 @@ jobs:
           STEPS="landscape:8 shot:2 portrait:6 shot:2" film posture-artist 1 24 -tab 0 -pose artist
           # Postures changed live. Folded on You, turned sideways and back: the outer display filmed.
           STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-outer 1 22 -tab 0
+          # Folded on Start (home's panorama), turned sideways and back (11-27: "when I fold in app").
+          STEPS="shot:4 landscape:6 shot:2 portrait:6 shot:2" film posture-home 1 24 -hub home
           # Opened upright on Charts and scrolled, turned flat, half folded, flat again, upright: the inner display filmed
           # from open (recording it folded gives an empty film).
           upright
           STEPS="slow:6 shot:2 landscape:6 shot:2 partial:6 shot:2 open:6 shot:2 portrait:6 shot:2" film posture-inner 3 44 -tab 1
+          # Start open upright, turned flat (the W8 hub), half folded, flat, upright: each posture's own layout, on its
+          # start, nothing left of the one before and nothing under the side strip (11-27).
+          upright
+          STEPS="shot:4 landscape:6 shot:2 partial:6 shot:2 open:6 shot:2 portrait:6 shot:2" film posture-home-inner 3 44 -hub home
           # Open upright: the films the gate reads in that posture.
           upright
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2" film scroll-now-portrait 3 20 -tab 0 -panel 1

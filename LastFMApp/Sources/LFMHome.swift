@@ -139,6 +139,10 @@ private struct MetroHub: View {
                     // strip's clock and wifi (Richard's open-flat shot, 11-27). The ground still runs under the strip.
                     .frame(width: max(1, g.size.width - insets.trailing), alignment: .leading)
                     .clipped()
+                    // A fold, an unfold or a turn opens the hub afresh at its start, as Windows 8 opens a hub: the pan's
+                    // offset from the posture before left a sliver of the hero at the left edge (Richard, 11-27: "when I
+                    // fold in app").
+                    .id(Int(g.size.width.rounded()))
                     // Windows 8's panning indicator instead of the system's bar (study §5): thin, at the foot, only while it pans.
                     .scrollIndicators(.hidden)
                     .onScrollPhaseChange { _, p in
