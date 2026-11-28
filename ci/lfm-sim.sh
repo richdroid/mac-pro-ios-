@@ -174,7 +174,16 @@ film() {
   stop_rec $name
   hitches $name
   lands $name
-  xcrun simctl terminate "$DEVICE" $APP || true
+  # Gone before the film ended (build 89 open flat: the Home Screen from 8 s on): the device's own log of its last
+  # minutes kept beside the film, and the crash report collected (crash_reports).
+  if ! xcrun simctl terminate "$DEVICE" $APP 2>/dev/null; then
+    echo "::error::APP GONE during film $name"
+    echo "$name" >> dist/crashed.txt
+    mkdir -p dist/crash
+    xcrun simctl spawn "$DEVICE" log show --last 2m --style compact --predicate 'process == "LastFM" OR eventMessage CONTAINS "local.macpro.LastFM"' > /tmp/crash-log.txt 2>&1
+    { grep -iE 'fatal|crash|exception|terminat|signal|jetsam|memory|watchdog|abort|assert|exited' /tmp/crash-log.txt | tail -120; echo "---- tail"; tail -150 /tmp/crash-log.txt; } > dist/crash/log-$name.txt
+    crash_reports
+  fi
   if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
 }
 
@@ -197,4 +206,19 @@ early() {
   release
   gh release upload lastfm-latest "$ZIP" stage.txt --clobber || echo "early upload failed ($1)"
   rm -f "$ZIP"
+}
+
+# The app's crash reports from the runner (the simulator's are written by the host's ReportCrash), each new one copied to
+# dist/crash/ and read out by ci/lfm-crash.py (exception, the runtime's message, the crashed thread named by atos) into
+# dist/crash/stacks.txt. Run while the app is still installed: atos reads its binary.
+crash_reports() {
+  local f b
+  mkdir -p dist/crash
+  for f in ~/Library/Logs/DiagnosticReports/LastFM*.ips ~/Library/Logs/DiagnosticReports/Retired/LastFM*.ips; do
+    [ -f "$f" ] || continue
+    b=$(basename "$f")
+    [ -f "dist/crash/$b" ] && continue
+    cp "$f" dist/crash/
+    python3 ci/lfm-crash.py "dist/crash/$b" >> dist/crash/stacks.txt 2>&1
+  done
 }
