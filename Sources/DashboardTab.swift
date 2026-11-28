@@ -92,7 +92,7 @@ struct DashboardTab: View {
         guard ready, running, let st else { return nil }
         let bed = ConsolePlace.fromBed(st, pose: model.pose)
         let name = bed ? "From bed" : "At the desk", symbol = bed ? "bed.double" : "desktopcomputer"
-        if st.glance == true { return (name, symbol, "Glance covers the boards with big, dim figures until you turn it off") }
+        if st.glance == true { return (name, symbol, "Glance is on: big, dim figures over the boards. Turn it off to step through them.") }
         guard st.board != nil else { return (name, symbol, "A page stays up until you pick a board") }
         let large = st.text == "room" ? ", in large text" : ""
         guard st.rotate == true else { return (name, symbol, "Staying on this board\(large)") }
@@ -113,16 +113,10 @@ struct DashboardTab: View {
         }
     }
     // Why a key or a switch can't be pressed now, said under it (HIG: a dimmed control says why, or isn't shown).
-    var keysWhy: String? {
-        guard ready else { return nil }   // the status line and the banner already say the Mac can't be asked
-        if seen == .lyrics { return "Lyrics are on the Mac’s screen. The boards come back when the music ends, or turn Lyrics off in Music below." }
-        if seen == .on, st?.glance == true { return "Glance is on. Turn it off in Switches to step through the boards." }
-        return nil
-    }
     var boardsWhy: String? {
         guard ready else { return "These work once the Mac answers." }
         if !running { return "Start the dashboard above to put a board on the Mac." }
-        if seen == .lyrics { return "Lyrics are on the Mac’s screen; a board would sit behind them. Turn Lyrics off in Music below, or wait for the music to end." }
+        if seen == .lyrics { return "A board would sit behind the lyrics. Turn Lyrics off in Music, or wait for the music to end." }
         return nil
     }
     // The Console's pace between boards; 45 s, its default, until it says.
@@ -198,10 +192,6 @@ struct DashboardTab: View {
             }
         }
         .disabled(!ready || (seen == .on && st?.glance == true) || seen == .lyrics)
-        if let why = keysWhy {
-            Text(why).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("remote.keysWhy")
-        }
     }
 
     // A wide key, one height everywhere on the remote; its wait is drawn in the glyph's place, so it never changes size.
@@ -286,7 +276,8 @@ struct DashboardTab: View {
             .opacity(ready && running && seen != .lyrics ? 1 : 0.4)
             .animation(.easeOut(duration: 0.2), value: seen == .lyrics)
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-        } header: { Text("Put on the Mac") } footer: { if let why = boardsWhy { Text(why) } }
+        // Always there, two lines held, so the page never moves as the reason comes and goes.
+        } header: { Text("Put on the Mac") } footer: { Text(boardsWhy ?? "The lit one is on the Mac’s screen now.").lineLimit(2, reservesSpace: true) }
     }
 
     // MARK: The switches

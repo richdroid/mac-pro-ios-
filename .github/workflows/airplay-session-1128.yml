@@ -58,19 +58,21 @@ jobs:
           # connecting, finding, lyrics, ending, ended), the Pages menu opened and a page chosen, End's question asked and
           # cancelled (Richard, 11-28: "going up upon going down", menus that don't make sense). Row heights in the log.
           dashfilm() {
-            local d=$1 x=$2 n=macpro-dash-scroll$2
+            local d=$1 x=$2 dx=$3 n=macpro-dash-scroll$2
+            down() { $D "$DEVICE" drag $dx 0.8 $dx 0.4 0.6 || echo "drag failed"; sleep 2; }
+            up() { $D "$DEVICE" drag $dx 0.35 $dx 0.8 0.6 || echo "drag failed"; sleep 2; }
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9069 -tab 6 -swipeLog YES > /dev/null
-            sleep 7; snap $d $n-0top
-            for i in 1 2 3; do $D "$DEVICE" drag 0.5 0.78 0.5 0.38 1.4 || echo "drag failed"; sleep 2.5; snap $d $n-$i-down; done
-            sleep 4; snap $d $n-4bottom-later
-            $D "$DEVICE" tap "End session" || echo "End not found"; sleep 1.5; snap $d $n-5end-ask
+            sleep 5; snap $d $n-0top
+            down; snap $d $n-1-down; down; snap $d $n-2-down; down; down; snap $d $n-3-bottom
+            up; up; snap $d $n-4-up; down; down; down; snap $d $n-5-bottom
+            $D "$DEVICE" tap "End session" || echo "End not found"; sleep 1.5; snap $d $n-6end-ask
             $D "$DEVICE" tap "Cancel" || echo "Cancel not found"; sleep 1.5
-            for i in 6 7 8; do $D "$DEVICE" drag 0.5 0.38 0.5 0.78 1.4 || echo "drag failed"; sleep 2.5; snap $d $n-$i-up; done
+            echo "$n: waiting at the bottom through the session's end"; sleep 26; snap $d $n-7ended-bottom
+            up; up; up; up; snap $d $n-8top
             $D "$DEVICE" tap "Fans & heat" || echo "Pages key not found"; sleep 1.5; snap $d $n-9pages-menu
             $D "$DEVICE" tap "Storage" || echo "Storage not found"; sleep 2.5; snap $d $n-10page-chosen
-            sleep 3
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             kill -INT $REC; wait $REC
             swipelog $n
@@ -94,11 +96,11 @@ jobs:
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/macpro-music-session$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9069 -tab 6 -pose music > /dev/null
-            sleep 32
+            sleep 68
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             kill -INT $REC; wait $REC
             sleep 45   # the mock's session starts over after 40 s quiet
-            dashfilm $d $x
+            case "$x" in -open) dashfilm $d $x 0.7;; *) dashfilm $d $x 0.06;; esac
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10

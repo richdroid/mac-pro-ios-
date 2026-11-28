@@ -19,7 +19,7 @@ import AVKit
 // An older bridge without the session route: GET /api/mac/music/now, the two switches as before. Hidden without either.
 
 struct MacSession: Decodable, Equatable {
-    struct Song: Decodable, Equatable { var title: String?; var artist: String?; var position: Double?; var duration: Double?; var playing: Bool?; var from: String? }
+    struct Song: Decodable, Equatable { var title: String?; var artist: String?; var position: Double?; var duration: Double?; var playing: Bool?; var from: String?; var cover: String? }
     struct Volume: Decodable, Equatable { var level: Int; var of: String }
     struct Ended: Decodable, Equatable { var why: String?; var speaker: String?; var speakerFree: Bool?; var speakerSay: String?; var continued: Bool?; var ago: Int? }
     var on: Bool
@@ -107,6 +107,10 @@ final class MacMusicStore: ObservableObject {
     @Published private(set) var available = UserDefaults.standard.bool(forKey: "macMusic.available")
     @Published private(set) var busy: String?
     @Published private(set) var say: String?
+    @Published private(set) var sayOK = false
+    // The song's cover, as the AirPlay sender gave it to the Mac (GET /api/mac/airplay/cover).
+    @Published private(set) var cover: Image?
+    private var coverPath: String?
     // Which control the answer is about: it's said by that control, where he is looking.
     @Published private(set) var sayFor: String?
     @Published private(set) var answered = 0
@@ -139,6 +143,8 @@ final class MacMusicStore: ObservableObject {
             if got != s { s = got }
             legacy = old
             readAt = Date()
+            let path = got.on ? got.song?.cover : nil
+            if path != coverPath { coverPath = path; await loadCover(model, path) }
         }
         let gotAudio = await a
         guard busy == nil, got != nil else { return }
@@ -147,6 +153,16 @@ final class MacMusicStore: ObservableObject {
             if sp != speaker { speaker = sp }
             UserDefaults.standard.set(sp?.id, forKey: "macMusic.speakerID"); UserDefaults.standard.set(sp?.name, forKey: "macMusic.speakerName")
         }
+    }
+    private func loadCover(_ model: AppModel, _ path: String?) async {
+        guard let path, let u = URL(string: path, relativeTo: model.api.base) else { cover = nil; return }
+        let d = try? await model.api.session.data(from: u).0
+        guard coverPath == path else { return }
+        #if os(iOS)
+        cover = d.flatMap(UIImage.init(data:)).map { Image(uiImage: $0) }
+        #else
+        cover = nil; _ = d
+        #endif
     }
     func loop(_ model: AppModel) async {
         while !Task.isCancelled {
@@ -160,7 +176,7 @@ final class MacMusicStore: ObservableObject {
         guard busy == nil else { return }
         busy = key; if let want { asked[key] = want }; say = nil; sayFor = key
         let a = try? await model.api.macDo(path, body, timeout: 45)
-        if a?.done == true { answered += 1; say = nil } else { say = a?.say ?? a?.error ?? "Couldn’t reach the Mac."; refused += 1 }
+        if a?.done == true { answered += 1; say = nil } else { say = a?.say ?? a?.error ?? "Couldn’t reach the Mac."; sayOK = false; refused += 1 }
         busy = nil
         await read(model)
         asked = [:]; volumeDraft = nil
@@ -168,7 +184,7 @@ final class MacMusicStore: ObservableObject {
         Task { try? await Task.sleep(for: .seconds(5)); if busy == nil, say == said { say = nil } }
     }
     private func tell(_ key: String, _ words: String, ok: Bool) {
-        sayFor = key; say = words
+        sayFor = key; say = words; sayOK = ok
         if ok { answered += 1 } else { refused += 1 }
         Task { try? await Task.sleep(for: .seconds(5)); if busy == nil, say == words { say = nil } }
     }
@@ -267,42 +283,89 @@ struct AirPlayPicker: UIViewRepresentable {
 struct AirPlayPicker: View { var open: Int = 0; var body: some View { Image(systemName: "airplay.audio") } }
 #endif
 
+// One card, one height, whatever the session does (designer gate on 25c4ab0: the page grew 208 pt as the card came,
+// shrank 312 pt as a session ended, and grew with every conditional line — Richard's "going up upon going down"). Every
+// row is always there; what can't be pressed now is dimmed, and the header's third line says why. Each line holds one
+// line (the header's last holds two), so nothing changes size with its value.
 struct MacMusicSection: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var store = MacMusicStore.shared
     @State private var confirmEnd = false
 
     private var s: MacSession? { store.s }
+    private var session: Bool { store.on }
+    private var ended: Bool { store.phase == "ended" || store.phase == "ending" }
     private func refusal(_ key: String) -> String? { store.sayFor == key ? store.say : nil }
-    // "HK Invoke_C20142" → "HK Invoke": the name without the serial macOS adds.
+    // "HK Invoke_C20142" → "HK Invoke": the name without the serial macOS adds, wherever it appears in a sentence.
     static func plain(_ n: String?) -> String {
-        let n = n ?? "Speaker"
-        if let r = n.range(of: #"_[0-9A-F]{4,}$"#, options: .regularExpression) { return String(n[..<r.lowerBound]) }
-        return n
+        (n ?? "Speaker").replacingOccurrences(of: #"_[0-9A-F]{4,}"#, with: "", options: .regularExpression)
     }
     private var speakerName: String { Self.plain(s?.speaker ?? s?.ended?.speaker ?? store.speaker?.name) }
+    private static func mmss(_ t: Double) -> String { let s = max(0, Int(t)); return String(format: "%d:%02d", s / 60, s % 60) }
+    private static func ran(_ s: Int) -> String { s < 60 ? "just now" : s < 3600 ? "\(s / 60) min" : "\(s / 3600) h \(s % 3600 / 60) min" }
 
-    private func row(_ title: String, _ note: String, _ symbol: String, warn: Bool = false) -> some View {
+    private func row(_ title: String, _ note: String, _ symbol: String) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).fixedSize(horizontal: false, vertical: true)
-                Text(note).font(.footnote).foregroundStyle(warn ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
-                    .lineLimit(warn ? nil : 2).truncationMode(.tail).fixedSize(horizontal: false, vertical: warn)
-                    .animation(.easeOut(duration: 0.2), value: warn)
+                Text(title).lineLimit(1)
+                Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
             }
         } icon: { Image(systemName: symbol).foregroundStyle(macBlue) }
+    }
+
+    // MARK: The header's three lines
+
+    private var title: String {
+        if session || ended, let t = s?.song?.title, !t.isEmpty, !ended { return t }
+        if ended { return "Music on the Mac" }
+        return "AirPlay to Mac Pro"
+    }
+    private var subtitle: String {
+        if session, let a = s?.song?.artist, !a.isEmpty { return a }
+        if session || ended { return speakerName }
+        return "Lyrics on the Mac, sound on \(speakerName)"
+    }
+    // The phase, or the Mac's answer to the last press for a few seconds, or why the keys are dimmed.
+    private var line: (text: String, warn: Bool) {
+        if let say = store.say, store.busy == nil { return (Self.plain(say), !store.sayOK) }
+        if store.busy == "continue" { return ("Asking the Mac what’s playing…", false) }
+        if store.busy == "end" { return ("Ending…", false) }
+        if store.s == nil { return ("Checking…", false) }
+        let ran = s?.elapsed.map { " · " + Self.ran($0 + Int(Date().timeIntervalSince(store.readAt))) } ?? ""
+        switch store.phase {
+        case "connecting": return ((s?.speakerState == "retrying" ? "Trying \(speakerName) again…" : "Connecting \(speakerName)…"), false)
+        case "starting": return ("Finding the song in Music…", false)
+        case "ending": return ("Disconnecting \(speakerName)…", false)
+        case "ended":
+            if s?.ended?.continued == true { return ("Continued on iPhone · \(speakerName) is free", false) }
+            return (s?.ended?.speakerFree == true ? "Disconnected · \(speakerName) is free" : "Ended · \(speakerName) still connected", false)
+        case "idle": return ("Nothing playing. Tap here to choose Mac Pro.", false)
+        default:
+            if let e = s?.endsIn { return ("AirPlay stopped · ends in \(e) s unless it comes back", false) }
+            var t = s?.song?.playing == false ? "Paused" : store.phase == "airplay" ? "Playing the AirPlay sound directly" : s?.lyricsOff == true ? "Playing · lyrics off" : "Lyrics on the Mac"
+            if s?.speakerState == "off" || s?.speakerState == "released" { t += " · on the Mac’s speakers" }
+            if s?.airplay == true, !store.phoneHasSong, let who = s?.sender { t += " · skip on \(who)" }
+            return (t + ran, false)
+        }
     }
 
     var body: some View {
         if store.available {
             Section {
-                if store.live && !store.legacy { live } else { idle }
+                header
+                progress
+                transport
+                volume
+                lyricsSwitch
+                speakerSwitch
+                continueRow
+                endRow
             } header: { Text("Music") }
             .disabled(model.stale)
             .haptic(.done, trigger: store.answered)
             .haptic(.warn, trigger: store.refused)
-            // For the build's shots only (-musicPress lyrics|speaker|end|endask|next): pressed once the Mac has answered, so the
-            // waiting and refusal states are seen. Never on the phone.
+            // For the build's shots only (-musicPress lyrics|speaker|end|endask|next): pressed once the Mac has answered, so
+            // the waiting and refusal states are seen. Never on the phone.
             .task {
                 guard let which = UserDefaults.standard.string(forKey: "musicPress") else { return }
                 for _ in 0..<40 where store.s == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
@@ -318,140 +381,71 @@ struct MacMusicSection: View {
         }
     }
 
-    // MARK: No session
-
-    @ViewBuilder private var idle: some View {
-        HStack(spacing: 12) {
-            row("AirPlay to Mac Pro", store.s == nil ? "Checking…" : "Lyrics on the Mac’s screen, sound on \(speakerName). Stop AirPlay and the speaker is free again.", "airplay.audio")
-            Spacer(minLength: 0)
-            AirPlayPicker().frame(width: 44, height: 44).accessibilityLabel("Choose where this iPhone plays")
-        }
-        .id("mac-music")
-        Toggle(isOn: Binding(get: { store.asked["lyrics"] ?? store.on }, set: { w in Task { await store.lyrics(model, w) } })) {
-            row("Lyrics", store.busy == "lyrics" ? "Asking the Mac…" : refusal("lyrics") ?? (store.s == nil ? "Checking…" : "What the Mac plays, full screen, through the speaker"), "quote.bubble", warn: refusal("lyrics") != nil)
-        }
-        .accessibilityIdentifier("switch.lyrics")
-        .disabled(store.s == nil || store.busy != nil)
-        if store.speaker != nil || s?.speaker != nil { speakerSwitch }
-    }
-
-    // MARK: A session
-
-    private var phaseLine: String {
-        switch store.phase {
-        case "connecting": return s?.speakerState == "retrying" ? "Trying \(speakerName) again…" : "Connecting \(speakerName)…"
-        case "starting": return "Finding the song in Music…"
-        case "lyrics": return s?.song?.playing == false ? "Paused · lyrics on the Mac" : "Lyrics on the Mac"
-        case "airplay": return "Playing the AirPlay sound · Music couldn’t take it"
-        case "ending": return "Disconnecting \(speakerName)…"
-        case "ended":
-            if s?.ended?.continued == true { return "Continued on iPhone" }
-            return s?.ended?.speakerFree == true ? "Disconnected · \(speakerName) is free" : "Ended · \(speakerName) kept"
-        default: return s?.song?.playing == false ? "Paused" : (s?.lyricsOff == true ? "Playing · lyrics off" : "Playing")
-        }
-    }
-    private var phaseSymbol: String {
-        switch store.phase {
-        case "connecting", "ending": return "hifispeaker"
-        case "ended": return s?.ended?.speakerFree == true ? "checkmark.circle.fill" : "hifispeaker"
-        default: return "music.note"
-        }
-    }
-    private static func mmss(_ t: Double) -> String { let s = max(0, Int(t)); return String(format: "%d:%02d", s / 60, s % 60) }
-    private static func ran(_ s: Int) -> String { s < 60 ? "just now" : s < 3600 ? "\(s / 60) min" : "\(s / 3600) h \(s % 3600 / 60) min" }
-
-    @ViewBuilder private var live: some View {
-        let ended = store.phase == "ended" || store.phase == "ending"
-        // Now: the song, the phase, how far in, how long the session has run.
-        VStack(alignment: .leading, spacing: 10) {
+    // The song (its cover when the Mac has one), and the line. With nothing playing, the whole row opens the system's
+    // AirPlay picker, where Mac Pro is chosen.
+    private var header: some View {
+        Button { if !session && !ended { store.pickRoute += 1 } } label: {
             HStack(alignment: .center, spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12, style: .continuous).fill(macBlue.opacity(0.16))
-                    Image(systemName: phaseSymbol).font(.title2.weight(.semibold)).foregroundStyle(store.phase == "ended" && s?.ended?.speakerFree == true ? .green : macBlue)
-                        .symbolEffect(.pulse, isActive: ["connecting", "starting", "ending"].contains(store.phase))
-                }
-                .frame(width: 56, height: 56)
-                VStack(alignment: .leading, spacing: 2) {
-                    if let t = s?.song?.title, !t.isEmpty, !ended {
-                        Text(t).font(.headline).lineLimit(2)
-                        if let a = s?.song?.artist, !a.isEmpty { Text(a).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+                    if let c = store.cover, session { c.resizable().aspectRatio(contentMode: .fill) }
+                    else {
+                        Image(systemName: session ? (["connecting", "ending"].contains(store.phase) ? "hifispeaker" : "music.note") : ended ? (s?.ended?.speakerFree == true ? "checkmark" : "hifispeaker") : "airplay.audio")
+                            .font(.title2.weight(.semibold)).foregroundStyle(macBlue)
+                            .symbolEffect(.pulse, isActive: ["connecting", "starting", "ending"].contains(store.phase))
                     }
-                    Text(phaseLine).font(ended || s?.song?.title == nil ? .headline : .footnote).foregroundStyle(ended || s?.song?.title == nil ? .primary : .secondary)
-                        .contentTransition(.opacity)
+                }
+                .frame(width: 60, height: 60).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    let l = line
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        if l.warn { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange) }
+                        Text(l.text).foregroundStyle(.secondary).lineLimit(2, reservesSpace: true).contentTransition(.opacity)
+                    }
+                    .font(.footnote)
                 }
                 Spacer(minLength: 0)
             }
-            if !ended, let d = s?.song?.duration, d > 0 { progress(d) }
-            if !ended, let e = s?.elapsed {
-                TimelineView(.periodic(from: .now, by: 30)) { c in
-                    Text("Session · \(Self.ran(e + Int(c.date.timeIntervalSince(store.readAt))))" + (s?.endsIn.map { " · ends in \($0) s unless AirPlay comes back" } ?? ""))
-                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }
-            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 4)
         }
-        .padding(.vertical, 4)
+        .buttonStyle(.plain)
+        .background { AirPlayPicker(open: store.pickRoute).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false) }
+        .accessibilityHint(session ? "" : "Opens the AirPlay picker")
         .id("mac-music")
         .animation(.easeInOut(duration: 0.25), value: store.phase)
-        if store.on {
-            transport
-            volume
-            Toggle(isOn: Binding(get: { store.asked["lyrics"] ?? (s?.lyricsOff != true) }, set: { w in Task { await store.lyrics(model, w) } })) {
-                row("Lyrics", store.busy == "lyrics" ? "Asking the Mac…" : refusal("lyrics") ?? (s?.lyricsOff == true ? "Off · the music plays on" : s?.lyrics == true ? "Full screen on the Mac" : "Coming up on the Mac"), "quote.bubble", warn: refusal("lyrics") != nil)
-            }
-            .accessibilityIdentifier("switch.lyrics")
-            .disabled(store.busy != nil)
-            speakerSwitch
-            Button { Task { await store.carryOn(model) } } label: {
-                HStack {
-                    row("Continue on iPhone", store.busy == "continue" ? "Asking the Mac…" : refusal("continue") ?? "The same song, from the same place, here", "iphone", warn: refusal("continue") != nil && store.refused > 0)
-                    Spacer(minLength: 0)
-                    if store.busy == "continue" { ProgressView() }
-                }
-            }
-            .tint(.primary)
-            .disabled(store.busy != nil)
-            .overlay { AirPlayPicker(open: store.pickRoute).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false) }
-            Button(role: .destructive) { confirmEnd = true } label: {
-                Label(store.busy == "end" ? "Ending…" : "End session", systemImage: "stop.circle")
-            }
-            .accessibilityIdentifier("music.end")
-            .disabled(store.busy != nil)
-            .confirmationDialog("End music on the Mac?", isPresented: $confirmEnd, titleVisibility: .visible) {
-                Button("End session", role: .destructive) { Task { await store.end(model) } }
-            } message: { Text("Music stops, \(speakerName) is let go and the Mac’s display goes back as it was.") }
-        }
     }
 
-    private func progress(_ d: Double) -> some View {
+    private var progress: some View {
         TimelineView(.periodic(from: .now, by: 1)) { c in
+            let d = s?.song?.duration ?? 0
+            let live = session && d > 0
             let playing = s?.song?.playing == true
-            let p = min(d, (s?.song?.position ?? 0) + (playing ? c.date.timeIntervalSince(store.readAt) : 0))
+            let p = live ? min(d, (s?.song?.position ?? 0) + (playing ? c.date.timeIntervalSince(store.readAt) : 0)) : 0
             VStack(spacing: 4) {
-                ProgressView(value: p, total: d).tint(macBlue)
-                HStack { Text(Self.mmss(p)); Spacer(); Text("-" + Self.mmss(d - p)) }.font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                ProgressView(value: p, total: max(d, 1)).tint(macBlue)
+                HStack { Text(live ? Self.mmss(p) : "–:––"); Spacer(); Text(live ? "-" + Self.mmss(d - p) : "–:––") }
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
             }
+            .opacity(live ? 1 : 0.4)
         }
+        .accessibilityHidden(!session)
     }
 
     private var transport: some View {
         let playing = s?.song?.playing == true
-        let skipsHere = s?.airplay != true || store.phoneHasSong || PhoneMusic.undecided
-        return VStack(spacing: 8) {
-            HStack(spacing: Space.gap) {
-                key("backward.fill", "Previous", "previous", enabled: skipsHere)
-                key(playing ? "pause.fill" : "play.fill", playing ? "Pause" : "Play", "playpause", big: true, enabled: true)
-                key("forward.fill", "Next", "next", enabled: skipsHere)
-            }
-            if let r = ["playpause", "next", "previous"].compactMap({ refusal($0) }).first {
-                Text(r).font(.footnote).foregroundStyle(.orange).frame(maxWidth: .infinity)
-            } else if !skipsHere {
-                Text("Skip on the device that’s AirPlaying").font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-            }
+        let skips = session && (s?.airplay != true || store.phoneHasSong || PhoneMusic.undecided)
+        return HStack(spacing: Space.gap) {
+            key("backward.fill", "Previous", "previous", enabled: skips)
+            key(playing ? "pause.fill" : "play.fill", playing ? "Pause" : "Play", "playpause", big: true, enabled: session)
+            key("forward.fill", "Next", "next", enabled: skips)
         }
         .padding(.vertical, 4)
     }
+    // The remote's own key (DashboardTab.BigKey): one height, the same fill and corners; the main one filled.
     private func key(_ symbol: String, _ label: String, _ cmd: String, big: Bool = false, enabled: Bool) -> some View {
-        // The remote's own key (DashboardTab.BigKey): one height, the same fill and corners; the main one filled.
         Button { Task { await store.transport(model, cmd) } } label: {
             Image(systemName: symbol).font(.title3.weight(.semibold))
                 .foregroundStyle(big ? Color.white : macBlue)
@@ -468,45 +462,77 @@ struct MacMusicSection: View {
         .disabled(!enabled || store.busy != nil)
     }
 
-    // Only once the Mac has said its volume: a slider that can't move isn't shown.
-    @ViewBuilder private var volume: some View {
-        if let v = s?.volume { volumeRow(v) }
-    }
-    private func volumeRow(_ v: MacSession.Volume) -> some View {
-        HStack(spacing: 10) {
+    private var volume: some View {
+        let v = s?.volume
+        return HStack(spacing: 10) {
             Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.footnote)
-            Slider(value: Binding(get: { store.volumeDraft ?? Double(v.level) }, set: { store.volumeDraft = $0 }), in: 0...100) { editing in
+            Slider(value: Binding(get: { store.volumeDraft ?? Double(v?.level ?? 0) }, set: { store.volumeDraft = $0 }), in: 0...100) { editing in
                 if !editing, let d = store.volumeDraft { Task { await store.setVolume(model, d) } }
             }
             .tint(macBlue)
-            .accessibilityLabel(v.of == "music" ? "Music volume on the Mac" : "Mac volume")
+            .accessibilityLabel(v?.of == "music" ? "Music volume on the Mac" : "Mac volume")
             Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).font(.footnote)
         }
         .padding(.vertical, 4)
+        .disabled(!session || v == nil || store.busy != nil)
+        .opacity(session && v != nil ? 1 : 0.4)
+    }
+
+    private var lyricsSwitch: some View {
+        let on = session ? (s?.lyricsOff != true) : false
+        let note = store.busy == "lyrics" ? "Asking the Mac…"
+            : session ? (s?.lyricsOff == true ? "Off · the music plays on" : s?.lyrics == true ? "Full screen on the Mac" : "Coming up on the Mac")
+            : "Starts the speaker and lyrics for what the Mac plays"
+        return Toggle(isOn: Binding(get: { store.asked["lyrics"] ?? on }, set: { w in Task { await store.lyrics(model, w) } })) {
+            row("Lyrics", note, "quote.bubble")
+        }
+        .accessibilityIdentifier("switch.lyrics")
+        .disabled(store.s == nil || store.busy != nil || ended)
     }
 
     private var speakerSwitch: some View {
-        let connected = s?.on == true ? (s?.speakerConnected == true) : (store.speaker?.connected == true)
+        let connected = session ? (s?.speakerConnected == true) : (store.speaker?.connected == true)
         let note: String = {
             if store.busy == "speaker" { return "Asking the Mac…" }
-            if let r = refusal("speaker") { return r }
-            if s?.on == true {
+            if session {
                 switch s?.speakerState {
                 case "connecting": return "Connecting…"
                 case "retrying": return "Trying again…"
-                case "released": return "Let go · the Mac’s own speakers play"
-                case "off": return s?.speakerSay ?? "Not connected"
+                case "released": return "Let go · playing on the Mac’s speakers"
+                case "off": return "Not connected · playing on the Mac’s speakers"
                 default: return "Connected · the music plays here"
                 }
             }
-            if store.speaker?.connected == nil && s == nil { return "Checking…" }
+            if store.speaker?.connected == nil { return "Free for your other devices" }
             return connected ? "Connected to the Mac" : "Free for your other devices"
         }()
         return Toggle(isOn: Binding(get: { store.asked["speaker"] ?? connected }, set: { w in Task { await store.speaker(model, w) } })) {
-            row(speakerName, note, "hifispeaker", warn: refusal("speaker") != nil || (s?.on == true && s?.speakerState == "off"))
+            row(speakerName, note, "hifispeaker")
         }
         .accessibilityIdentifier("switch.speaker")
-        .disabled(store.busy != nil || ["connecting", "retrying"].contains(s?.speakerState ?? ""))
+        .disabled(store.s == nil || store.busy != nil || ended || ["connecting", "retrying"].contains(s?.speakerState ?? ""))
+    }
+
+    // An action that goes somewhere, drawn as "See the Mac's screen" is: blue, with the chevron.
+    private var continueRow: some View {
+        Button { Task { await store.carryOn(model) } } label: {
+            HStack {
+                Label("Continue on iPhone", systemImage: "iphone")
+                Spacer(minLength: 8)
+                if store.busy == "continue" { ProgressView().controlSize(.small) } else { RowChevron() }
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityIdentifier("music.continue")
+        .disabled(!session || store.busy != nil)
+    }
+    private var endRow: some View {
+        Button(role: .destructive) { confirmEnd = true } label: { Label("End session", systemImage: "stop.circle") }
+            .accessibilityIdentifier("music.end")
+            .disabled(!session || store.busy != nil)
+            .confirmationDialog("End the session?", isPresented: $confirmEnd, titleVisibility: .visible) {
+                Button("End session", role: .destructive) { Task { await store.end(model) } }
+            } message: { Text("Music stops, \(speakerName) is let go and the Mac’s display goes back as it was.") }
     }
 }
 
