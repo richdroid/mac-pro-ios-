@@ -1264,7 +1264,8 @@ struct Hero: View {
     @EnvironmentObject var model: AppModel
     let s: Status
     @Environment(\.paneLayout) private var panes
-    // In one column, the Mac's portrait sits beside its name, a third the height, so the figures
+    @Environment(\.duoTabsSide) private var sideTabs
+    // Folded (one column beside the side strip), the Mac's portrait sits beside its name, a third the height, so the figures
     // he opens Status for start above the fold (Richard, 2026-11-21: the big picture pushed them below the screen).
     private var chips: some View {
         // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
@@ -1273,7 +1274,9 @@ struct Hero: View {
         }
     }
     @ViewBuilder var body: some View {
-        if !panes {
+        // Open upright the big portrait stays (Richard, 2026-11-27: "the mac pro image is now too small … revert that one
+        // change"; 256ff29 had widened the small one from folded to every single column).
+        if sideTabs && !panes {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 14) {
                     Image("MacPro").resizable().scaledToFit().frame(height: 72)
