@@ -2,7 +2,8 @@ name: Mac Pro integration check (macpro-1128)
 # Branch-only check for macpro-1128, the integration of mp-systabs-1128 (the system's TabView, macOS a row on Status),
 # airplay-session-1128 (the Dashboard's Music card) and mac-notifs-1128 (the Mac's notifications on Status), with the
 # systabs gate's three findings worked on: a drag off the tab in front refused as a second tap (ReselectGuard), cold
-# launches filmed with the moment the app's root first appeared, and the macOS page made ahead (PageWarm).
+# launches filmed with the moment the app's root first appeared, and the macOS page made ahead (PageWarm). Round 2: the
+# gate's three Mac Pro faults fixed, pushed pages in both apps, the scripted taps corrected, 322 cold launches beside ours.
 # Every tab of the Mac Pro app and Mint Remote in every posture; films of tab switching and the strip drag, cold launches,
 # Status → macOS, the notifications list and its swipe, the Dashboard scrolled through a mock session, the Music card's
 # states. Published to the macpro-1128-shots prerelease. Never runs on main; removed before the branch merges.
@@ -38,6 +39,15 @@ jobs:
             xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
               -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
           done
+      - name: Build 322 (main 25060c8) for the cold-launch comparison
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          git clone -q https://github.com/richdroid/mac-pro-ios-.git /tmp/b322 && cd /tmp/b322 && git checkout -q 25060c8ee027103e39b72d9ca82947ac5883833d
+          swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset && xcodegen generate
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath /tmp/b322/build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1
       - name: Shots and films
         continue-on-error: true
         timeout-minutes: 130
@@ -104,6 +114,9 @@ jobs:
               set -- $t1; $D "$DEVICE" drag $1 $2 $1 $(echo "$2 - 0.25" | bc -l) 0.3; sleep 1.5; snap $d $n-stripdrag-after
               # Slower, and further: a finger that lingers on the bar before it leaves.
               $D "$DEVICE" drag $1 $2 $1 $(echo "$2 - 0.4" | bc -l) 0.8; sleep 1.5; snap $d $n-stripdrag2-after
+              # Sideways off a side strip (folded, on its side, open flat): the finger leaves the strip into the page.
+              case "$1" in 0.[0-2]*) $D "$DEVICE" drag $1 $2 $(echo "$1 + 0.35" | bc -l) $2 0.4;; 0.[7-9]*) $D "$DEVICE" drag $1 $2 $(echo "$1 - 0.35" | bc -l) $2 0.4;; esac
+              sleep 1.5; snap $d $n-stripdrag3-after
               $D "$DEVICE" drag 0.5 0.7 0.5 0.45 0.5; sleep 1.5; snap $d $n-retap-before
               $D "$DEVICE" touch $t1 0.08; sleep 1.5; snap $d $n-retap-after
             fi
@@ -185,6 +198,16 @@ jobs:
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" $MAC || true
           }
+          # A shot 1.5 s after the app's root first appears (BackFinder's first write), for states that last only seconds.
+          rootshot() {
+            local n=$1 d=$2 port=9001 c k; shift 2
+            if [ "$1" = "@" ]; then port=$2; shift 2; fi
+            c=$(caches $MAC); rm -f "$c/back-at.txt"
+            xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:$port -findBack YES "$@" > /dev/null
+            for k in $(seq 1 80); do [ -f "$c/back-at.txt" ] && break; sleep 0.25; done
+            sleep 1.5; snap $d macpro-$n
+            xcrun simctl terminate "$DEVICE" $MAC || true
+          }
           shot() {
             local n=$1 d=$2 wait=$3 port=9001; shift 3
             if [ "$1" = "@" ]; then port=$2; shift 2; fi
@@ -198,7 +221,22 @@ jobs:
             local d=$1 x=$2
             shot notifs$x $d 9 -tab 0 -pose notifs
             shot notifs-empty$x $d 9 -tab 0 -pose notifsempty
-            film notifs-swipe$x $d 3 "drag 0.8 0.26 0.45 0.26 0.8;drag 0.85 0.26 0.05 0.26 0.2;tap \"Dismiss All\"" -tab 0 -pose notifs
+            local n=macpro-notifs-swipe$x y
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:9001 -findBack YES -tab 0 -pose notifs > /dev/null
+            sleep 10
+            y=$(backlog $MAC | awk '$1 == "spot" && $2 == "notif0" {print $4}' | head -1); echo "$n first row at y=$y"
+            snap $d $n-0list
+            if [ -n "$y" ]; then
+              $D "$DEVICE" drag 0.8 $y 0.5 $y 0.8; sleep 1.5; snap $d $n-1pulled
+              $D "$DEVICE" touch 0.3 0.05 0.08; sleep 1.2
+              $D "$DEVICE" drag 0.85 $y 0.05 $y 0.2; sleep 1.5; snap $d $n-2swiped
+            fi
+            $D "$DEVICE" tap "Dismiss All" || echo "Dismiss All not found"; sleep 0.4; snap $d $n-3clearing; sleep 2; snap $d $n-4empty
+            kill -INT $REC; wait $REC
+            backlog $MAC > dist/$n-back.log
+            xcrun simctl terminate "$DEVICE" $MAC || true
             sleep 22
             film notifs-fromstatus$x $d 3 "tap mac-notifs" -tab 0
           }
@@ -213,13 +251,14 @@ jobs:
             xcrun simctl launch "$DEVICE" $MAC -address http://127.0.0.1:9069 -tab 6 -swipeLog YES > /dev/null
             sleep 5; snap $d $n-0top
             down; snap $d $n-1-down; down; snap $d $n-2-down; down; down; snap $d $n-3-bottom
+            # End asked while the session is on, and let go by a tap outside its question (it has no Cancel).
+            $D "$DEVICE" tap music.end || echo "End not found"; sleep 1.5; snap $d $n-6end-ask
+            $D "$DEVICE" touch 0.5 0.12 0.08; sleep 1.5; snap $d $n-6b-end-kept
             up; up; snap $d $n-4-up; down; down; down; snap $d $n-5-bottom
-            $D "$DEVICE" tap "End session" || echo "End not found"; sleep 1.5; snap $d $n-6end-ask
-            $D "$DEVICE" tap "Cancel" || echo "Cancel not found"; sleep 1.5
             echo "$n: waiting at the bottom through the session's end"; sleep 26; snap $d $n-7ended-bottom
             up; up; up; up; snap $d $n-8top
-            $D "$DEVICE" tap "Fans & heat" || echo "Pages key not found"; sleep 1.5; snap $d $n-9pages-menu
-            $D "$DEVICE" tap "Storage" || echo "Storage not found"; sleep 2.5; snap $d $n-10page-chosen
+            $D "$DEVICE" tap board.pages || echo "Pages key not found"; sleep 1.5; snap $d $n-9pages-menu
+            $D "$DEVICE" tap "Fans & heat" || echo "Fans & heat not found"; sleep 2.5; snap $d $n-10page-chosen
             xcrun simctl terminate "$DEVICE" $MAC || true
             kill -INT $REC; wait $REC
             swipelog $MAC $n
@@ -234,7 +273,7 @@ jobs:
             shot music-nospeaker$x $d 9 @ 9063 -tab 6 -pose music
             shot music-long-busy$x $d 11 @ 9064 -tab 6 -pose music -musicPress lyrics
             shot music-refused$x $d 11 @ 9065 -tab 6 -pose music -musicPress next
-            shot music-cold$x $d 3 @ 9066 -tab 6 -pose music
+            rootshot music-cold$x $d @ 9066 -tab 6 -pose music
             shot music-ended$x $d 9 @ 9067 -tab 6 -pose music
             shot music-other-sender$x $d 9 @ 9068 -tab 6 -pose music
             shot music-end-confirm$x $d 11 @ 9061 -tab 6 -pose music -musicPress endask
@@ -255,6 +294,77 @@ jobs:
             tabshots $MAC $d -island$x "0 6"
             xcrun simctl terminate "$DEVICE" $TV || true
           }
+          # Pages pushed over the system's tabs, both apps (gate on macpro-1128: none were shot on the new tab container).
+          pushed() {
+            local d=$1 x=$2
+            shot pushed-session$x $d 9 -tab 2 -pose session
+            shot pushed-history$x $d 8 -tab 0 -openHistory cpu
+            shot pushed-processes$x $d 8 -tab 0 -openProcesses cpu
+            shot pushed-versions$x $d 9 -tab 1 -pose versions
+            shot pushed-settings$x $d 8 -tab 9
+            shot pushed-screen$x $d 8 -tab 0 -pose screen -openScreen YES
+            shot pushed-notifs-status0$x $d 8 @ 9061 -tab 0
+            tvshot pushed-details$x $d 13 $M -tab 1 -pose details
+            tvshot pushed-streams$x $d 9 $M -tab 1 -pose streams
+            tvshot pushed-browse$x $d 9 $M -tab 1 -pose browse
+            tvshot pushed-tvsettings$x $d 9 $M -tab 0 -pose tvsettings
+            tvshot pushed-tvapps$x $d 9 $M -tab 0 -pose tvapps
+            curl -s $M/real/reset > /dev/null; tvshot pushed-realseries$x $d 14 $M/real -tab 3 -pose realseries
+          }
+          tvshot() {
+            local n=$1 d=$2 wait=$3 a=$4; shift 4
+            xcrun simctl launch "$DEVICE" $TV -address $a "$@" > /dev/null
+            sleep $wait; snap $d tv-$n
+            xcrun simctl terminate "$DEVICE" $TV || true
+          }
+          # Mint Remote's pick and a pushed page taken back, filmed (open upright): the first stream tapped on the streams
+          # page (the flick's quick way), then a title's page swiped back from the edge and, launched again, Back tapped.
+          tvfilms() {
+            local d=$1 x=$2 n
+            n=tv-flicktap$x
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $TV -address $M/fnormal -tab 1 -pose flick-tap > /dev/null
+            sleep 16; snap $d $n-end
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" $TV || true
+            navfilm tv-back-details$x $d $TV -tab 1 -pose details
+          }
+          navfilm() {
+            local n=$1 d=$2 b=$3 at; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $b -address $(addr $b) -findBack YES -swipeLog YES "$@" > /dev/null
+            sleep 13; snap $d $n-1page
+            $D "$DEVICE" drag 0.01 0.5 0.92 0.5 2.6 & DR=$!
+            sleep 1.7; snap $d $n-2swipe-mid; wait $DR
+            sleep 2.5; snap $d $n-3swipe-after
+            xcrun simctl terminate "$DEVICE" $b || true
+            sleep 1
+            xcrun simctl launch "$DEVICE" $b -address $(addr $b) -findBack YES -swipeLog YES "$@" > /dev/null
+            sleep 13
+            at=$(backat $b); echo "$n tap Back at $at"
+            $D "$DEVICE" touch $at 0.08 || echo "tap failed"
+            sleep 0.3; snap $d $n-4tap-mid; sleep 2.5; snap $d $n-5tap-after
+            backlog $b > dist/$n-back.log
+            swipelog $b $n
+            xcrun simctl terminate "$DEVICE" $b || true
+            kill -INT $REC; wait $REC
+          }
+          # Cold launches of build 322 and of this branch, the same tabs in turn, filmed: the time to the first frame of each,
+          # set side by side (gate on macpro-1128: no 322 timing to show the launch is no slower).
+          coldab() {
+            local d=$1 x=$2
+            if [ -d /tmp/b322/build-sim/Build/Products/Debug-iphonesimulator/MacPro.app ]; then
+              xcrun simctl install "$DEVICE" /tmp/b322/build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+              xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) > /dev/null; sleep 12; xcrun simctl terminate "$DEVICE" $MAC
+              coldfilm macpro-cold322$x $d $MAC "0 2 6" 2
+              xcrun simctl install "$DEVICE" $P/MacPro.app
+              xcrun simctl launch "$DEVICE" $MAC -address $(addr $MAC) > /dev/null; sleep 12; xcrun simctl terminate "$DEVICE" $MAC
+              coldfilm macpro-coldnew$x $d $MAC "0 2 6" 2
+            else echo "no 322 build"; fi
+          }
           # Everything in one posture (display, suffix). Mac Pro tab 4, the old macOS tab, opens the macOS page on Status.
           posture() {
             local d=$1 x=$2
@@ -262,11 +372,11 @@ jobs:
             tabshots $TV $d $x "3 0 6"
             taptest macpro-taps$x $d $MAC -tab 0
             taptest tv-taps$x $d $TV -tab 3
-            macosfilm $d $x
+            pushed $d $x
           }
           date
           FALLBACK="0.895 0.292"; posture 1 -folded
-          coldfilm macpro-cold-folded 1 $MAC "0 1 2 5 6" 2
+          macosfilm 1 -folded
           notifs 1 -folded
           music 1 -folded 0.06
           date
@@ -276,7 +386,6 @@ jobs:
             tabshots $MAC 1 -side$R "0 1 2 5 6"
             tabshots $TV 1 -side$R "3 0 6"
             taptest macpro-taps-side$R 1 $MAC -tab 0
-            macosfilm 1 -side$R
           done
           $D "$DEVICE" rotate 1 || true; sleep 5
           date
@@ -293,16 +402,14 @@ jobs:
           $D "$DEVICE" rotate 1 || true; sleep 5
           # Open upright, the posture he holds: everything.
           FALLBACK="0.065 0.049"; posture 3 -upright
-          coldfilm macpro-cold-upright 3 $MAC "0 1 2 5 6" 3
-          coldfilm tv-cold-upright 3 $TV "3 0 6" 2
+          coldab 3 -upright
+          tvfilms 3 -upright
           notifs 3 -upright
           music 3 -upright 0.06
           islandshots 3 -upright
           date
           $D "$DEVICE" rotate 3 || true; sleep 5
           FALLBACK="0.948 0.222"; posture 3 -flat
-          coldfilm macpro-cold-flat 3 $MAC "0 1 2 5 6" 3
-          coldfilm tv-cold-flat 3 $TV "3 0 6" 2
           notifs 3 -flat
           music 3 -flat 0.7
           islandshots 3 -flat
