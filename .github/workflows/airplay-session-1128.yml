@@ -52,6 +52,30 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
+          snap() { xcrun simctl io "$DEVICE" screenshot --display=$1 dist/$2.png > /dev/null 2>&1; }
+          swipelog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0; [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/$1-swipe.log; }
+          # The Dashboard scrolled top to bottom and back while the Music card goes through a whole session (mock 9069:
+          # connecting, finding, lyrics, ending, ended), the Pages menu opened and a page chosen, End's question asked and
+          # cancelled (Richard, 11-28: "going up upon going down", menus that don't make sense). Row heights in the log.
+          dashfilm() {
+            local d=$1 x=$2 n=macpro-dash-scroll$2
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9069 -tab 6 -swipeLog YES > /dev/null
+            sleep 7; snap $d $n-0top
+            for i in 1 2 3; do $D "$DEVICE" drag 0.5 0.78 0.5 0.38 1.4 || echo "drag failed"; sleep 2.5; snap $d $n-$i-down; done
+            sleep 4; snap $d $n-4bottom-later
+            $D "$DEVICE" tap "End session" || echo "End not found"; sleep 1.5; snap $d $n-5end-ask
+            $D "$DEVICE" tap "Cancel" || echo "Cancel not found"; sleep 1.5
+            for i in 6 7 8; do $D "$DEVICE" drag 0.5 0.38 0.5 0.78 1.4 || echo "drag failed"; sleep 2.5; snap $d $n-$i-up; done
+            $D "$DEVICE" tap "Fans & heat" || echo "Pages key not found"; sleep 1.5; snap $d $n-9pages-menu
+            $D "$DEVICE" tap "Storage" || echo "Storage not found"; sleep 2.5; snap $d $n-10page-chosen
+            sleep 3
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            kill -INT $REC; wait $REC
+            swipelog $n
+            sleep 45   # the mock's session starts over after 40 s quiet
+          }
           # Every tab and its main pages, the reach and sign-in states (11-25 debug pass: broken states, slow loads, spacing).
           poses() {
             local d=$1 x=$2
@@ -74,6 +98,7 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             kill -INT $REC; wait $REC
             sleep 45   # the mock's session starts over after 40 s quiet
+            dashfilm $d $x
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10

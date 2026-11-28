@@ -436,8 +436,8 @@ struct MacMusicSection: View {
     private var transport: some View {
         let playing = s?.song?.playing == true
         let skipsHere = s?.airplay != true || store.phoneHasSong || PhoneMusic.undecided
-        return VStack(spacing: 6) {
-            HStack(spacing: 0) {
+        return VStack(spacing: 8) {
+            HStack(spacing: Space.gap) {
                 key("backward.fill", "Previous", "previous", enabled: skipsHere)
                 key(playing ? "pause.fill" : "play.fill", playing ? "Pause" : "Play", "playpause", big: true, enabled: true)
                 key("forward.fill", "Next", "next", enabled: skipsHere)
@@ -448,30 +448,38 @@ struct MacMusicSection: View {
                 Text("Skip on the device that’s AirPlaying").font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity)
             }
         }
-        .buttonStyle(.borderless)
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
     private func key(_ symbol: String, _ label: String, _ cmd: String, big: Bool = false, enabled: Bool) -> some View {
+        // The remote's own key (DashboardTab.BigKey): one height, the same fill and corners; the main one filled.
         Button { Task { await store.transport(model, cmd) } } label: {
-            Image(systemName: symbol).font(big ? .title.weight(.semibold) : .title3.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 52)
+            Image(systemName: symbol).font(.title3.weight(.semibold))
+                .foregroundStyle(big ? Color.white : macBlue)
+                .opacity(store.busy == cmd ? 0 : 1)
+                .overlay { if store.busy == cmd { ProgressView().controlSize(.small).tint(big ? .white : macBlue) } }
+                .frame(maxWidth: .infinity).frame(height: Space.key)
+                .background(big ? macBlue : Color(white: 0.17), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .opacity(enabled && store.busy == nil ? 1 : 0.4)
                 .contentShape(Rectangle())
         }
+        .buttonStyle(PressStyle())
         .accessibilityLabel(label)
         .accessibilityIdentifier("music.\(cmd)")
         .disabled(!enabled || store.busy != nil)
     }
 
-    private var volume: some View {
-        let v = s?.volume
-        return HStack(spacing: 10) {
+    // Only once the Mac has said its volume: a slider that can't move isn't shown.
+    @ViewBuilder private var volume: some View {
+        if let v = s?.volume { volumeRow(v) }
+    }
+    private func volumeRow(_ v: MacSession.Volume) -> some View {
+        HStack(spacing: 10) {
             Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.footnote)
-            Slider(value: Binding(get: { store.volumeDraft ?? Double(v?.level ?? 50) }, set: { store.volumeDraft = $0 }), in: 0...100) { editing in
+            Slider(value: Binding(get: { store.volumeDraft ?? Double(v.level) }, set: { store.volumeDraft = $0 }), in: 0...100) { editing in
                 if !editing, let d = store.volumeDraft { Task { await store.setVolume(model, d) } }
             }
             .tint(macBlue)
-            .disabled(v == nil)
-            .accessibilityLabel(v?.of == "music" ? "Music volume on the Mac" : "Mac volume")
+            .accessibilityLabel(v.of == "music" ? "Music volume on the Mac" : "Mac volume")
             Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).font(.footnote)
         }
         .padding(.vertical, 4)

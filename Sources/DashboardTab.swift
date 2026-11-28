@@ -103,6 +103,28 @@ struct DashboardTab: View {
         if turns.count == 1 { return (name, symbol, "Only \(turns[0]) is in the turns\(large)") }
         return (name, symbol, "\(turns.dropLast().joined(separator: ", ")) and \(turns.last ?? "") take turns\(every)\(large)")
     }
+    // Where the mode line would be, when there's no mode to say: why.
+    var modeAbsent: String {
+        switch seen {
+        case .looking: return "Looking at the Mac…"
+        case .unsupported: return "This Mac’s bridge has no dashboard remote."
+        case .away: return "The Mac can’t be asked right now."
+        default: return "The dashboard isn’t running. Start it to pick boards."
+        }
+    }
+    // Why a key or a switch can't be pressed now, said under it (HIG: a dimmed control says why, or isn't shown).
+    var keysWhy: String? {
+        guard ready else { return nil }   // the status line and the banner already say the Mac can't be asked
+        if seen == .lyrics { return "Lyrics are on the Mac’s screen. The boards come back when the music ends, or turn Lyrics off in Music below." }
+        if seen == .on, st?.glance == true { return "Glance is on. Turn it off in Switches to step through the boards." }
+        return nil
+    }
+    var boardsWhy: String? {
+        guard ready else { return "These work once the Mac answers." }
+        if !running { return "Start the dashboard above to put a board on the Mac." }
+        if seen == .lyrics { return "Lyrics are on the Mac’s screen; a board would sit behind them. Turn Lyrics off in Music below, or wait for the music to end." }
+        return nil
+    }
     // The Console's pace between boards; 45 s, its default, until it says.
     var secs: Int { st?.rotateSecs.map { $0 > 0 ? Int($0) : 45 } ?? 45 }
     // The board before or after the one up now. The Console steps through its own turns (board next|previous) and
@@ -129,8 +151,10 @@ struct DashboardTab: View {
                             if status.busy { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
                             else if remote.said != nil && remote.fail == nil { Image(systemName: "checkmark.circle.fill").font(.footnote).foregroundStyle(.green).frame(width: 12, height: 12) }
                             else { Circle().fill(status.color == .secondary ? Color(white: 0.45) : status.color).frame(width: 8, height: 8).frame(width: 12, height: 12) }
+                            // One line, always: it changes with every answer and poll, and a second line coming and going
+                            // moved the whole page under his thumb (Richard, 11-28: "going up upon going down").
                             Text(status.say).font(.subheadline).foregroundStyle(status.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
-                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(1).minimumScaleFactor(0.75)
                         }
                         .accessibilityIdentifier("remote.status")
                     }
@@ -138,14 +162,19 @@ struct DashboardTab: View {
                 }
                 .accessibilityElement(children: .combine)
                 .animation(Motion.quick, value: status.say)
-                if let m = mode {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // Always there, two lines held for it, so the card is one height whatever the Mac says (it came and went
+                // with each moment the Mac couldn't be asked, and the page jumped).
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let m = mode {
                         Label(m.name, systemImage: m.symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).labelStyle(.titleAndIcon).fixedSize()
-                        Text(m.say).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(m.say).font(.footnote).foregroundStyle(.secondary).lineLimit(2, reservesSpace: true)
+                    } else {
+                        Text(modeAbsent).font(.footnote).foregroundStyle(.secondary).lineLimit(2, reservesSpace: true)
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("remote.mode")
+                    Spacer(minLength: 0)
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("remote.mode")
                 keys
             }
             .padding(Space.card)
@@ -169,6 +198,10 @@ struct DashboardTab: View {
             }
         }
         .disabled(!ready || (seen == .on && st?.glance == true) || seen == .lyrics)
+        if let why = keysWhy {
+            Text(why).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("remote.keysWhy")
+        }
     }
 
     // A wide key, one height everywhere on the remote; its wait is drawn in the glyph's place, so it never changes size.
@@ -253,7 +286,7 @@ struct DashboardTab: View {
             .opacity(ready && running && seen != .lyrics ? 1 : 0.4)
             .animation(.easeOut(duration: 0.2), value: seen == .lyrics)
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-        } header: { Text("Put on the Mac") }
+        } header: { Text("Put on the Mac") } footer: { if let why = boardsWhy { Text(why) } }
     }
 
     // MARK: The switches
@@ -292,7 +325,10 @@ struct DashboardTab: View {
                 HStack { Label("See the Mac’s screen", systemImage: "macwindow"); Spacer(minLength: 8); RowChevron() }.contentShape(Rectangle())
             }
             .accessibilityIdentifier("dash.screen")
-        } header: { Text("Switches") }
+        } header: { Text("Switches") } footer: {
+            if !ready, remote.read { Text("These work once the Mac answers.") }
+            else if ready && !running { Text("Take turns, Large text and Glance change the dashboard, so they work while it runs. Turn On screen on to start it.") }
+        }
         .disabled(!ready)
     }
 }
