@@ -111,7 +111,8 @@ struct StoryFigures: View {
     @ViewBuilder private func grid(_ st: Story?) -> some View {
             if let st, st.plays > 0 {
                 FigureGrid(items: [
-                    st.rank.map { ("#\(number($0))", "of your \(number(st.of)) \(noun)") },
+                    // "of 1,071 artists": "of your …" was the longest label and set one column folded (run 88's artist page).
+                    st.rank.map { ("#\(number($0))", "of \(number(st.of)) \(noun)") },
                     st.first.map { (dateShort($0), "first played") },
                     st.last.map { (ago($0), "last played") },
                     st.secs.map { (duration($0), "listening") },

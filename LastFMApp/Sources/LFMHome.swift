@@ -132,9 +132,13 @@ private struct MetroHub: View {
                                 }
                             }
                         }
-                        .padding(.trailing, 120 * u + insets.trailing)
+                        .padding(.trailing, 120 * u)
                         .frame(height: H, alignment: .topLeading)
                     }
+                    // The hub pans only left of the side strip, clipped there: "profile" in the menu group ran under the
+                    // strip's clock and wifi (Richard's open-flat shot, 11-27). The ground still runs under the strip.
+                    .frame(width: max(1, g.size.width - insets.trailing), alignment: .leading)
+                    .clipped()
                     // Windows 8's panning indicator instead of the system's bar (study §5): thin, at the foot, only while it pans.
                     .scrollIndicators(.hidden)
                     .onScrollPhaseChange { _, p in
