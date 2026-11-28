@@ -564,9 +564,10 @@ private struct PivotHeaders: View {
 }
 
 extension Pager {
-    // WP7's page title, 72 px of a 480 px screen, stepped down until the whole of it fits the page (margins both sides).
+    // WP7's page title, 72 px of a 480 px screen and a step over the pivot's 64 px names (run 86 drew it at 47 pt under
+    // 58 pt names, the order upside down), stepped down until the whole of it fits the page (margins both sides).
     @MainActor static func heroFit(_ text: String, _ pw: CGFloat, _ k: CGFloat) -> CGFloat {
-        let want = min(72, max(44, pw * 0.15)) * min(max(k, 0.9), 1.2)
+        let want = min(84, max(64, pw * 0.2)) * min(max(k, 0.9), 1.2)
         let room = pw - S.margin * 2
         let w = textWidth(text.lowercased(), size: want, tracking: -1.2, weight: -0.4, face: Z.lower())
         return w > room && w > 0 ? max(26, floor(want * room / w)) : want

@@ -131,6 +131,9 @@ struct PageHead<Byline: View>: View {
     let story: Story?
     let noun: String
     var extra: [(String, String)] = []
+    // The artist's page has no cover in front (WP7's and Zune HD's artist pages: the photo is the ground, the name is the
+    // title, the lists are the page): his figures lead under the name.
+    var cover = true
     @ViewBuilder let byline: () -> Byline
     @Environment(\.paneLayout) private var pane
     @Environment(\.pageWidth) private var width
@@ -146,7 +149,12 @@ struct PageHead<Byline: View>: View {
                 HubTitle(text: title, size: 72)
             }
             Group {
-                if wide && !pane {
+                if !cover {
+                    VStack(alignment: .leading, spacing: S.inner) {
+                        byline()
+                        figures
+                    }
+                } else if wide && !pane {
                     // Beside the cover: what it is and his plays; under it, the rest across the page's width (one
                     // column of seven beside it left 300 pt of nothing under the cover; review 2026-11-14, item 10).
                     VStack(alignment: .leading, spacing: S.section) {
@@ -269,14 +277,17 @@ struct ArtistPage: View {
         // The artist's photo or a plain dark ground, never the cover blown up behind the cover (Richard, 11-27 on the song
         // page: "this doesn't work either"; WP backgrounds ruling: the artist's photo, never the foreground art again).
         PageLayout(ref: ArtistPhotos.shared.photo(name)) { wide in
+            // Richard, 11-27: "the artist page looks off". WP7/Zune's artist page: the name as the title (cut at the strip),
+            // the photo as the ground, his own figures first (his plays, rank, first and last listened, time), then his
+            // history with them, the songs, the albums, about, and who's related, as plain lists on the 12/24 grid.
             PageHead(title: name, ref: ref, wide: wide, story: story, noun: "artists", extra: [
                 info?.listeners.map { (compact($0), "listeners") },
                 info?.plays.map { (compact($0), "plays on Last.fm") },
-            ].compactMap { $0 }) { EmptyView() }
+            ].compactMap { $0 }, cover: false) { EmptyView() }
         } rest: {
             if let st = story, st.plays > 0 { YourTide(story: st, tint: ArtStore.shared.palette(ref)?.vivid.color ?? S.accent) }
             topTracks
-            if let st = story { Panorama(title: "your albums", items: st.albums) }
+            if let st = story { Panorama(title: "albums", items: st.albums) }
             about
             // Zune's Mixview, where it began: the artist in the middle, the eight most like them around, his plays as the
             // lines; the rest of Last.fm's list after it, so nothing the row showed is lost.
@@ -291,9 +302,8 @@ struct ArtistPage: View {
         let mine = story?.top ?? []
         if !mine.isEmpty || !theirs.isEmpty {
             VStack(alignment: .leading, spacing: S.head) {
-                SectionHead(text: "top tracks")
-                Segments(items: [0, 1], selection: $which, fill: true) { $0 == 0 ? "Yours" : "On Last.fm" }
-                    
+                SectionHead(text: "songs")
+                Segments(items: [0, 1], selection: $which, fill: true) { $0 == 0 ? "yours" : "on last.fm" }
                     .padding(.bottom, S.pair)
                 if which == 0 {
                     ForEach(mine) { e in EntryRow(e: e, context: "mine") }
