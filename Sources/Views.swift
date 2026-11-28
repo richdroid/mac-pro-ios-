@@ -546,6 +546,23 @@ struct RootView: View {
             }
         }
     }
+    // The macOS page made once, in the window and never seen (PageWarm), once the Mac's first reading is in, so its first
+    // push from Status costs what every later one does: folded, the first push held a frame 712 ms (gate on
+    // mp-systabs-1128), the runtime looking up the page's types for the first time. Not mid-slide or mid-scroll, and not
+    // if a page is already open.
+    func warmMacOS() {
+        #if canImport(UIKit)
+        guard !PageWarm.asked("macos") else { return }
+        let model = self.model
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            for _ in 0..<40 where model.status == nil || NavTransit.shared.active || ScrollHold.holding { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard model.status != nil, model.macPage == nil, !NavTransit.shared.active, UIApplication.shared.applicationState == .active else { return }
+            PageWarm.run("macos", [AnyView(MacOSPage(model: model).environmentObject(model).environmentObject(model.notice)
+                .environmentObject(model.liveStore).environmentObject(model.liveStore.display))])
+        }
+        #endif
+    }
     var body: some View {
         let _ = SwipeLog.mark("root body")
         PaneReader {
@@ -574,7 +591,7 @@ struct RootView: View {
         // The Mac's Console follows the page he's on (MacFollow).
         .background { MacFollower(nav: model.nav) }
         // NavTransit watches every push and pop from the first (it holds a page's layout under the edge swipe).
-        .onAppear { _ = NavTransit.shared; BackFinder.start(); MacPrefs.shareWithWidgets(); AppBadge.set(updateCount); ShotWindow.apply() }
+        .onAppear { _ = NavTransit.shared; BackFinder.start(); MacPrefs.shareWithWidgets(); AppBadge.set(updateCount); ShotWindow.apply(); warmMacOS() }
         // And on the app's icon on the home screen, like the App Store's.
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }

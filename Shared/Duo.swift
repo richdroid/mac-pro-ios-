@@ -781,6 +781,8 @@ enum TabReset {
         }
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             if start == nil, let p = touches.first?.location(in: view) { start = p; TouchTrail.moved = 0; TouchTrail.cancelled = false; TouchTrail.endedAt = .distantFuture }
+            // Before the touch can choose a tab, the system's tab bar asks the guard (ReselectGuard).
+            if let w = view as? UIWindow { ReselectGuard.ensure(in: w) }
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             guard let s = start, let p = touches.first?.location(in: view) else { return }
@@ -794,6 +796,45 @@ enum TabReset {
         // Only watching: no other gesture taking the touch stops it seeing the rest of it.
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool { false }
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool { false }
+    }
+}
+// The system's tab bar does its own second-tap work: the tab in front chosen again throws its page to the top. A drag that
+// starts on the tab in front and leaves the bar (open upright) came back as that second tap, so the page jumped to its
+// top even with TabReset ignoring it (gate on mp-systabs-1128 a73df86: tab-log "again 0 moved=238 drag=yes", the page at
+// its top all the same). The guard sits in front of the tab bar controller's own delegate (SwiftUI's), passes everything
+// on, and only refuses the tab in front chosen again by a drag; a finger that stayed put still takes the page to its top.
+@MainActor final class ReselectGuard: NSObject, UITabBarControllerDelegate {
+    private weak var inner: UITabBarControllerDelegate?
+    // The controller's delegate is weak: the guards are kept here, one per controller.
+    private static var guards: [ObjectIdentifier: ReselectGuard] = [:]
+    static func ensure(in w: UIWindow) {
+        func walk(_ c: UIViewController?) {
+            guard let c else { return }
+            if let t = c as? UITabBarController, !(t.delegate is ReselectGuard) {
+                let g = guards[ObjectIdentifier(t)] ?? ReselectGuard()
+                g.inner = t.delegate
+                guards[ObjectIdentifier(t)] = g
+                t.delegate = g
+                TouchTrail.note("guard on")
+            }
+            c.children.forEach(walk)
+        }
+        walk(w.rootViewController)
+    }
+    override func responds(to s: Selector!) -> Bool { super.responds(to: s) || (inner?.responds(to: s) ?? false) }
+    override func forwardingTarget(for s: Selector!) -> Any? { inner?.responds(to: s) == true ? inner : super.forwardingTarget(for: s) }
+    private func refuses(_ again: Bool) -> Bool {
+        guard again else { return false }
+        TouchTrail.note(TouchTrail.wasDrag ? "refused again" : "allowed again")
+        return TouchTrail.wasDrag
+    }
+    func tabBarController(_ t: UITabBarController, shouldSelect vc: UIViewController) -> Bool {
+        if refuses(vc === t.selectedViewController) { return false }
+        return inner?.tabBarController?(t, shouldSelect: vc) ?? true
+    }
+    func tabBarController(_ t: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
+        if refuses(tab === t.selectedTab) { return false }
+        return inner?.tabBarController?(t, shouldSelectTab: tab) ?? true
     }
 }
 #endif
