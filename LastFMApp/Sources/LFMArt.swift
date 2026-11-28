@@ -97,15 +97,32 @@ final class ArtStore: @unchecked Sendable {
         guard backdrop, cachedBackdrop(ref) == nil else { return }
         // The backdrop as it was blurred last time, from the disk: no Core Image before the first frame.
         if let d = try? Data(contentsOf: file("backdrop2:" + ref.key)), let src = CGImageSourceCreateWithData(d as CFData, nil),
-           let b = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+           let b = CGImageSourceCreateImageAtIndex(src, 0, nil).map(Self.ready) {
             images.setObject(CGImageBox(b), forKey: "\(ref.key)@backdrop2" as NSString)
         }
     }
 
+    // A picture as Core Animation draws it without work of its own: a plain sRGB, 32-bit BGRA bitmap, decoded here (off
+    // the main thread). ImageIO's thumbnails keep the file's own profile (an embedded ICC, Adobe RGB, grey, CMYK) and stay
+    // lazily backed; CA then matched and copied each one on the main thread as it committed the frame it first showed in.
+    // That was his phone's ColorSync, CGColorSpaceCopyICCData and CGBitmapContextSetData stalls on charts scrolls and
+    // album taps (build 85 telemetry, 11-27).
+    static let displaySpace = CGColorSpace(name: CGColorSpace.sRGB)!
+    static func ready(_ img: CGImage) -> CGImage {
+        let w = img.width, h = img.height
+        guard w > 0, h > 0, let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: displaySpace,
+                                                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return img }
+        ctx.interpolationQuality = .high
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage() ?? img
+    }
+
     private func decode(_ ref: ArtRef, _ data: Data, px: Int) -> CGImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
-              let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: px,
+              let raw = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: px,
                                                                     kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
+        let img = Self.ready(raw)
         images.setObject(CGImageBox(img), forKey: "\(ref.key)@\(px)" as NSString)
         if palette(ref) == nil, let p = Self.extract(img) {
             let all = lock.withLock { palettes[ref.key] = p; return palettes }
@@ -224,7 +241,7 @@ final class ArtStore: @unchecked Sendable {
         // A bright cover (yellow, white, pastel) made the whole ground too light for the white words over it (gate,
         // run 38: 1.3 : 1). The backdrop's average brightness is capped, keeping its hue, so white always reads.
         let capped = lock.withLock { Self.capped(blurred, context: context) }
-        guard let out = lock.withLock({ context.createCGImage(capped, from: capped.extent) }) else { return nil }
+        guard let out = lock.withLock({ context.createCGImage(capped, from: capped.extent) }).map(Self.ready) else { return nil }
         images.setObject(CGImageBox(out), forKey: key)
         // Kept small on disk for warm() on the next launch.
         let m = NSMutableData()
@@ -254,7 +271,7 @@ final class ArtStore: @unchecked Sendable {
         if let c = treatedCached(ref, t) { return c }
         let disk = file("treat-\(t.tag):" + ref.key)
         if let d = try? Data(contentsOf: disk), let src = CGImageSourceCreateWithData(d as CFData, nil),
-           let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 1000] as CFDictionary) {
+           let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 1000] as CFDictionary).map(Self.ready) {
             images.setObject(CGImageBox(img), forKey: "\(ref.key)@\(t.tag)" as NSString)
             return img
         }
@@ -272,7 +289,7 @@ final class ArtStore: @unchecked Sendable {
                     "inputRVector": CIVector(x: c.r, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: c.g, z: 0, w: 0),
                     "inputBVector": CIVector(x: 0, y: 0, z: c.b, w: 0)])
         }
-        guard let out = lock.withLock({ context.createCGImage(ci, from: ci.extent) }) else { return nil }
+        guard let out = lock.withLock({ context.createCGImage(ci, from: ci.extent) }).map(Self.ready) else { return nil }
         images.setObject(CGImageBox(out), forKey: "\(ref.key)@\(t.tag)" as NSString)
         let m = NSMutableData()
         if let dest = CGImageDestinationCreateWithData(m, "public.jpeg" as CFString, 1, nil) {

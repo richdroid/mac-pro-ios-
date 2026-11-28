@@ -281,7 +281,7 @@ struct ChartsTab: View {
                                   // His top list straight after the figures, the collage after it: the list is what he
                                   // comes for, and it sat more than a screen down under the picture (review, run 27).
                                   content(p, onlyLeft: false, collage: false)
-                                  list(m.cache[m.key(p, m.kind)]?.0 ?? [])
+                                  list(m.cache[m.key(p, m.kind)]?.0 ?? [], current: p == m.period)
                                   collage(m.cache[m.key(p, m.kind)]?.0 ?? [], current: p == m.period).id("collage")
                                   // The last twelve weeks are three months: they belong on that page.
                                   if p == .days(90) { BumpSection() }
@@ -441,24 +441,28 @@ struct ChartsTab: View {
                         .accessibilityLabel("\(e.rank). \(e.title)")
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: S.square, style: .continuous))
+                // Square, as Zune's covers: no rounded clip (a shape clip is drawn off screen in every frame of a scroll).
                 .animation(.smooth(duration: 0.35), value: n)
             }
             .padding(.horizontal, S.margin)
         }
     }
 
-    @ViewBuilder private func list(_ entries: [Entry]) -> some View {
+    // "Show all" opens the stretch on show only, its rows made as they scroll in: `all` was one flag for every stretch's
+    // page, so a tap built ~100 rows with covers on each built page at once, inside an animation (his phone, build 85:
+    // a charts tap held the main thread 2.1 s).
+    @ViewBuilder private func list(_ entries: [Entry], current: Bool = true) -> some View {
         if !entries.isEmpty {
-            let shown = all ? entries : Array(entries.prefix(10))
+            let open = all && current
+            let shown = open ? entries : Array(entries.prefix(10))
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "top \(m.kind.noun)")
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(shown) { e in EntryRow(e: e, context: "chart", peak: entries.first?.plays) }
                 }
                 if entries.count > 10 {
-                    Button { withAnimation(.smooth) { all.toggle() } } label: {
-                        Text(all ? "Show the top 10" : "Show all \(entries.count)").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
+                    Button { all.toggle() } label: {
+                        Text(open ? "Show the top 10" : "Show all \(entries.count)").font(.zune(.subheadline, .semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 44)
                             .wpButton()
                     }

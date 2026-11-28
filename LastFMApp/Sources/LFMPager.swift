@@ -136,6 +136,10 @@ struct Pager: View {
     enum Look { case pivot }
     let look: Look
     var title: String? = nil
+    // A page title over the names (WP7's PhoneTextTitle1Style, 72 px Light-ish on a 480 px screen), under the small
+    // capitals: his name on Profile (Richard, 11-27: "profile should be like big text on top"; it had been squeezed in as
+    // the first pivot name and cut to "objectivet"). Whole, stepped down to fit the page, never under the side strip.
+    var hero: String? = nil
     let panels: [Panel]
     @Binding var page: Int
     let top: Int
@@ -180,8 +184,8 @@ struct Pager: View {
     // The application title's line and the gap under it.
     private var capsHeight: CGFloat { caps == nil ? 0 : ceil(20 * min(max(k, 0.9), 1.3)) + 2 }
 
-    init(_ look: Look, title: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, accessoryHeight: CGFloat = 44, panels: [Panel]) {
-        self.look = look; self.title = title; self.panels = panels; _page = page; self.top = top
+    init(_ look: Look, title: String? = nil, hero: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, accessoryHeight: CGFloat = 44, panels: [Panel]) {
+        self.look = look; self.title = title; self.hero = hero; self.panels = panels; _page = page; self.top = top
         self.accessory = accessory; self.accessoryHeight = accessoryHeight; self.locked = locked
         let start = panels.firstIndex { $0.id == page.wrappedValue } ?? 0
         let o = Self.arrange(start, panels.count)
@@ -232,12 +236,18 @@ struct Pager: View {
             // WP7's top: the small capitals at the top margin (or on Back's row when the bar runs across the top), the
             // names right under them, nothing a bar's height lower (Richard, 2026-11-25: "artificially lowered").
             let tb = TopBar.caps(top: bars.top, height: capsHeight, pushed: true)
-            let namesTop = caps == nil ? tb.y : tb.below - ceil(nameSize * 0.12)
+            let heroSize = hero.map { Self.heroFit($0, pw, k) } ?? 0
+            let heroH = hero == nil ? 0 : ceil(heroSize * 1.18)
+            let heroTop = tb.below - ceil(heroSize * 0.14)
+            let namesTop = (caps == nil ? tb.y : tb.below - ceil(nameSize * 0.12)) + heroH
             let namesHeight = ceil(nameSize * 1.25)
             let head = namesTop + namesHeight + (accessory == nil ? 0 : S.head + accessoryHeight)
-            // Where the pages are cut: just under the names' descenders, or at a pinned row's foot. A hard line, as WP7's
-            // pivot clips its items: no shade, no fade.
-            let cut = accessory == nil ? head - S.head + 6 : head
+            // Where the pages are cut: under the names' whole line (descenders included), or at a pinned row's foot. A hard
+            // line, as WP7's pivot clips its items: no shade, no fade. It was 6 pt inside the names' frame, so a scrolled list
+            // showed between "story"'s descenders ("2022" cut by the names; Richard's shot, 11-27).
+            let line = zuneLine(nameSize)
+            let namesFoot = namesTop + namesHeight / 2 + line / 2
+            let cut = accessory == nil ? max(head, ceil(namesFoot) + 2) : head
             ZStack(alignment: .topLeading) {
                 ScrollView(.horizontal) {
                     HStack(alignment: .top, spacing: 0) {
@@ -330,6 +340,16 @@ struct Pager: View {
                         .padding(.leading, side.leading + tb.lead)
                         .offset(y: tb.y)
                         .turnstile(0)
+                }
+                if let hero {
+                    Text(hero.lowercased())
+                        .font(.zuneLower(size: heroSize)).tracking(-1.2)
+                        .foregroundStyle(.white)
+                        .lineLimit(1).fixedSize()
+                        .padding(.leading, side.leading + S.margin - 3)
+                        .offset(y: heroTop)
+                        .turnstile(0)
+                        .accessibilityAddTraits(.isHeader)
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw, lead: side.leading, size: nameSize,
@@ -426,12 +446,17 @@ struct Pager: View {
                     .padding(.leading, side.leading)
                     .padding(.trailing, side.trailing)
             }
-            .contentMargins(.top, head - cut, for: .scrollContent)
+            .contentMargins(.top, max(0, head - cut), for: .scrollContent)
             .padding(.top, cut)
             .contentMargins(.bottom, foot, for: .scrollContent)
+            // WP7's pivot: the page's rows trail its edge as it comes in and lead it as it goes ("the new page's rows arrive
+            // moving from the right and settle with the headers", study §3), a tenth of its distance from rest. A transform
+            // from the scroll's geometry: no body runs for it.
+            .visualEffect { c, g in c.offset(x: g.frame(in: .scrollView(axis: .horizontal)).minX * 0.1) }
             // A scroll bar only at a real edge of the screen (Richard, 11-26 on build 81 open flat: "the way this scroll bar
             // is placed is retarded"): a pane's edge is the seam, so open flat none.
-            .scrollIndicators(paned ? .hidden : .automatic)
+            // Folded the side strip owns the right edge: a bar there ran down beside the clock (his song page, 11-27).
+            .scrollIndicators(paned || side.trailing > 0 ? .hidden : .automatic)
             .turnstile(0)
             .environment(\.pageWidth, pw)
             .environment(\.pageBleed, EdgeInsets(top: 0, leading: side.leading, bottom: 0, trailing: side.trailing))
@@ -498,9 +523,13 @@ private struct PivotHeaders: View {
         let widths = Self.widths(names, size)
         let first = n > 0 ? ((base % n) + n) % n : 0
         let shift = n > 1 ? frac * (widths[first] + Self.gap) : 0
+        // Each name keyed by which name it is, not by its place in the row: keyed by place, crossing the middle of a drag
+        // gave every place a new word, and all of them were laid out and drawn again at 58 pt in that one frame (his phone,
+        // build 85: 55-62 ms stalls in a charts swipe). Now the words keep their drawing and only move.
+        let slots = (0..<(n > 1 ? n + 1 : n)).map { j in (j: j, i: ((base + j) % n + n) % n, key: j == n ? -1 : ((base + j) % n + n) % n) }
         HStack(alignment: .firstTextBaseline, spacing: Self.gap) {
-            ForEach(0..<(n > 1 ? n + 1 : n), id: \.self) { j in
-                let i = ((base + j) % n + n) % n
+            ForEach(slots, id: \.key) { slot in
+                let j = slot.j, i = slot.i
                 let near = max(0, 1 - abs(CGFloat(j) - frac))
                 // The name that leaves at the left comes round again at the end as it goes.
                 let again: CGFloat = j == n ? frac : 1
@@ -532,4 +561,29 @@ private struct PivotHeaders: View {
         kept[key] = out
         return out
     }
+}
+
+extension Pager {
+    // WP7's page title, 72 px of a 480 px screen, stepped down until the whole of it fits the page (margins both sides).
+    @MainActor static func heroFit(_ text: String, _ pw: CGFloat, _ k: CGFloat) -> CGFloat {
+        let want = min(72, max(44, pw * 0.15)) * min(max(k, 0.9), 1.2)
+        let room = pw - S.margin * 2
+        let w = textWidth(text.lowercased(), size: want, tracking: -1.2, weight: -0.4, face: Z.lower())
+        return w > room && w > 0 ? max(26, floor(want * room / w)) : want
+    }
+}
+
+// The height of a line of the panorama/pivot face at a size (ascender to descender), measured once per size: what a
+// SwiftUI Text of it takes, so a clip can sit under its descenders.
+@MainActor private var zuneLines: [CGFloat: CGFloat] = [:]
+@MainActor func zuneLine(_ size: CGFloat) -> CGFloat {
+    if let k = zuneLines[size] { return k }
+    #if canImport(UIKit)
+    let f = UIFont(name: Z.lower(), size: size) ?? Z.uiFont(size, weight: -0.4)
+    let v = ceil(f.ascender - f.descender)
+    #else
+    let v = ceil(size * 1.33)
+    #endif
+    zuneLines[size] = v
+    return v
 }

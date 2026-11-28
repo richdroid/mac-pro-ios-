@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreText
 
 // Home, as a Windows Phone 7 panorama (Richard, 2026-11-25: "just make this work as a zune windows phone app", "tiles r
 // super important"): the app's name huge and light across the top, wider than the screen, sliding at a slower rate than
@@ -384,12 +385,20 @@ private struct HomePanorama: View {
                 // "m" sat under the side strip's clock folded and was cut to "last.fn" upright (gate on build 83). It ends
                 // 12 pt inside the page, still WP7's size or near it, and slides away slowest as the panorama pans.
                 let w0 = textWidth(Home.title, size: T0, tracking: -3, weight: -0.4, face: Z.lower())
-                let T = w0 > 0 ? T0 * max(0.8, min(1.4, (pw - 10 - 12) / w0)) : T0
+                // Never past WP7's own size (build 85 stretched it to x1.4, so its letters rose past the top edge); only
+                // stepped down to fit.
+                let T = w0 > 0 ? T0 * max(0.8, min(1.0, (pw - 10 - 12) / w0)) : T0
                 let m = Self.metrics(T)
                 let across = TopBar.across()
                 let tray = across?.maxY ?? insets.top
-                let titleTop = tray + T * 0.18 - (m.ascender - m.xHeight)
-                let sectionsTop = tray + T * 0.97
+                // The tallest letters' tops (l, f, t) just under the tray, as WP7's sat under its 32 px tray; folded there is
+                // no tray at the top (the status is in the side strip), so they sit 20 pt under the bare edge, where WP7's
+                // did (Richard's shot, 11-27: "last.fm" cut off at the top: the x-height was placed and the ascenders rose
+                // 8 pt past the screen's top edge). The sections keep WP7's distance under the title's baseline.
+                let clear = tray > 0 ? tray + 4 : 20
+                let titleTop = clear - (m.ascender - m.glyphTop)
+                let baseline = titleTop + m.ascender
+                let sectionsTop = baseline + T * 0.79 - m.xHeight
                 let titleW = textWidth(Home.title, size: T, tracking: -3, weight: -0.4, face: Z.lower())
                 let travel = max(1, sec * CGFloat(count - 1))
                 // The layers' rates from their widths (study §2: "the speed relates to the ratio of the content's width to
@@ -402,7 +411,7 @@ private struct HomePanorama: View {
                 let h = H - sectionsTop
                 #if canImport(UIKit)
                 PanoramaStrip(
-                    geo: PanoGeo(sec: sec, count: count, W: W, H: H, leading: side.leading, sectionsTop: sectionsTop,
+                    geo: PanoGeo(sec: sec, count: count, W: W, H: H, leading: side.leading, trailing: side.trailing, sectionsTop: sectionsTop,
                                  titleTop: titleTop, titleW: titleW, titleH: ceil(T * 1.45),
                                  titleRate: titleRate, bgRate: bgRate, bgSide: bgSide),
                     start: max(0, min(count - 1, Int(UserDefaults.standard.string(forKey: "section") ?? "") ?? 0)),
@@ -439,7 +448,9 @@ private struct HomePanorama: View {
     // A section: its name (WP7's panorama header, Semilight 42.667 px, lowercase), then its content, which scrolls on its
     // own under the name.
     private func section<C: View>(_ name: String, key: String, _ i: Int, _ w: CGFloat, _ h: CGFloat, _ side: (leading: CGFloat, trailing: CGFloat), @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: S.gap) {
+        // The header over its items with WP7's PanoramaItem air under it (its header's bottom margin, ~26 px), so a list
+        // scrolled up under it reads as scrolled, not as a word jammed under "menu" (Richard's home shot, 11-27).
+        VStack(alignment: .leading, spacing: 22) {
             Text(name).font(.zuneLower(size: 40)).tracking(-0.8).foregroundStyle(.white)
                 .lineLimit(1).fixedSize()
                 .padding(.leading, S.margin - 2)
@@ -481,14 +492,19 @@ private struct PanoramaTitle: View {
 
 extension HomePanorama {
     // The title face's ascender and x-height at a size, measured once per size.
-    @MainActor private static var kept: [CGFloat: (ascender: CGFloat, xHeight: CGFloat)] = [:]
-    @MainActor static func metrics(_ size: CGFloat) -> (ascender: CGFloat, xHeight: CGFloat) {
+    @MainActor private static var kept: [CGFloat: (ascender: CGFloat, xHeight: CGFloat, glyphTop: CGFloat)] = [:]
+    // glyphTop: how far the title's tallest letters rise over the baseline (their ink, not the face's ascender line).
+    @MainActor static func metrics(_ size: CGFloat) -> (ascender: CGFloat, xHeight: CGFloat, glyphTop: CGFloat) {
         if let k = kept[size] { return k }
         #if canImport(UIKit)
         let f = UIFont(name: Z.lower(), size: size) ?? Z.uiFont(size, weight: -0.4)
-        let v = (f.ascender, f.xHeight)
+        let ct = f as CTFont
+        var chars = Array("lftdkh".utf16), glyphs = [CGGlyph](repeating: 0, count: chars.count)
+        CTFontGetGlyphsForCharacters(ct, &chars, &glyphs, chars.count)
+        let ink = CTFontGetBoundingRectsForGlyphs(ct, .horizontal, glyphs, nil, glyphs.count)
+        let v = (f.ascender, f.xHeight, ink.height > 1 ? ink.maxY : f.ascender * 0.92)
         #else
-        let v = (size * 1.08, size * 0.5)
+        let v = (size * 1.08, size * 0.5, size * 0.75)
         #endif
         kept[size] = v
         return v

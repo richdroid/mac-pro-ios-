@@ -405,6 +405,12 @@ struct RiverLayer: Codable, Sendable, Hashable, Identifiable {
     let total: Int
 }
 struct River: Codable, Sendable { let from: Int; let layers: [RiverLayer] }
+struct YearStory: Codable, Sendable, Hashable, Identifiable {
+    var id: Int { year }
+    let year: Int
+    let plays: Int
+    let top: [ArtistCount]
+}
 struct DiscoveryYear: Codable, Sendable, Hashable, Identifiable {
     var id: Int { year }
     let year: Int
@@ -446,6 +452,9 @@ struct Deep: Codable, Sendable {
     var records: [Record] = []
     var carry: [Carry] = []
     var time: TimeTotals?
+    // Each year's story: its plays and its five most played artists (newest year first). Optional so a kept copy from
+    // before it existed still reads; workDeep redoes the day's work when it's missing.
+    var years: [YearStory]? = nil
 
     static var file: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(LastFM.shared.mock ? "deep-mock.json" : "deep.json") }
     static func kept() -> Deep? {
@@ -564,6 +573,21 @@ struct Deep: Codable, Sendable {
             guard a.count >= 20, b.count >= 20 else { continue }
             d.carry.append(Carry(year: y, carried: a.intersection(b).count, of: a.count, soFar: y == thisMonth / 12))
         }
+
+        // Each year's story: its plays and who led it.
+        var stories: [YearStory] = []
+        for y in years.reversed() {
+            let arts = (yearArtist[y] ?? [:]).sorted { $0.value > $1.value }
+            let total = arts.reduce(0) { $0 + $1.value }
+            guard total >= 20 else { continue }
+            var top: [ArtistCount] = []
+            for (a, n) in arts.prefix(5) {
+                let c = await db.cover(of: a)
+                top.append(ArtistCount(name: a, plays: n, album: c?.album ?? "", image: c?.url))
+            }
+            stories.append(YearStory(year: y, plays: total, top: top))
+        }
+        d.years = stories
 
         // Listening time.
         let now = Int(Clock.now.timeIntervalSince1970)

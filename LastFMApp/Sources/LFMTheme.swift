@@ -59,6 +59,10 @@ struct HubTitle: View {
         // Zune's parallax: as the page goes up, the huge title slides off to the left at a quarter of the scroll, a layer
         // of its own (drawn, never laid out again).
         .visualEffect { c, p in c.offset(x: min(0, p.frame(in: .scrollView).minY) * 0.25) }
+        // WP7 cut a page title that didn't fit at the screen's edge, never wrapped; here the edge is the page's (the side
+        // strip's leading edge folded): "rock and a hard place" ran under the strip's island and clock (Richard, 11-27).
+        // A plain bounds clip, open to the left (the parallax slides it off that way) and above and below the letters.
+        .clipShape(RightEdge())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text)
         .accessibilityAddTraits(.isHeader)
@@ -582,3 +586,8 @@ enum Diag {
     }
 }
 #endif
+
+// Everything left of a view's right edge: a clip for type that may run past the page but never under the side strip.
+struct RightEdge: Shape {
+    func path(in r: CGRect) -> Path { Path(CGRect(x: r.minX - 4000, y: r.minY - 400, width: r.maxX - r.minX + 4000, height: r.height + 800)) }
+}

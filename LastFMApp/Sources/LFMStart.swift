@@ -33,8 +33,9 @@ struct ProfileHub: View {
             } else {
                 // A pivot of three, his own first: him and his figures, what's moving him lately, his story. Every name
                 // a tap away; what's on now has its own hub (home's tile), his day and every play are history.
-                Pager(.pivot, page: $page, top: 0,
-                      panels: [Panel(0, ProfileHead.name.lowercased()) { stats(wide: size == .regular && !sideways) }, lately, story])
+                // His name big over the names, as a page title; the pivot's items short lowercase words (WP7).
+                Pager(.pivot, hero: ProfileHead.name, page: $page, top: 0,
+                      panels: [Panel(0, "profile") { stats(wide: size == .regular && !sideways) }, lately, story])
             }
         }
         // The ask's keyboard goes as his page scrolls, or with a tap anywhere but the field (the tap only listens while
@@ -108,13 +109,15 @@ struct ProfileHub: View {
             LazyVStack(alignment: .leading, spacing: S.section) {
                 // Always here: the story is made from the whole history, so until it's read the years being read are the
                 // story so far, never a blank page (Richard's screenshot, 2026-11-14: "your story" and nothing under it).
-                YearsSection()
-                RiverCard()
+                // His story, year by year, newest first: what each year was, in a sentence, then who led it (Richard,
+                // 11-27, on the old page of covers and bare counts: "this looks bad and aimless"). The bars stand in while
+                // his history is still being read; the deeper pieces follow the years.
+                if store.deep.years?.isEmpty ?? true { YearsSection() } else { YearStories() }
                 ErasSection()
+                RiverCard()
                 RecordsSection()
-                DiscoveriesSection()
-                VolumeCard()
                 CarryCard()
+                VolumeCard()
             }
         }
     }

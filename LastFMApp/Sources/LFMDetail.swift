@@ -34,6 +34,8 @@ struct ZoomIf: ViewModifier {
 // How a page lays out: open flat two panes; else one column, with the cover beside the figures where there's width.
 struct PageLayout<Head: View, Rest: View>: View {
     let ref: ArtRef?
+    // The artist whose photo is the ground (fetched once, paced, off the main thread; drawn when ready).
+    var photoOf: String? = nil
     @ViewBuilder let head: (_ wide: Bool) -> Head
     @ViewBuilder let rest: () -> Rest
     @Environment(\.paneLayout) private var pane
@@ -61,6 +63,7 @@ struct PageLayout<Head: View, Rest: View>: View {
         .modifier(BarFade(on: scrolled))
         // Behind the fade, not under it: the page's colour runs to every edge.
         .background { Backdrop(ref: ref, moving: false, dim: 0.12) }
+        .task(id: photoOf) { if let a = photoOf { await ArtistPhotos.shared.prepare(a) } }
     }
 }
 
@@ -130,6 +133,7 @@ struct PageHead<Byline: View>: View {
     var extra: [(String, String)] = []
     @ViewBuilder let byline: () -> Byline
     @Environment(\.paneLayout) private var pane
+    @Environment(\.pageWidth) private var width
     var body: some View {
         VStack(alignment: .leading, spacing: S.head) {
             // WP7's application title over the page's name: what kind of page it is.
@@ -155,11 +159,27 @@ struct PageHead<Byline: View>: View {
                         }
                         StoryFigures(story: story, noun: noun, extra: extra, part: .grid)
                     }
-                } else {
+                } else if pane {
                     VStack(alignment: .leading, spacing: S.inner) {
-                        BigCover(ref: ref, zoom: nil).frame(maxWidth: pane ? 360 : 300)
+                        BigCover(ref: ref, zoom: nil).frame(maxWidth: 360)
                         byline()
                         figures
+                    }
+                } else {
+                    // Folded and upright: WP7's album and song pages, the cover at the left (about a third of the width)
+                    // with what it is and his plays beside it, the rest under both. A 300 pt cover put "your plays" under
+                    // the fold (Richard's song page, 11-27): what he came for shows without a scroll.
+                    let coverW = min(168, max(120, (width - S.margin * 2) * 0.4))
+                    VStack(alignment: .leading, spacing: S.inner) {
+                        HStack(alignment: .top, spacing: S.gap + 4) {
+                            BigCover(ref: ref, zoom: nil).frame(width: coverW, height: coverW)
+                            VStack(alignment: .leading, spacing: S.inner) {
+                                byline()
+                                StoryFigures(story: story, noun: noun, extra: extra, part: .hero)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        StoryFigures(story: story, noun: noun, extra: extra, part: .grid)
                     }
                 }
             }
@@ -246,7 +266,9 @@ struct ArtistPage: View {
         let ref = cover ?? ArtRef(artist: name, album: "", url: nil)
         // Zune HD's artist page: the artist's photo behind the whole page (the album cover until one is ready, or if
         // there's none).
-        PageLayout(ref: ArtistPhotos.shared.photo(name) ?? cover) { wide in
+        // The artist's photo or a plain dark ground, never the cover blown up behind the cover (Richard, 11-27 on the song
+        // page: "this doesn't work either"; WP backgrounds ruling: the artist's photo, never the foreground art again).
+        PageLayout(ref: ArtistPhotos.shared.photo(name)) { wide in
             PageHead(title: name, ref: ref, wide: wide, story: story, noun: "artists", extra: [
                 info?.listeners.map { (compact($0), "listeners") },
                 info?.plays.map { (compact($0), "plays on Last.fm") },
@@ -349,7 +371,7 @@ struct AlbumPage: View {
     @State private var apple: URL?
     var body: some View {
         let ref = ArtRef(artist: artist, album: album, url: image)
-        PageLayout(ref: ref) { wide in
+        PageLayout(ref: ArtistPhotos.shared.photo(artist), photoOf: artist) { wide in
             PageHead(title: album, ref: ref, wide: wide, story: story, noun: "albums", extra: [
                 info?.listeners.map { (compact($0), "listeners") },
                 info?.plays.map { (compact($0), "plays on Last.fm") },
@@ -446,7 +468,7 @@ struct TrackPage: View {
     @State private var similar: [Entry] = []
     @State private var apple: URL?
     var body: some View {
-        PageLayout(ref: s.art) { wide in
+        PageLayout(ref: ArtistPhotos.shared.photo(s.artist), photoOf: s.artist) { wide in
             PageHead(title: s.title, ref: s.art, wide: wide, story: story, noun: "tracks", extra: [
                 info?.listeners.map { (compact($0), "listeners") },
                 info?.duration.map { (String(format: "%d:%02d", $0 / 60, $0 % 60), "length") },

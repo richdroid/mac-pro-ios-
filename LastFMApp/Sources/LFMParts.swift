@@ -400,7 +400,7 @@ struct Page<C: View>: View {
                 .ignoresSafeArea(.container, edges: [.horizontal, .top])
                 .padding(.bottom, -Win.foot(g))
                 // Only at a real edge of the screen: open flat a page is a pane and its edge the seam (Richard, 11-26).
-                .scrollIndicators(paned ? .hidden : .automatic)
+                .scrollIndicators(paned || side.trailing > 0 ? .hidden : .automatic)
                 .onScrollPhaseChange { _, new in Store.shared.scrolling = new != .idle }
                 .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 2 } action: { _, v in
                     if let scrolled, scrolled.wrappedValue != v { scrolled.wrappedValue = v }

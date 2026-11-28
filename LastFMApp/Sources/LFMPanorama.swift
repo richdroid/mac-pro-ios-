@@ -22,6 +22,7 @@ struct PanoGeo: Equatable {
     var sec: CGFloat, count: Int
     var W: CGFloat, H: CGFloat
     var leading: CGFloat
+    var trailing: CGFloat = 0
     var sectionsTop: CGFloat
     var titleTop: CGFloat, titleW: CGFloat, titleH: CGFloat
     var titleRate: CGFloat, bgRate: CGFloat, bgSide: CGFloat
@@ -56,6 +57,9 @@ struct PanoramaStrip: UIViewControllerRepresentable {
     private var titleHost: UIHostingController<AnyView>?
     private var hosts: [UIHostingController<AnyView>] = []
     private let strip = UIView()
+    // The title and the sections end at the side strip's leading edge (only the picture runs on under the strip): "just
+    // played" and its tiles ran under the strip's clock and wifi (Richard's home shot, 11-27).
+    private let clip = UIView()
     private var pan: UIPanGestureRecognizer!
     private var landing: (to: CGFloat, began: CFTimeInterval, from: CGFloat)?
     private var landingID = 0
@@ -69,7 +73,11 @@ struct PanoramaStrip: UIViewControllerRepresentable {
         view.backgroundColor = .black
         view.clipsToBounds = true
         strip.backgroundColor = .clear
-        view.addSubview(strip)
+        clip.backgroundColor = .clear
+        clip.clipsToBounds = true
+        clip.layer.anchorPoint = .zero
+        view.addSubview(clip)
+        clip.addSubview(strip)
         pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.delegate = self
         pan.maximumNumberOfTouches = 1
@@ -88,9 +96,9 @@ struct PanoramaStrip: UIViewControllerRepresentable {
         geo = g
         if bgHost == nil {
             bgHost = newHost(background, in: view)
-            titleHost = newHost(title, in: view)
+            titleHost = newHost(title, in: clip)
             // The background, then the title, then the sections (as home's ZStack was); the two behind take no touches.
-            view.sendSubviewToBack(titleHost!.view); view.sendSubviewToBack(bgHost!.view)
+            clip.sendSubviewToBack(titleHost!.view); view.sendSubviewToBack(bgHost!.view)
             bgHost?.view.isUserInteractionEnabled = false
             titleHost?.view.isUserInteractionEnabled = false
         } else {
@@ -104,6 +112,7 @@ struct PanoramaStrip: UIViewControllerRepresentable {
             // Laid out by bounds and position (anchor at the top left): a frame under a transform is undefined.
             func lay(_ v: UIView?, _ r: CGRect) { guard let v else { return }; v.layer.bounds = CGRect(origin: .zero, size: r.size); v.layer.position = r.origin }
             lay(bgHost?.view, CGRect(x: 0, y: 0, width: g.bgSide, height: g.H))
+            lay(clip, CGRect(x: 0, y: 0, width: max(1, g.W - g.trailing), height: g.H))
             lay(titleHost?.view, CGRect(x: g.leading + 10, y: g.titleTop, width: g.titleW + 40, height: g.titleH))
             strip.layer.anchorPoint = .zero
             lay(strip, CGRect(x: 0, y: g.sectionsTop, width: g.ring * 3, height: max(1, g.H - g.sectionsTop)))

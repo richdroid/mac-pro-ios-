@@ -319,7 +319,9 @@ private struct TouchDown: UIGestureRecognizerRepresentable {
 // WP7's buttons: a square outline, 2 pt of white, black inside (no glass, no capsule).
 extension View {
     func wpButton() -> some View {
-        self.background(Color.black).overlay { Rectangle().strokeBorder(.white.opacity(0.9), lineWidth: 2) }.contentShape(Rectangle())
+        // WP7's Button (PhoneButtonBase): no fill, the theme foreground as a 3 px border (PhoneBorderThickness), square
+        // corners; the page shows through (a black-filled box read as a slab over the picture: "Show all 100", 11-27).
+        self.overlay { Rectangle().strokeBorder(.white, lineWidth: 3) }.contentShape(Rectangle())
     }
 }
 
@@ -678,28 +680,43 @@ struct LiveTile<Front: View, Back: View>: View {
     }
 }
 
-// WP7's application bar [S6]: a strip along the foot of a page that has actions, in the theme's chrome (#1F1F1F on the
-// dark theme), with up to four round outlined icon buttons centred in it and "•••" at its right. The dots raise the bar
-// to show each button's name under it, in lowercase; a tap anywhere else, or on a button, lowers it again. Only pages
-// with actions of their own have one (Richard, 2026-11-25: "make this work as a zune windows phone app").
+// WP7's application bar (App bar for Windows Phone, MSDN ff431813; [S6]): a band along the foot of a page that has actions
+// of its own, "fixed at 72 pixels" high in portrait (of an 800 px screen: 64 pt here), the theme's chrome (#1F1F1F on the
+// dark theme) at Opacity 1.0 ("the page is resized to the area not occupied by the Application Bar": nothing is ever under
+// it at a list's end), up to four round outlined icon buttons centred in it and the ellipsis at its right, which raises it
+// to show each button's name under it in lowercase. Rebuilt 11-27 after Richard's Charts shot ("bottom bar looks
+// retarded"): the band stopped short of the side strip with a black block beside it, the buttons sat left of centre, the
+// dots floated at its top right, and the band plus the home indicator's area made a 97 pt slab.
+// - The band runs the screen's whole width, under the side strip too; the buttons are centred on the screen while they
+//   clear the strip, the dots sit at the page's right edge, both on the band's centre line.
+// - It steps 12 pt into the home indicator's area (the icons stay well above it), so the slab is the band, not a block.
 struct AppBar<Buttons: View>: View {
     @Binding var open: Bool
     @ViewBuilder let buttons: () -> Buttons
+    static var band: CGFloat { 64 }
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            HStack(spacing: 28) { buttons() }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 10)
-            Button { withAnimation(Z.easeOut(0.25)) { open.toggle() } } label: {
-                Text("•••").font(.system(size: 13, weight: .bold)).tracking(1).foregroundStyle(.white)
-                    .frame(width: 52, height: 30).contentShape(Rectangle())
+        GeometryReader { g in
+            let l = g.safeAreaInsets.leading, t = g.safeAreaInsets.trailing
+            // Half the side strip's width the other way: the buttons' centre is the screen's, kept clear of the dots.
+            let shift = min((t - l) / 2, max(0, g.size.width / 2 - 150))
+            ZStack(alignment: .trailing) {
+                HStack(spacing: 38) { buttons() }
+                    .frame(maxWidth: .infinity)
+                    .offset(x: shift)
+                Button { withAnimation(Z.easeOut(0.25)) { open.toggle() } } label: {
+                    Text("•••").font(.system(size: 12, weight: .bold)).tracking(1.5).foregroundStyle(.white)
+                        .frame(width: 48, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 4)
+                .accessibilityLabel(open ? "Hide the button names" : "Show the button names")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(open ? "Hide the button names" : "Show the button names")
+            .frame(height: Self.band)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
-        .frame(height: open ? 84 : 60, alignment: .top)
-        .frame(maxWidth: .infinity)
-        .background(Color(white: 0.122).ignoresSafeArea(edges: .bottom))
+        .frame(height: open ? Self.band + 22 : Self.band)
+        .background(Color(white: 0.122).ignoresSafeArea(edges: [.bottom, .horizontal]))
+        .padding(.bottom, -12)
         .environment(\.appBarOpen, open)
     }
 }
@@ -707,23 +724,25 @@ private struct AppBarOpenKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
     var appBarOpen: Bool { get { self[AppBarOpenKey.self] } set { self[AppBarOpenKey.self] = newValue } }
 }
-// One of the bar's buttons: the icon in a 2 pt white ring (48 px on WP7), its name under it when the bar is raised.
+// One of the bar's buttons: WP7's 48 px icon, a ring with the glyph inside (here 42 pt, a 2 pt white ring), its name under
+// it in lowercase when the bar is raised (hanging below the band's centre line, so the icons never move).
 struct AppBarIcon: View {
     let icon: String
     let label: String
     var dim = false
     @Environment(\.appBarOpen) private var open
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 17, weight: .regular))
-                .frame(width: 40, height: 40)
-                .overlay { Circle().strokeBorder(.white, lineWidth: 2) }
-            if open { Text(label.lowercased()).font(.zune(size: 13)).lineLimit(1).fixedSize() }
-        }
-        .foregroundStyle(.white.opacity(dim ? 0.4 : 1))
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label)
+        Image(systemName: icon).font(.system(size: 17, weight: .regular))
+            .frame(width: 42, height: 42)
+            .overlay { Circle().strokeBorder(.white, lineWidth: 2) }
+            .overlay(alignment: .bottom) {
+                if open { Text(label.lowercased()).font(.zune(size: 13)).lineLimit(1).fixedSize().offset(y: 20) }
+            }
+            .foregroundStyle(.white.opacity(dim ? 0.4 : 1))
+            .frame(width: 48, height: 48)
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
     }
 }
 

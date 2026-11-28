@@ -522,3 +522,73 @@ struct CarryCard: View {
         }
     }
 }
+
+// MARK: - His years, one at a time
+
+// The story page's spine (Richard, 11-27, on the year grids of four covers with bare counts and "N of M stuck": "this
+// looks bad and aimless"). Each year, newest first, says what it was in one sentence: the year's number as a WP7 header,
+// then the artist who led it big beside their cover, then the year's plays and, in plain words, how many of that year's
+// new artists he still plays; under that the rest of the year's top five as a WP7 list (name left, plays right-aligned).
+struct YearStories: View {
+    private var store: Store { Store.shared }
+    var body: some View {
+        let years = store.deep.years ?? []
+        let found = Dictionary(store.deep.discoveries.map { ($0.year, $0) }, uniquingKeysWith: { a, _ in a })
+        let thisYear = Calendar.current.component(.year, from: Clock.now)
+        VStack(alignment: .leading, spacing: S.section) {
+            if let first = years.last?.year {
+                Text(verbatim: "Your listening since \(first), a year at a time, newest first. Tap anyone to open them.")
+                    .font(.zune(size: 17)).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(years) { y in YearBlock(year: y, found: found[y.year], current: y.year == thisYear) }
+        }
+        .padding(.horizontal, S.margin)
+    }
+}
+
+private struct YearBlock: View {
+    let year: YearStory
+    let found: DiscoveryYear?
+    let current: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: S.gap) {
+            Text(verbatim: String(year.year)).font(.zuneLower(size: 44)).tracking(-1).foregroundStyle(.white)
+                .accessibilityAddTraits(.isHeader)
+            if let lead = year.top.first {
+                Opens(route: .artist(lead.name), zoom: "year|\(year.year)") {
+                    HStack(alignment: .top, spacing: S.gap + 4) {
+                        ArtView(ArtRef(artist: lead.name, album: lead.album, url: lead.image), px: 300, corner: 0)
+                            .frame(width: 96, height: 96).zoomSource("year|\(year.year)")
+                        VStack(alignment: .leading, spacing: S.pair) {
+                            Text(current ? "so far, the year of" : "the year of").font(.zune(size: 15)).foregroundStyle(S.soft)
+                            Text(lead.name).font(.zune(size: 26, .light)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.8)
+                            Text("\(plays(lead.plays)) of \(number(year.plays))").font(.zune(size: 15)).monospacedDigit().foregroundStyle(S.soft)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if let f = found, f.found > 0 {
+                Text(verbatim: "\(number(f.found)) artists were new to you that year; you still play \(number(f.stuck)) of them.")
+                    .font(.zune(size: 15)).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(spacing: 0) {
+                ForEach(Array(year.top.dropFirst().enumerated()), id: \.element.id) { i, a in
+                    Opens(route: .artist(a.name)) {
+                        HStack(alignment: .firstTextBaseline, spacing: S.gap) {
+                            Text("\(i + 2)").font(.zune(size: 17, .light)).monospacedDigit().foregroundStyle(S.soft).frame(width: 20, alignment: .leading)
+                            Text(a.name).font(.zune(size: 20)).foregroundStyle(.white).lineLimit(1)
+                            Spacer(minLength: S.gap)
+                            Text(number(a.plays)).font(.zune(size: 17)).monospacedDigit().foregroundStyle(S.soft)
+                        }
+                        .frame(minHeight: 40)
+                        .contentShape(Rectangle())
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+    }
+}

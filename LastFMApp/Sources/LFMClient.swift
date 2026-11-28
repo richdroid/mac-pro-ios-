@@ -122,7 +122,11 @@ actor LastFM {
             return J(o)
         }
         guard let key else { throw LFMError.noKey }
-        let wait = slot().timeIntervalSinceNow
+        // What's on now and his newest plays go straight out: they waited in the one queue behind every other call (a
+        // hub's burst of info and chart calls, the history read's pages), so new plays showed late ("updating is too
+        // slow", Richard 11-27). One every 12 s beside a queue paced at 4.5 a second stays under Last.fm's 5.
+        let urgent = method == "user.getrecenttracks" && params["page"] == nil && params["from"] == nil
+        let wait = urgent ? 0 : slot().timeIntervalSinceNow
         if wait > 0 { try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
         var c = URLComponents(string: "https://ws.audioscrobbler.com/2.0/")!
         var q = [URLQueryItem(name: "method", value: method), URLQueryItem(name: "api_key", value: key), URLQueryItem(name: "format", value: "json")]
@@ -133,6 +137,9 @@ actor LastFM {
         c.queryItems = q
         var req = URLRequest(url: c.url!)
         req.timeoutInterval = 15
+        // The app keeps its own copies (DiskCache, for exactly as long as each can't have changed): never an older reply
+        // from the URL cache in place of a fresh one.
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let o = try? JSONSerialization.jsonObject(with: data)

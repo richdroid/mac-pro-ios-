@@ -550,6 +550,8 @@ struct PendingScrobble: Codable, Hashable {
     }
 
     private func note(_ n: ScrobbleNote) {
+        // Last.fm has it now: the app shows it now, not at the next 12 s poll.
+        if n.kind == .nowPlaying || n.kind == .scrobbled { Task { await Store.shared.refresh() } }
         log.insert(n, at: 0)
         if log.count > 400 { log.removeLast(log.count - 400) }
         if let d = try? JSONEncoder().encode(log) { try? d.write(to: logFile, options: .atomic) }
