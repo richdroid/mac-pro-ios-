@@ -18,6 +18,10 @@ struct FailNote: View {
     // A title over the reason, laid out as a MarkNote is: the title, "·", Retry and the ✕ on one line when they fit,
     // else Retry and the ✕ under the reason.
     var head: String?
+    // Under a Pandora station: its words start where the station names do, the warning in the play button's column (a
+    // Label at the rows' body size, as PandoraRow is). Laid out as words beside a small icon they started about 16 px left
+    // of the names (gate 2 on chumby-fix-1127).
+    var station = false
     var body: some View {
         if let head, let retry { titled(head, retry) } else { plain }
     }
@@ -51,13 +55,23 @@ struct FailNote: View {
         }
         .font(.subheadline)
     }
-    @ViewBuilder private var plain: some View {
-        let words = HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "exclamationmark.circle.fill")
-            Text(text).fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder private var words: some View {
+        if station {
+            Label {
+                Text(text).font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            } icon: { Image(systemName: "exclamationmark.circle.fill") }
+            .font(.body).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "exclamationmark.circle.fill")
+                Text(text).fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+            .accessibilityElement(children: .combine)
         }
-        .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-        .accessibilityElement(children: .combine)
+    }
+    @ViewBuilder private var plain: some View {
         if let retry {
             VStack(alignment: .leading, spacing: 4) {
                 words
@@ -944,9 +958,24 @@ struct AlarmsTab: View {
     func editNap(_ a: Alarm?) { editing = EditTarget(alarm: a, nap: true) }
     // A day, or Calendar settings, is a page pushed over Alarms in every posture, with the system's Back and edge swipe
     // (it was swapped into the right pane open flat, with a Done of its own: Richard, 2026-11-23).
-    func openDay(_ k: String) { dayPage = k; model.alarmsPage = true }
-    func openSettings() { dayPage = nil; model.alarmsPage = true }
-    @State private var dayPage: String?
+    func openDay(_ k: String) { let nav = AlarmsNav.shared; if nav.day != k { nav.day = k }; model.alarmsPage = true }
+    func openSettings() { let nav = AlarmsNav.shared; if nav.day != nil { nav.day = nil }; model.alarmsPage = true }
+    // Calendar settings' views made once, in the window and never seen (PageWarm), half a second after Alarms first shows
+    // (soon enough for a tap just after launch), so the first push costs what every later one does: the first slid in 1.6
+    // to 2.4 s late on the build's Release films against about 0.2 s after, the runtime looking up the page's types for the
+    // first time (gate 2 on chumby-fix-1127). Not mid-scroll or mid-slide, and not if a page has opened first.
+    func prewarmSettings() {
+        #if canImport(UIKit)
+        guard !PageWarm.asked("settings") else { return }
+        let model = self.model
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            for _ in 0..<20 where ScrollHold.holding || NavTransit.shared.active { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard !AlarmsNav.shared.page, model.tab == 2, UIApplication.shared.applicationState == .active else { return }
+            PageWarm.run("settings", [AnyView(CalendarWakeSettings().environmentObject(model))])
+        }
+        #endif
+    }
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
@@ -1003,10 +1032,7 @@ struct AlarmsTab: View {
         // Back on this tab with the rows behind the Chumby (a change that came while it was away): put right at once.
         .onAppear { if napSwap == nil, napRowShown != (model.napDue != nil) { napRows = model.napDue != nil; napFaded = false } }
         .environment(\.openCalendarSettings, { openSettings() })
-        .navigationDestination(isPresented: $model.alarmsPage) {
-            Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
-                .holdsWhileMoving("calendar")
-        }
+        .modifier(AlarmsPagePush())
         // Edge to edge (fillCover), with the zoom from its row.
         .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
         // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
@@ -1014,7 +1040,10 @@ struct AlarmsTab: View {
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         .onChange(of: model.openAlarm) { _, k in openAsked(k) }
         .onAppear {
-            wake.refreshPlan()
+            // Coming back from Calendar settings or a day, the plan is already fresh, so Alarms doesn't read the calendar
+            // again in the first frame of the slide back.
+            if AlarmsNav.shared.returning { AlarmsNav.shared.returning = false } else { wake.refreshPlan() }
+            prewarmSettings()
             openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true
@@ -1022,6 +1051,25 @@ struct AlarmsTab: View {
             // A moment late: on the first appearance the posture isn't read yet (PaneReader starts wide), and open
             // upright the pose opened the pane that isn't shown there instead of pushing the page.
             case "calsettings": Task { try? await Task.sleep(nanoseconds: 1_200_000_000); openSettings() }
+            // For the build's timings of the push: once the launch has settled, Calendar settings opened, taken back and
+            // opened again twice, so the first open and the later ones are each timed in the swipe log.
+            case "calpushes":
+                Task {
+                    try? await Task.sleep(nanoseconds: 7_000_000_000)
+                    for i in 0..<3 {
+                        SwipeLog.note("push \(i + 1) asked")
+                        openSettings()
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if i < 2 { SwipeLog.note("pop \(i + 1) asked"); model.alarmsPage = false; try? await Task.sleep(nanoseconds: 2_500_000_000) }
+                    }
+                }
+            // A day with a lead of its own and a label (the row then shows no "· usual"); "caldayusual" puts it back on film.
+            case "caldaylead", "caldayusual":
+                if let w = wake.plan.first {
+                    wake.rules.leadOverrides[w.key] = w.ruleLead == 120 ? 90 : 120
+                    wake.rules.dayEdits[w.key] = DayEdit(label: "Early start")
+                    openDay(w.key)
+                }
             case "template": openSettings()
             case "calday": if let k = wake.plan.first?.key { openDay(k) }
             // A day with its own settings: a set time 25 minutes earlier than usual and a label of its own.
@@ -2014,5 +2062,16 @@ struct GlassKeyLabel: View {
             Text(title).font(.custom("Trebuchet MS", size: 16).weight(.bold))
         }
         .padding(.horizontal, 2)
+    }
+}
+
+// Calendar settings or a day pushed over Alarms, watched here and not by Alarms (see AlarmsNav).
+private struct AlarmsPagePush: ViewModifier {
+    @ObservedObject private var nav = AlarmsNav.shared
+    func body(content: Content) -> some View {
+        content.navigationDestination(isPresented: $nav.page) {
+            Group { if let k = nav.day { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
+                .holdsWhileMoving("calendar")
+        }
     }
 }

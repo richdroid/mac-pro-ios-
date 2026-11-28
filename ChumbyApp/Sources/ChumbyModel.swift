@@ -104,7 +104,11 @@ final class ChumbyModel: ObservableObject {
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
     // controls out in another place of the tree when the phone opens flat, and a sheet held by the view went with it.
     @Published var justOnceSheetOpen = false
-    @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() }; if alarmsPage != oldValue { SwipeLog.note("alarmsPage \(alarmsPage)") } } }
+    // Kept on AlarmsNav, so a push or pop works out only the views that show it (see AlarmsNav).
+    var alarmsPage: Bool {
+        get { AlarmsNav.shared.page }
+        set { AlarmsNav.shared.page = newValue }
+    }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
@@ -180,6 +184,20 @@ final class ChumbyModel: ObservableObject {
         } else { lastHeard = nil }
         CalendarWake.shared.saved = { [weak self] s in self?.adopt(s) }
         ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
+        // What waited for a slide lands as it ends, simply there, as on the Mac Pro app (Model.start).
+        NavTransit.shared.onEnd = { [weak self] in
+            guard !ScrollHold.holding else { return }
+            var still = Transaction(); still.disablesAnimations = true
+            withTransaction(still) { self?.releaseHeld() }
+        }
+        // A page opening over Alarms gets anything parked, once it has slid in: landed in the turn the push began, the
+        // readings worked out every tab again on top of building the page, and the slide started late.
+        AlarmsNav.shared.opened = { [weak self] in
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                self?.releaseHeld()
+            }
+        }
     }
     // Polled readings that came in while a page was moving under his finger, put on screen the moment it settles: a
     // row changing height under a page pulled past its end snaps it back instead of letting it spring (2026-11-08).
@@ -193,7 +211,14 @@ final class ChumbyModel: ObservableObject {
     // confirmed what's shown (a List reports a settling phase as it opens, which parked the Mac Pro app's first reading;
     // Home's channel name and Playing card wait on stateConfirmed), and never while Calendar settings, a day or an
     // editor is open over Alarms, since they're waiting on it.
-    private var parks: Bool { ScrollHold.holding && stateConfirmed && !alarmsPage && !editingAlarm }
+    // Nor while a page slides on or off, over Alarms too (Calendar settings, a day): a reading landing mid-slide worked out
+    // the root, every tab's stack and the page arriving, on the main thread the slide needs (CI chumby-fix-1127: polled
+    // readings landing through the push). It lands as the move ends (NavTransit.onEnd), as the Mac Pro app's do.
+    private var parks: Bool {
+        guard stateConfirmed, !editingAlarm else { return false }
+        if NavTransit.shared.active { return true }
+        return ScrollHold.holding && !alarmsPage
+    }
     private func releaseHeld() {
         if heldSys != nil || heldState != nil { SwipeLog.note("held readings landed") }
         if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh, takenAt: h.at) } }
@@ -1301,3 +1326,26 @@ actor OneAtATime {
     static func warm() { light.prepare(); medium.prepare(); heavy.prepare(); note.prepare() }
 }
 #endif
+
+// Calendar settings or a calendar day pushed over Alarms. Its own object rather than the model's: as one of the model's
+// published values, every push and pop worked out again each view that reads the model (the root and every tab opened so
+// far) in the very turn the page should start sliding in (CI films of 11-26 and 11-27: the push's first frame 0.6 to 7 s
+// late). Only Alarms, which pushes the page, watches it.
+// Only AlarmsPagePush watches it, not Alarms itself: with Alarms watching, every push and pop worked out the whole tab
+// (its hero, its rows, both panes) in the turn the slide began (CI chumby-fix-1127, AlarmsTab.body in the push's stalls).
+@MainActor final class AlarmsNav: ObservableObject {
+    static let shared = AlarmsNav()
+    @Published var page = false {
+        didSet {
+            guard page != oldValue else { return }
+            SwipeLog.note("alarmsPage \(page)")
+            if page { returning = true; opened?() }
+        }
+    }
+    // The day pushed, or nil for Calendar settings. A day's "Change in Calendar settings" swaps it in place.
+    @Published var day: String?
+    // Set as a page opens; Alarms, appearing again as it closes, takes it and skips reading the calendar again (the plan
+    // is already fresh: a rule changed there plans again at once).
+    var returning = false
+    var opened: (() -> Void)?
+}

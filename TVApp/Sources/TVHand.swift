@@ -112,6 +112,9 @@ enum ThrowRules {
         // A page's own carry, drawn here while it's held (the title page's card): inside the navigation stack it was cut
         // off at the page's top edge, under the lip, as he lifted it toward the TV (later list 11-26).
         var carry: Carry? = nil
+        // The corner of the card it was lifted from, when it isn't a shelf poster's: the title page's card is rounder, and
+        // drawn here at a poster's 8 pt its corners went square the moment it lifted (designer gate on polish-1127).
+        var radius: CGFloat? = nil
         static func == (a: Lifted, b: Lifted) -> Bool { a.id == b.id && a.rect == b.rect && a.carry === b.carry }
     }
     let liftCarry = Carry(lifted: true)
@@ -701,7 +704,7 @@ struct HandOverlay: View {
                 let c = l.carry ?? hand.liftCarry
                 Art(url: URL(string: l.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() }
                     .frame(width: l.rect.width, height: l.rect.height)
-                    .clipShape(RoundedRectangle(cornerRadius: l.wide ? 10 : 8, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: l.radius ?? (l.wide ? 10 : 8), style: .continuous))
                     .shadow(color: .black.opacity(c.phase == .flying || c.phase == .gone ? 0 : 0.5), radius: 18, y: 10)
                     .scaleEffect(c.scale)
                     .rotationEffect(.degrees(c.tilt))

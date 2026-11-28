@@ -17,13 +17,13 @@ final class CalendarWake: ObservableObject {
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
     // The build's simulator shots, which have no calendar, show a sample plan in these.
-    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "caldayown", "template", "alarmsdemo", "calonce"]
+    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "caldayown", "template", "alarmsdemo", "calonce", "caldaylead", "caldayusual", "calpushes"]
     static var sample: Bool { samplePoses.contains(ChumbyModel.pose) }
     let store = EKEventStore()
     // A change here updates the Chumby a moment later, wherever it was made, so nothing waits for a page to close.
     @Published var rules: WakeRules { didSet { save(); if rules != oldValue { refreshPlan(); soon() } } }
     @Published var plan: [PlannedWake] = []
-    @Published var allowed = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+    @Published var allowed = EKEventStore.authorizationStatus(for: .event) == .fullAccess { didSet { if allowed != oldValue { calendarCache = nil } } }
     @Published var note: String?
     @Published var lastSync: Date?
     @Published private(set) var running = false
@@ -71,7 +71,17 @@ final class CalendarWake: ObservableObject {
         } catch { allowed = false; note = "Chumby can’t see your calendar. Allow it in Settings." }
     }
     var denied: Bool { !Self.sample && EKEventStore.authorizationStatus(for: .event) == .denied }
-    var calendars: [EKCalendar] { allowed && !Self.sample ? store.calendars(for: .event).sorted { $0.title < $1.title } : [] }
+    // Read from the store once, and again only when the calendar database changes or access does. Calendar settings asked
+    // for it four times a pass (the count, "of N", the check and the list), each a fresh read and sort, and passes come
+    // with every sync's progress.
+    var calendars: [EKCalendar] {
+        guard allowed, !Self.sample else { return [] }
+        if let c = calendarCache { return c }
+        let c = store.calendars(for: .event).sorted { $0.title < $1.title }
+        calendarCache = c
+        return c
+    }
+    private var calendarCache: [EKCalendar]?
     func events() -> [CalEvent] {
         let now = Date()
         guard allowed, let end = Calendar.current.date(byAdding: .day, value: max(rules.daysAhead, 1) + 8, to: now) else { return [] }
@@ -108,7 +118,7 @@ final class CalendarWake: ObservableObject {
         guard !watching, !Self.sample else { return }
         watching = true
         NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { _ in
-            Task { @MainActor in CalendarWake.shared.refreshPlan(); CalendarWake.shared.soon(3) }
+            Task { @MainActor in CalendarWake.shared.calendarCache = nil; CalendarWake.shared.refreshPlan(); CalendarWake.shared.soon(3) }
         }
     }
     func soon(_ seconds: Double = 1.5) {
@@ -302,21 +312,24 @@ struct LeadPicker: View {
     var usual: Int? = nil
     @Binding var value: Int
     @State private var opened: Int?
+    // The system's own menu row, laid out by iOS: its name (and the note under it) at the start, the value and the
+    // chevrons at the end, as in Settings and Calendar (Richard, 11-24: "changing calendar time doesn't feel stock"). It
+    // was a name of our own laid beside a picker with its label hidden, and a tick of our own played on each pick, which
+    // no system menu does.
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 12) {
-                Text(title).lineLimit(1).fixedSize().layoutPriority(2)
-                Spacer(minLength: 8)
-                Picker(title, selection: $value.ticking()) {
-                    ForEach(LeadChoices.with(value, keep: keep + (opened.map { [$0] } ?? [])), id: \.self) {
-                        Text(leadText($0) + suffix + ($0 == usual ? " · usual" : "")).tag($0)
-                    }
-                }
-                .labelsHidden().pickerStyle(.menu).monospacedDigit().layoutPriority(1)
+        Picker(selection: $value) {
+            ForEach(LeadChoices.with(value, keep: keep + (opened.map { [$0] } ?? [])), id: \.self) {
+                Text(leadText($0) + suffix + ($0 == usual ? " · usual" : "")).monospacedDigit().tag($0)
             }
-            if let note { Text(note).font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
+        } label: {
+            // The note under the name in the other rows' note style: given to the menu bare, iOS drew it in the name's own
+            // colour and size ("Rings at 4:00 PM" read as a second title, gate 2 on chumby-fix-1127).
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let note { Text(note).font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
+            }
         }
-        .padding(.vertical, 2)
+        .pickerStyle(.menu)
         .onAppear { if opened == nil { opened = value } }
     }
 }
@@ -340,9 +353,10 @@ struct CalendarSettingsSections: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
     @State private var showCalendars = false
-    func leadRow(_ label: String, _ value: Binding<Int>, _ standard: Int) -> some View { LeadPicker(title: label, keep: [standard], value: value) }
-    var included: Int { wake.calendars.filter { !wake.rules.excludedCalendars.contains($0.title) }.count }
+    func leadRow(_ label: String, _ value: Binding<Int>, _ standard: Int) -> some View { LeadPicker(title: label, keep: [standard], value: value).findSpot(label.lowercased()) }
     var body: some View {
+        let calendars = wake.calendars
+        let included = calendars.filter { !wake.rules.excludedCalendars.contains($0.title) }.count
         Group {
             Section {
                 Toggle(isOn: $wake.rules.enabled) { TwoLine("Wake me from my calendar", CalendarWake.what) }
@@ -380,11 +394,11 @@ struct CalendarSettingsSections: View {
                 WordsGroup(title: "Never wake for", words: $wake.rules.ignoreWords)
                 WordsGroup(title: "Days off", words: $wake.rules.offWords)
             } header: { SectionHead(icon: "text.quote", text: "Words in titles") }
-            if !wake.calendars.isEmpty {
+            if !calendars.isEmpty {
                 Section {
                     // Closed to begin with: it's set once and rarely looked at again.
-                    DisclosureGroup("Calendars · \(included) of \(wake.calendars.count)", isExpanded: $showCalendars) {
-                        ForEach(wake.calendars, id: \.calendarIdentifier) { c in
+                    DisclosureGroup("Calendars · \(included) of \(calendars.count)", isExpanded: $showCalendars) {
+                        ForEach(calendars, id: \.calendarIdentifier) { c in
                             let on = !wake.rules.excludedCalendars.contains(c.title)
                             HStack(spacing: 10) {
                                 Text(c.title).lineLimit(1).opacity(on ? 1 : 0.5)
@@ -702,6 +716,12 @@ struct CalendarDaySheet: View {
             }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
+            // For the build's film of "Use the usual settings": the day as he changed it, then put back, on screen.
+            .task {
+                guard ChumbyModel.pose == "caldayusual" else { return }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if let item { withAnimation { useUsual(item) } }
+            }
         } else {
             NavigationStack {
                 // The folded sheet is as tall as what's in it (see foot), so no row is cut by its bottom edge, no empty sheet

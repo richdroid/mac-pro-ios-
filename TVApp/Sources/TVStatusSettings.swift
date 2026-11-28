@@ -10,7 +10,14 @@ enum SettingsRoute: Hashable { case root, box }
 
 // A tab's page pushing onto its own stack when asked from outside a link (Settings asked for as tab 9). An existential, so
 // NavigationPath.append opens it to the concrete type its destination is registered for (never AnyHashable).
-struct PagePush { var push: (any Hashable) -> Void = { _ in }; var pop: () -> Void = {} }
+struct PagePush: Equatable {
+    var push: (any Hashable) -> Void = { _ in }
+    var pop: () -> Void = {}
+    // The tab whose stack it pushes on. Two made for one stack are the same, so a tab's page worked out again doesn't
+    // work out every view that reads this (the lip) for a new pair of closures that do the same thing.
+    var stack = -1
+    static func == (a: PagePush, b: PagePush) -> Bool { a.stack == b.stack }
+}
 private struct PagePushKey: EnvironmentKey { static let defaultValue = PagePush() }
 extension EnvironmentValues { var pagePush: PagePush { get { self[PagePushKey.self] } set { self[PagePushKey.self] = newValue } } }
 
@@ -20,10 +27,35 @@ struct SettingsPages: ViewModifier {
     @Environment(TVModel.self) var model
     @Environment(\.pagePush) private var pagePush
     @StateObject private var store = ManageStore()
+    @Environment(\.paneLayout) private var panes
     let tab: Int
     @MainActor static var scripted = false
+    // Settings and TV settings made once, in the window and never seen (PageWarm), two seconds after the first tab shows,
+    // so neither first push stops on a frozen frame: the first Settings push froze 200 to 346 ms in every posture and TV
+    // settings 274 to 422 ms, the runtime looking up the pages' types for the first time (gate 2 on chumby-fix-1127).
+    func warm() {
+        #if os(iOS)
+        guard !PageWarm.asked("tv settings") else { return }
+        let model = self.model, store = self.store, panes = self.panes
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            for _ in 0..<20 where NavTransit.shared.active { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard UIApplication.shared.applicationState == .active, !NavTransit.shared.active else { return }
+            PageWarm.run("tv settings", [
+                AnyView(TVSettingsPage().environment(model).environment(\.paneLayout, panes)),
+                AnyView(ManageSettingsView(store: store).environment(model).environment(\.paneLayout, panes)),
+            ])
+            // TV settings again once the TV's settings are in: made before they came, only its waiting rows were made, and
+            // the push from Settings still stopped 317 ms open upright on the build's Release run (CI e49abf6).
+            for _ in 0..<40 where store.state == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard store.state != nil, !NavTransit.shared.active else { return }
+            PageWarm.run("tv manage", [AnyView(ManageSettingsView(store: store).environment(model).environment(\.paneLayout, panes))])
+        }
+        #endif
+    }
     func body(content: Content) -> some View {
         content
+            .onAppear { warm() }
             // Each held at its size while the edge swipe moves it (Shared/Duo.swift HoldsWhileMoving).
             .navigationDestination(for: SettingsRoute.self) { r in
                 Group {
@@ -140,6 +172,8 @@ struct TVSettingsPage: View {
         .background { Ambience() }
         .navigationTitle("Settings").toolbar(removing: .title).navigationBarTitleDisplayMode(.inline)
         .barPage()
+        // "open settings N ms" in the build's hitch log, from the gear's tap to the page's first frame (Page.push).
+        .onAppear { SpeedMark.end("settings") }
     }
 }
 

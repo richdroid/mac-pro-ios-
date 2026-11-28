@@ -1055,14 +1055,26 @@ struct WebTile: View {
     // "ready to install" with itself as its shorter form took the app down in every upgrade state but "room", wherever
     // the tiles were laid out (CI c43e051's crash report).
     static func distinct(_ a: [String]) -> [String] { var seen = Set<String>(); return a.filter { seen.insert($0).inserted } }
-    func figureText(_ value: String) -> Text {
+    // The number and its unit ("48" and "%", "3.2" and " MB/s"); the whole as the number when it isn't a figure.
+    static func split(_ value: String) -> (number: String, unit: String) {
+        guard value.first?.isNumber == true else { return (value, "") }
+        if value.hasSuffix("%") { return (String(value.dropLast()), "%") }
+        if value.hasSuffix("°") { return (String(value.dropLast()), "°") }
+        guard let gap = value.lastIndex(of: " ") else { return (value, "") }
+        return (String(value[..<gap]), String(value[gap...]))
+    }
+    // The unit is a Text of its own beside the number, not part of it: in one Text, a figure losing a digit (100% to 99%)
+    // drew its unit over the digit rolling away (designer gate on polish-1127). On its own it moves aside with the
+    // number's width, on the same ease.
+    func figureText(_ value: String) -> some View {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
         let small = Font.system(size: 17, weight: .semibold)
-        guard value.first?.isNumber == true else { return Text(value).font(big) }
-        if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
-        guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
-        return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
+        let (number, unit) = Self.split(value)
+        return RollingFigure(number: number, unit: unit, numberFont: big, unitFont: small, roll: roll)
+            .accessibilityElement(children: .ignore).accessibilityLabel(value)
     }
+    // How a new reading comes in: rolled on a short ease, but simply there mid-slide or on arriving (below).
+    var roll: Animation? { NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2) }
     var face: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -1093,14 +1105,19 @@ struct WebTile: View {
                 // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                 // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                 // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
-                .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
+                .animation(roll, value: value)
             }
-            // The longest that fits whole, never cut with an ellipsis.
+            // The longest that fits whole, never cut with an ellipsis. It rolls with the figure, on the same ease in the same
+            // moment: swapped in a frame, CPU's "Load" changed about 100 ms before the figure above it was seen to roll
+            // (designer gate on polish-1127). Kept by place, as the figure's forms are, so a new line rolls rather than cuts.
             ViewThatFits(in: .horizontal) {
-                ForEach(Self.distinct([detail] + details), id: \.self) { d in Text(d).lineLimit(1).fixedSize() }
+                let lines = Self.distinct([detail] + details)
+                ForEach(lines.indices, id: \.self) { i in Text(lines[i]).lineLimit(1).fixedSize() }
                 Text(details.last ?? detail).lineLimit(1)
             }
             .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+            .contentTransition(.numericText())
+            .animation(roll, value: detail)
             if spark.count > 1 {
                 // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                 // Sliding along by each second's sample, as the figure rolls (never mid-slide or on arriving).
@@ -1149,6 +1166,64 @@ struct LiveTiles: View {
 }
 
 // One dial per sensor: the number and how far the ticks reach say it all.
+// A live figure and its unit side by side, the unit kept clear of the digits while they roll. In an HStack of their own the
+// unit jumped to the new width while the old digits were still rolling out, over the last of them (designer gate 2 on
+// chumby-fix-1127, "100%" to "99%"). Losing a digit, the number's slot holds the wider width for the roll, then the
+// unit eases in; gaining one, the unit moves aside first and the digits roll into the room made. With no roll (mid-slide,
+// on arriving, under his finger) the new figure is simply there.
+struct RollingFigure: View {
+    let number: String
+    let unit: String
+    let numberFont: Font
+    let unitFont: Font
+    let roll: Animation?
+    @State private var shown: String
+    @State private var slot: String
+    @State private var step = 0
+    init(number: String, unit: String, numberFont: Font, unitFont: Font, roll: Animation?) {
+        self.number = number; self.unit = unit; self.numberFont = numberFont; self.unitFont = unitFont; self.roll = roll
+        _shown = State(initialValue: number); _slot = State(initialValue: number)
+    }
+    static let room = 0.15
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            ZStack(alignment: .leading) {
+                // The slot: never drawn, only its width taken, so the unit waits for the roll.
+                Text(slot).font(numberFont).hidden()
+                Text(shown).font(numberFont).contentTransition(.numericText())
+            }
+            if !unit.isEmpty { Text(unit).font(unitFont) }
+        }
+        .onChange(of: number) { _, new in land(new) }
+    }
+    private func land(_ new: String) {
+        step += 1
+        let mine = step
+        guard let roll else {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { shown = new; slot = new }
+            return
+        }
+        if new.count > shown.count {
+            // Gaining a digit: room first, then the roll into it.
+            withAnimation(.easeOut(duration: Self.room)) { slot = new }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(Self.room * 1e9))
+                guard step == mine else { return }
+                withAnimation(roll) { shown = new }
+            }
+        } else {
+            // Losing one, or the same width: the roll first in the slot as it was, then the unit eases in.
+            withAnimation(roll) { shown = new }
+            guard slot != new else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard step == mine else { return }
+                withAnimation(.easeOut(duration: 0.2)) { slot = new }
+            }
+        }
+    }
+}
 struct TempDials: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: LiveStore
@@ -1165,10 +1240,12 @@ struct TempDials: View {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
-                        Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit()
-                            .contentTransition(.numericText(value: Double(Heat.shown(t.c))))
-                            // Rolled to each reading, as the tiles' figures; simply there on arriving or mid-slide.
-                            .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.25), value: Heat.shown(t.c))
+                        // The degree sign beside the number, not in it, as the tiles' units (a sensor going from 100° to 99°).
+                        // Rolled to each reading, as the tiles' figures; simply there on arriving or mid-slide.
+                        let font = Font.system(.body).weight(.semibold).monospacedDigit()
+                        RollingFigure(number: "\(Heat.shown(t.c))", unit: "°", numberFont: font, unitFont: font,
+                                      roll: NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.25))
+                            .accessibilityElement(children: .ignore).accessibilityLabel("\(Heat.shown(t.c))°")
                     }
                     // The hottest sensor's name stands out, so the one to watch is found at a glance (Richard, 2026-11-12:
                     // "iterate on the features u removed and make it even better").

@@ -335,6 +335,10 @@ enum Timing {
                     let what = w.stuckIn ?? Timing.now()
                     if g > 0.25 { w.stuckIn = nil }
                     w.lock.unlock()
+                    // The main thread is free again: what it names next must have run since. The last body drawn stayed the
+                    // label until another ran, so a push's first-build stall read "main stuck 275 ms in body card" with no
+                    // card drawn in the move (gate 2 on chumby-fix-1127: no "bodies: card" in any push's window).
+                    Timing.set("idle")
                     if g > 0.25 { MainActor.assumeIsolated { HitchLog.shared.note(String(format: "main stuck %.0f ms in %@", g * 1000, what)) } }
                 }
             }
@@ -351,6 +355,7 @@ enum Timing {
 enum SpeedMark {
     private static var started: [String: CFTimeInterval] = [:]
     static func begin(_ name: String) { guard Timing.on else { return }; started[name] = CACurrentMediaTime() }
+    static func cancel(_ name: String) { started[name] = nil }
     static func end(_ name: String) {
         guard Timing.on, let t0 = started.removeValue(forKey: name) else { return }
         // The frame after this one: the appearing page's first draw has been committed by then.
@@ -365,7 +370,7 @@ enum SpeedMark {
     }
 }
 #else
-enum SpeedMark { static func begin(_ name: String) {}; static func end(_ name: String) {} }
+enum SpeedMark { static func begin(_ name: String) {}; static func end(_ name: String) {}; static func cancel(_ name: String) {} }
 enum Timing {
     static func measure<T>(_ name: String, _ f: () throws -> T) rethrows -> T { try f() }
     static func body(_ name: String) {}

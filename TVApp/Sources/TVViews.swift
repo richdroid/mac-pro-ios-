@@ -421,9 +421,15 @@ struct Page<C: View>: View {
         if let r = v as? SettingsRoute, r == .root {
             guard settingsAt == nil else { return }
             settingsAt = path.count
+            SpeedMark.begin("settings")
+        } else {
+            // A page pushed straight over Settings (a launch's TV settings): Settings isn't seen until Back, so it isn't timed.
+            SpeedMark.cancel("settings")
         }
         path.append(v)
     }
+    // One for the lip and the pages alike: equal however often it's made again (PagePush.stack).
+    var pagePush: PagePush { PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }, stack: tab) }
     @State private var top = 0
     @State private var scrolled = PageScrollY()
     // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
@@ -442,7 +448,7 @@ struct Page<C: View>: View {
         // The lip: the TV, along the top of this tab and of every page opened on it. Above the stack, not in it, so a push
         // moves under it and it never redraws; the stack's own bar (Back) sits beneath it, clear of the status area.
         VStack(spacing: 0) {
-        Lip(tab: tab).environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
+        Lip(tab: tab).environment(\.pagePush, pagePush)
             // Its right end in line with the page's under it, the rail's column clear from top to foot.
             
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
@@ -481,7 +487,7 @@ struct Page<C: View>: View {
                     }
                 }
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
-                .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
+                .environment(\.pagePush, pagePush)
                 .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).tabBarRoom() }
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
@@ -489,7 +495,7 @@ struct Page<C: View>: View {
                     if let t = TitleRoutes.target(r) { TitlePage(target: t).holdsWhileMoving("title").tabBarRoom() }
                 }
                 .modifier(SettingsPages(tab: tab))
-                .environment(\.pagePush, PagePush(push: { push($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
+                .environment(\.pagePush, pagePush)
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
@@ -506,27 +512,49 @@ struct Page<C: View>: View {
             path.append(TitleRoutes.add(t))
         }
         .topShade()
-        .background {
-            ZStack {
-                Ambience()
-                if let g = model.titleGrounds.last(where: { $0.tab == tab }) { TitleGround(art: g.art).transition(.opacity) }
-            }
-            .animation(.easeInOut(duration: 0.3), value: model.titleGrounds.last(where: { $0.tab == tab })?.art)
-        }
+        .background { PageGround(tab: tab) }
         // Over the art too, so the strip round the bars beside or under a flick's page is black like the page's own foot,
         // never a lighter band of the tab's art (open upright, under the tab bar).
         .modifier(UnderFlickGround(warms: alwaysInline))
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
-        .onChange(of: path) { was, now in
-            if let at = settingsAt, now.count <= at { settingsAt = nil }
-            Keyboard.dismiss()
-            PageMoves.count += 1
-            #if os(iOS)
-            HitchLog.shared.note("\(title) \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)")
-            #endif
+        .background {
+            PathWatch(path: $path) { was, now in
+                if let at = settingsAt, now <= at { settingsAt = nil }
+                Keyboard.dismiss()
+                PageMoves.count += 1
+                #if os(iOS)
+                HitchLog.shared.note("\(title) \(now > was ? "push" : "pop") \(was)→\(now)")
+                #endif
+            }
         }
+    }
+}
+
+// Each push and pop, followed from a view of its own. Read in Page's body, the path worked the whole tab out again at the
+// start of every push and pop: Watch and every card on it, under Settings, for about 300 ms as Back was tapped (gate on
+// polish-1127), and through Settings' first push.
+private struct PathWatch: View {
+    @Binding var path: NavigationPath
+    let moved: (Int, Int) -> Void
+    var body: some View {
+        Color.clear.allowsHitTesting(false).accessibilityHidden(true)
+            .onChange(of: path) { was, now in moved(was.count, now.count) }
+    }
+}
+// The art behind a tab's stack, and a title page's own picture over it while one is open. Its own view, so a title page
+// coming and going redraws this and not the tab.
+private struct PageGround: View {
+    @Environment(TVModel.self) private var model
+    let tab: Int
+    var body: some View {
+        let art = model.titleGrounds.last(where: { $0.tab == tab })?.art
+        ZStack {
+            Ambience()
+            if let art { TitleGround(art: art).transition(.opacity) }
+        }
+        .animation(.easeInOut(duration: 0.3), value: art)
     }
 }
 
@@ -2205,7 +2233,10 @@ struct AppStrip: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) { ForEach(all.prefix(8)) { Banner(app: $0, browses: false, width: Self.tile) } }
             }
-            .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+            // Faded out at its end where more banners follow, and at its start once slid, as Watch's shelves are (RowEdge):
+            // clipped, the last banner was cut square at the edge with nothing to say the row went on (designer gate on
+            // polish-1127).
+            .rowEdge()
             Button { model.tick(); pagePush.push(AppsRoute.all) } label: {
                 Image(systemName: "square.grid.2x2").font(.system(size: 18, weight: .semibold))
                     .frame(width: max(h, 44), height: max(h, 44))
@@ -2990,7 +3021,8 @@ struct DiscoverColumn: View {
                         // store holds (r28: the store had the rows, the screen didn't, and the check passed).
                         .task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home&pane=\(part)"), timeout: 3) }
                 } else {
-                    PlaceholderShelf(cardWidth: leadWidth, cardHeight: MediaCard.height(leadWidth, .stremio), headed: true, title: Self.continueTitle)
+                    PlaceholderShelf(cardWidth: leadWidth, cardHeight: MediaCard.height(leadWidth, .stremio), headed: true, title: Self.continueTitle,
+                                     wide: UserDefaults.standard.array(forKey: "continueWide") as? [Bool] ?? [])
                 }
             }
             .id(Self.continueTitle)
@@ -3057,6 +3089,10 @@ struct DiscoverColumn: View {
         // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
         .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
             if let v, part != .right { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
+        }
+        // And the shape of its first few cards (a video's is wide, a film's a poster), so the waiting row is drawn in them.
+        .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing.map { $0.items.prefix(4).map(\.isYouTube) }, initial: true) { _, w in
+            if let w, part != .right { UserDefaults.standard.set(w, forKey: "continueWide") }
         }
         .refreshable { await store.load(force: true) }
         .task(id: kind) { await store.load() }
@@ -3128,7 +3164,14 @@ struct PlaceholderShelf: View {
     // The row's own name when it's known (Continue watching), drawn as the real heading draws it, so it doesn't change
     // as the row comes (gate 3: the skeleton, then a different page).
     var title: String? = nil
+    // Which cards are wide (a video's, 16:9 the cover's height, as MediaCard draws it), as the row had them last time;
+    // empty, four posters. Drawn as four posters whatever the row held, a video's wide card replaced three tall tiles
+    // as Continue watching came in (designer gate on polish-1127).
+    var wide: [Bool] = []
     @State private var breathe = false
+    var shapes: [CGFloat] {
+        (wide.isEmpty ? Array(repeating: false, count: 4) : wide).map { MediaCard.cardWidth(cardWidth, .stremio, wide: $0) }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: headed ? 8 : 10) {
             Group {
@@ -3143,15 +3186,24 @@ struct PlaceholderShelf: View {
             }
                 .frame(height: headed ? 25 : 16, alignment: .leading).padding(.leading, 20)
             // Each waiting card in the cover's own waiting look, the light running round it (ruling 9), never a flat grey slab (r20).
-            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in CoverWait().frame(width: cardWidth, height: cardHeight).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)).overlay { LoadingRing(radius: 6) } } }
+            HStack(spacing: 10) { ForEach(Array(shapes.enumerated()), id: \.offset) { _, w in CoverWait().frame(width: w, height: cardHeight).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)).overlay { LoadingRing(radius: 6) } } }
                 .padding(.leading, 20)
+                // Faded out at the page's edge, as the real row is (RowEdge), not cut square.
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .mask {
+                    HStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                    }
+                }
         }
         // minWidth 0: four cards are wider than a folded column, and without it their width widened the whole page,
         // which then drew about 90 pt to the left and snapped back once the real row came (the Apps cold-entry jump).
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
-        // A plain repeating fade rather than a phase animator, which would lay this out at its natural size.
-        .opacity(breathe ? 1 : 0.5)
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: breathe)
+        // A plain repeating fade rather than a phase animator, which would lay this out at its natural size. The repeating
+        // animation is the opacity's alone: put on the whole row, it also eased the cards' widths as the page found its
+        // width, and a waiting card was still growing when the real row cut in (gate 2 on chumby-fix-1127).
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { $0.opacity(breathe ? 1 : 0.5) }
         .onAppear { breathe = true }
         .accessibilityHidden(true)
     }
