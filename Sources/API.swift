@@ -147,6 +147,8 @@ struct Status: Decodable {
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
     var displayOn: Bool?
+    // How many of the Mac's notifications are on its screen (Status's row to them); nil from a bridge older than 11-28.
+    var macNotifications: Int?
     var temps: [Temp]?
     // The bridge's heat verdict (each sensor against its own limits); nil from a bridge older than 2026-11-12.
     var heat: HeatVerdict?

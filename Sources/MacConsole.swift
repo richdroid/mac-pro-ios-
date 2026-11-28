@@ -298,6 +298,7 @@ extension MacPage {
         case "storage": return .storage
         case "startup", "startupconfirm": return .startup
         case "actions": return .actions
+        case "notifs", "notifsempty": return .notifications
         case let p where p.hasPrefix("upgrade-"): return .upgrade
         default: return nil
         }
