@@ -44,6 +44,7 @@ struct MacNotifsRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("mac-notifs")
                 .place("mac-notifs")
             }
         }
