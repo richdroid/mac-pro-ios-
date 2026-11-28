@@ -737,6 +737,7 @@ enum TabReset {
         return Binding(get: { tab.wrappedValue }, set: { new in
             if new == tab.wrappedValue {
                 #if canImport(UIKit)
+                TouchTrail.note("again \(new)")
                 if TouchTrail.wasDrag { return }
                 #endif
                 onRepeat(new)
@@ -750,9 +751,22 @@ enum TabReset {
 @MainActor enum TouchTrail {
     static var moved: CGFloat = 0
     static var endedAt = Date.distantPast
+    // The touch was taken over by another gesture before it ended (the system's tab bar, which takes a finger dragged
+    // along or off it): its trail stopped there, short, so a drag off the bar read as a tap (CI 1528a8c, open upright:
+    // a drag up from the tab in front threw the page to its top).
+    static var cancelled = false
     private static var installed = false
-    // The touch that just ended (or is still down) went more than 20 pt.
-    static var wasDrag: Bool { moved > 20 && Date().timeIntervalSince(endedAt) < 0.8 }
+    // The touch that just ended (or is still down) went more than 20 pt, or was taken over.
+    static var wasDrag: Bool { (moved > 20 || cancelled) && Date().timeIntervalSince(endedAt) < 0.8 }
+    // For the build's checks only (-findBack YES): each tab chosen again, with how the touch went, to Caches/tab-log.txt.
+    private static let logs = UserDefaults.standard.bool(forKey: "findBack")
+    static func note(_ what: String) {
+        guard logs, let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let line = String(format: "%@ moved=%.0f cancelled=%@ sinceEnd=%.2f drag=%@\n", what, moved, cancelled ? "yes" : "no", Date().timeIntervalSince(endedAt), wasDrag ? "yes" : "no")
+        let u = dir.appendingPathComponent("tab-log.txt")
+        if let h = try? FileHandle(forWritingTo: u) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? line.write(to: u, atomically: true, encoding: .utf8) }
+    }
     static func install() {
         guard !installed, let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
         installed = true
@@ -766,17 +780,20 @@ enum TabReset {
             delegate = self
         }
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-            if start == nil, let p = touches.first?.location(in: view) { start = p; TouchTrail.moved = 0; TouchTrail.endedAt = .distantFuture }
+            if start == nil, let p = touches.first?.location(in: view) { start = p; TouchTrail.moved = 0; TouchTrail.cancelled = false; TouchTrail.endedAt = .distantFuture }
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             guard let s = start, let p = touches.first?.location(in: view) else { return }
             TouchTrail.moved = max(TouchTrail.moved, hypot(p.x - s.x, p.y - s.y))
         }
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { finish() }
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { finish() }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { if start != nil { TouchTrail.cancelled = true; TouchTrail.note("cancelled") }; finish() }
         private func finish() { TouchTrail.endedAt = Date(); start = nil; state = .failed }
         override func reset() { start = nil }
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+        // Only watching: no other gesture taking the touch stops it seeing the rest of it.
+        override func canBePrevented(by other: UIGestureRecognizer) -> Bool { false }
+        override func canPrevent(_ other: UIGestureRecognizer) -> Bool { false }
     }
 }
 #endif
@@ -843,7 +860,7 @@ enum BackFinder {
             if let t = c as? UITabBarController {
                 let items = t.tabBar.items?.map { $0.title ?? "?" } ?? []
                 let overflow = (t.viewControllers?.count ?? 0) > items.count || t.tabs.count > items.count
-                let more = overflow || items.contains("More") || t.selectedViewController === t.moreNavigationController
+                let more = overflow || items.contains("More")
                 barItems.append("tabbar items=\(items.count) [\(items.joined(separator: ","))] tabs=\(t.tabs.count) controllers=\(t.viewControllers?.count ?? 0) more=\(more ? "yes" : "no")")
             }
             c.children.forEach(controllers)

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   check:
     runs-on: xcode-27
-    timeout-minutes: 110
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +41,7 @@ jobs:
           done
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 72
+        timeout-minutes: 84
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -65,6 +65,9 @@ jobs:
           backlog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" $1 data 2>/dev/null) && cat "$c/Library/Caches/back-at.txt" 2>/dev/null; }
           backat() { local a; a=$(backlog $1 | head -1); case "$a" in none|"") echo "$FALLBACK";; *) echo "$a";; esac; }
           spot() { backlog $1 | awk -v n="$2" '$1 == "spot" && $2 == n {print $3" "$4}' | head -1; }
+          # Simulator crash reports of either app, as logs.
+          crashes() { for f in ~/Library/Logs/DiagnosticReports/TV*.ips ~/Library/Logs/DiagnosticReports/MacPro*.ips; do [ -f "$f" ] && cp "$f" "dist/crash-$(basename "$f" .ips).log" && echo "CRASH REPORT $(basename "$f")"; done; }
+          tablog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" $1 data 2>/dev/null) && [ -f "$c/Library/Caches/tab-log.txt" ] && mv "$c/Library/Caches/tab-log.txt" dist/$2-tab.log && cat dist/$2-tab.log | sed "s/^/$2: /"; }
           swipelog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" $1 data 2>/dev/null) || return 0; [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/$2-swipe.log; }
           # Every tab of an app: bundle, display, suffix, tabs, then extra arguments. Each still comes with the app's own
           # account of its tab bar (the "tab" and "tabbar items=" lines), so a More shows up in the logs as well as the shot.
@@ -99,7 +102,12 @@ jobs:
               $D "$DEVICE" touch $t1 0.08; sleep 1.5
               $D "$DEVICE" drag 0.5 0.7 0.5 0.45 0.5; sleep 1.5; snap $d $n-stripdrag-before
               set -- $t1; $D "$DEVICE" drag $1 $2 $1 $(echo "$2 - 0.25" | bc -l) 0.3; sleep 1.5; snap $d $n-stripdrag-after
+              # And a still finger on the tab in front, the page scrolled: that one takes it to its top.
+              $D "$DEVICE" drag 0.5 0.7 0.5 0.45 0.5; sleep 1.5; snap $d $n-retap-before
+              $D "$DEVICE" touch $t1 0.08; sleep 1.5; snap $d $n-retap-after
             fi
+            tablog $b $n
+            crashes
             xcrun simctl terminate "$DEVICE" $b || true
             kill -INT $REC; wait $REC
           }
@@ -114,11 +122,14 @@ jobs:
             at=$(spot $MAC macosrow); echo "$n row at '$at'"
             snap $d $n-1status
             if [ -n "$at" ]; then
-              $D "$DEVICE" touch $at 0.08; sleep 0.3; snap $d $n-2pushmid; sleep 2.2; snap $d $n-3page
-              at=$(backat $MAC); echo "$n Back at $at"
-              $D "$DEVICE" touch $at 0.08; sleep 0.3; snap $d $n-4popmid; sleep 2.2; snap $d $n-5back
+              $D "$DEVICE" touch $at 0.08; sleep 0.3; snap $d $n-2pushmid; sleep 4; snap $d $n-3page
+              local back; back=$(backat $MAC); echo "$n Back at $back"
+              $D "$DEVICE" touch $back 0.08; sleep 0.3; snap $d $n-4popmid; sleep 2.2; snap $d $n-5back
               at=$(spot $MAC macosrow)
-              $D "$DEVICE" touch $at 0.08; sleep 2.5; snap $d $n-6page
+              $D "$DEVICE" touch $at 0.08; sleep 4; snap $d $n-5b-page
+              back=$(backat $MAC); $D "$DEVICE" touch $back 0.08; sleep 2.5; snap $d $n-5c-back
+              at=$(spot $MAC macosrow)
+              $D "$DEVICE" touch $at 0.08; sleep 4; snap $d $n-6page
               $D "$DEVICE" drag 0.01 0.5 0.92 0.5 2.6 & DR=$!
               sleep 1.7; snap $d $n-7swipe-mid; wait $DR
               sleep 2.5; snap $d $n-8swipe-after
@@ -165,17 +176,15 @@ jobs:
             xcrun simctl terminate "$DEVICE" $TV || true
           }
           # Everything in one posture (display, suffix). Tab 4, the old macOS tab, opens the macOS page on Status.
+          # Round 2 (every tab in every posture was shot on 1528a8c): the tab bar again, the taps, the drag off the bar, the
+          # re-tap, and the macOS push, in each posture.
           posture() {
             local d=$1 x=$2
-            tabshots $MAC $d $x "0 1 2 5 6 4"
-            tabshots $MAC $d $x-badge "1" -pose otaready
-            tabshots $TV $d $x "3 0 6"
-            islandshots $d $x
-            taptest macpro-taps$x $d $MAC -tab 0
             taptest tv-taps$x $d $TV -tab 3
+            tabshots $MAC $d $x "0 4"
+            tabshots $TV $d $x "3"
+            taptest macpro-taps$x $d $MAC -tab 0
             macosfilm $d $x
-            navfilm macpro-back-macos$x $d $MAC -tab 4
-            navfilm macpro-back-cpu$x $d $MAC -tab 0 -openHistory cpu
           }
           date
           FALLBACK="0.895 0.292"; posture 1 -folded
@@ -184,8 +193,7 @@ jobs:
           for R in 3 4; do
             $D "$DEVICE" rotate $R || true; sleep 5
             snap 1 probe-side$R
-            tabshots $MAC 1 -side$R "0 1 2 5 6 4"
-            tabshots $TV 1 -side$R "3 0 6"
+            tabshots $MAC 1 -side$R "0"
             taptest macpro-taps-side$R 1 $MAC -tab 0
             macosfilm 1 -side$R
           done
@@ -206,10 +214,13 @@ jobs:
           date
           $D "$DEVICE" rotate 3 || true; sleep 5
           FALLBACK="0.948 0.222"; posture 3 -flat
+          navfilm macpro-back-macos-flat 3 $MAC -tab 4
+          islandshots 3 -flat
           # A shorter window, as a taller island or status leaves: every tab still in the bar.
           tabshots $MAC 3 -flat-859x604 "0 6" -windowSize 859x604
           tabshots $TV 3 -flat-859x604 "3" -windowSize 859x604
           date
+          crashes
           echo "== tab bars"; grep -h '^tabbar' dist/*-bar.log | sort | uniq -c
           ls dist | wc -l; du -sh dist
       - name: Publish
