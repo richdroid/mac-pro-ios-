@@ -149,9 +149,12 @@ final class AppModel: ObservableObject {
     // The tab chosen to open on in Settings, or else the one last used.
     // 9 was the Settings tab until 2026-11-13; it's behind the gear on Status now, and a 9 from an old link, widget or the
     // last tab used opens it there.
-    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab == 9 ? 0 : AppModel.firstTab {
+    // 4 was the macOS tab until 2026-11-28; it's a page on Status now (its row), and a 4 from an old link, a saved tab or
+    // a page that still says "the macOS tab" opens that page on Status.
+    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab == 9 || AppModel.firstTab == 4 ? 0 : AppModel.firstTab {
         didSet {
             if tab == 9 { tab = 0; nav.settingsTab = 0; nav.settingsOpen = true }
+            if tab == 4 { tab = 0; nav.dashPage = .macos }
             if tab != oldValue {
                 tabSince = Date(); Self.arrivedAt = Date()
                 UserDefaults.standard.set(tab, forKey: "lastTab"); UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.leftAtKey)
@@ -184,6 +187,12 @@ final class AppModel: ObservableObject {
     func show(tab t: Int) {
         if t == 3 { tab = 2; usageAsked += 1 } else { tab = t }
     }
+    // The macOS page, on Status's stack (its row there), from a link, Handoff or another page.
+    func showMacOS() {
+        if nav.settingsTab == 0 { nav.settingsOpen = false }
+        nav.history = nil; nav.processes = nil
+        tab = 0; nav.dashPage = .macos
+    }
     // Kept in the Keychain too, so a reinstall finds it (SavedAddress).
     @Published var address: String { didSet { SavedAddress.save(address); liveStore.live = nil; lastData = nil; IconCache.api = api } }
 
@@ -201,11 +210,12 @@ final class AppModel: ObservableObject {
         // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
         if UserDefaults.standard.integer(forKey: "startTab") == 9 { UserDefaults.standard.set(0, forKey: "startTab") }
+        if UserDefaults.standard.integer(forKey: "startTab") == 4 { UserDefaults.standard.set(0, forKey: "startTab") }
         if Self.firstTab == 9 { nav.settingsTab = 0; nav.settingsOpen = true }
         let h = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         let p = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).
-        let page: MacPage? = ["health", "healthmemory", "healthbad", "healthone", "healthfixing", "healthback", "healthstuck"].contains(pose) || pose == "didntconfirm" ? .health : ["restart", "restartred"].contains(pose) ? .restart : MacPage.consolePosed(pose)
+        let page: MacPage? = ["health", "healthmemory", "healthbad", "healthone", "healthfixing", "healthback", "healthstuck"].contains(pose) || pose == "didntconfirm" ? .health : ["restart", "restartred"].contains(pose) ? .restart : MacPage.consolePosed(pose) ?? (Self.firstTab == 4 ? .macos : nil)
         if Self.reopen { history = h; processes = p; reopenForShots() }
         else if h != nil || p != nil || page != nil { whenDrawn { [weak self] in self?.history = h; self?.processes = p; self?.macPage = page } }
         // The build's shot of the unreachable card, as it is said now.

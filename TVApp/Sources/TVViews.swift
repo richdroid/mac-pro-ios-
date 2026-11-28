@@ -268,14 +268,19 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("body root")
         PaneReader {
-            // The tabs where iOS puts its own (down the side strip folded and open in landscape, a bar along the foot open
-            // upright; HIG, iPhone Duo, "Vertical controls"), drawn as the Mac Pro app draws them (Shared/Duo.swift
-            // DuoTabs). The system's bar took a drag that started on it and left it as the tab in front tapped again, and
-            // threw Watch to its top (designer gate on mp-nav-1126; later list 11-24, "swipes register on rest of
-            // screen"); a drawn key that the finger leaves is no tap at all. One bar in all three apps.
-            DuoTabs(selection: tabBinding, items: Self.railItems, badge: { _ in 0 }, fadesFoot: false) { v in
-                tabPage(v).environment(\.tabInFront, model.tab == v)
+            // The system's own tabs, placed by iOS: down the side strip folded and open in landscape, a bar along the foot
+            // open upright (HIG, iPhone Duo, "Vertical controls"; Richard, 2026-11-28: iOS conventions, as in the Mac Pro
+            // app). A drag that starts on the bar and leaves it is no second tap (TabReset, TouchTrail), so it doesn't
+            // throw Watch to its top.
+            TabView(selection: tabBinding) {
+                ForEach(Self.railItems) { it in
+                    Tab(value: it.value) {
+                        tabPage(it.value).environment(\.tabInFront, model.tab == it.value)
+                    } label: { it.label }
+                }
             }
+            // Where iOS put its bars, for the gear: a bar item in the side strip, the lip's key open upright (Page, Lip).
+            .readsSideStrip()
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
                 HitchLog.shared.note("tab \(was)→\(t)")
@@ -441,7 +446,7 @@ struct Page<C: View>: View {
     // The tabs down the side strip (folded, open flat, folded on its side): Settings is the system's bar item there, at
     // the strip's top under the clock, as the Mac Pro app's gear (HIG, iPhone Duo: actions under the status area). Open
     // upright the lip is the page's top bar and keeps the gear at its right end.
-    @Environment(\.duoTabsSide) private var stripSide
+    @Environment(\.tabsSide) private var stripSide
     var barShown: Bool { showsBar || stripSide }
     var barRoom: CGFloat { barShown && !(hSize == .regular && !panes) ? 43.0 / 3 : 0 }
     var body: some View {
@@ -455,8 +460,6 @@ struct Page<C: View>: View {
         NavigationStack(path: $path) {
             content()
                 .underFlick(warms: alwaysInline)
-                // Clear of the tab bar drawn along the foot open upright (DuoTabs), each pushed page too.
-                .tabBarRoom()
                 .modifier(TabBarFade())
                 .environment(\.backToTop, top)
                 .environment(\.pageScroll, alwaysInline ? nil : scrolled)
@@ -488,11 +491,11 @@ struct Page<C: View>: View {
                 }
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, pagePush)
-                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).tabBarRoom() }
+                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true) }
                 // A title's page: its poster a card for his hand. Pushed here, so Back is the system's and returns to this
                 // tab exactly as he left it.
                 .navigationDestination(for: TitleRoute.self) { r in
-                    if let t = TitleRoutes.target(r) { TitlePage(target: t).holdsWhileMoving("title").tabBarRoom() }
+                    if let t = TitleRoutes.target(r) { TitlePage(target: t).holdsWhileMoving("title") }
                 }
                 .modifier(SettingsPages(tab: tab))
                 .environment(\.pagePush, pagePush)
@@ -2695,7 +2698,7 @@ struct AppsTab: View {
     }
     var body: some View {
         let _ = SwipeLog.mark("body apps")
-        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).tabBarRoom() }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true) }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
             #endif

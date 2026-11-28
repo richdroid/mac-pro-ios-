@@ -15,7 +15,7 @@ import UIKit
 //   macproapp://disk                        the disk's day
 //   macproapp://health[/<part>]             Everything on the Mac
 //   macproapp://control[/<section>]         Control; links, fans, updates, storage, startup, restart
-//   macproapp://macos                       the macOS tab
+//   macproapp://macos                       the macOS page, on Status (a tab until 2026-11-28)
 enum MacDeepLink {
     @MainActor static func open(_ url: URL, _ model: AppModel) -> Bool {
         guard url.scheme == "macproapp", let host = url.host else { return false }
@@ -51,7 +51,7 @@ enum MacDeepLink {
             default: model.macPage = nil
             }
         case "macos", "updates":
-            model.tab = 4
+            model.showMacOS()
         case "settings":
             model.tab = 0; model.history = nil; model.processes = nil; model.nav.settingsTab = 0; model.nav.settingsOpen = true
         case "console":
@@ -71,9 +71,11 @@ final class ScreenHandoff {
     private var sent = ""
     // Where the phone was as Screen opened, in the links' words.
     static func context(_ model: AppModel) -> [String: String] {
-        let names = [0: "status", 1: "apps", 2: "claude", 4: "macos", 5: "control", 6: "console"]
+        let names = [0: "status", 1: "apps", 2: "claude", 5: "control", 6: "console"]
         var c: [String: String] = ["tab": model.nav.settingsOpen && model.nav.settingsTab == model.tab ? "settings" : names[model.tab] ?? "status"]
-        if let p = model.macPage { c["item"] = p.rawValue }
+        // The macOS page is still "macos" to the Console, as when it was a tab.
+        if model.tab == 0, model.nav.dashPage == .macos { c["tab"] = "macos" }
+        else if let p = model.macPage { c["item"] = p.rawValue }
         else if let h = model.history { c["item"] = h.key }
         else if let s = model.sessionScreen { c["item"] = s.name }
         return c
