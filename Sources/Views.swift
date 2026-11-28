@@ -499,17 +499,17 @@ struct RootView: View {
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     private var badge: (Int) -> Int { { $0 == 1 ? updateCount : 0 } }
-    // The tabs, in order, for the system's TabView.
-    // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
+    // The tabs, in order, for the system's TabView: five, so iOS shows every one in every posture and never "More"
+    // (Richard, 2026-11-19: "never more tabs thing"; 2026-11-28: back to iOS's own tab bar and side strip). The macOS tab
+    // became a row on Status that opens the macOS page (MacOSPage).
     // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went behind the
-    // gear on Status to keep the bar at six. Dashboard: the Mac's Console on the phone, its screen's keys folded in
+    // gear in the bar, out of the tabs. Dashboard: the Mac's Console on the phone, its screen's keys folded in
     // (Richard, 2026-11-14: "a version of the dashboard on my phone ... consolidate console into it"). It took the Console
     // tab's place.
     static let railItems: [RailItem] = [
         RailItem(value: 0, title: "Status", symbol: "gauge.with.dots.needle.33percent"),
         RailItem(value: 1, title: "Apps", symbol: "square.grid.2x2"),
         RailItem(value: 2, title: "Claude", asset: "ClaudeTab"),
-        RailItem(value: 4, title: "macOS", symbol: "arrow.up.circle"),
         RailItem(value: 5, title: "Control", symbol: "display"),
         RailItem(value: 6, title: "Dashboard", symbol: "rectangle.3.group"),
     ]
@@ -518,7 +518,6 @@ struct RootView: View {
         case 0: Screen(tab: 0, title: "Status") { StatusTab($0, side: $1) }.id(key(0))
         case 1: Screen(tab: 1, title: "Apps") { AppsTab($0, side: $1) }.id(key(1))
         case 2: Screen(tab: 2, title: "Claude") { ClaudeTab($0, side: $1) }.id(key(2))
-        case 4: Screen(tab: 4, title: "macOS", listed: false) { UpgradeTab($0, side: $1) }.id(key(4))
         case 5: Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5))
         case 6: Screen(tab: 6, title: "Dashboard") { DashboardTab($0, side: $1) }.id(key(6))
         default: EmptyView()
@@ -547,17 +546,41 @@ struct RootView: View {
             }
         }
     }
+    // The macOS page made once, in the window and never seen (PageWarm), once the Mac's first reading is in, so its first
+    // push from Status costs what every later one does: folded, the first push held a frame 712 ms (gate on
+    // mp-systabs-1128), the runtime looking up the page's types for the first time. Not mid-slide or mid-scroll, and not
+    // if a page is already open.
+    func warmMacOS() {
+        #if canImport(UIKit)
+        guard !PageWarm.asked("macos") else { return }
+        let model = self.model
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            for _ in 0..<40 where model.status == nil || NavTransit.shared.active || ScrollHold.holding { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard model.status != nil, model.macPage == nil, !NavTransit.shared.active, UIApplication.shared.applicationState == .active else { return }
+            PageWarm.run("macos", [AnyView(MacOSPage(model: model).environmentObject(model).environmentObject(model.notice)
+                .environmentObject(model.liveStore).environmentObject(model.liveStore.display))])
+        }
+        #endif
+    }
     var body: some View {
         let _ = SwipeLog.mark("root body")
         PaneReader {
-            // Every tab one tap away in every posture, in a bar drawn where iOS draws its own (Shared/Duo.swift DuoTabs):
-            // down the side strip folded and open in landscape, along the foot open upright (HIG, iPhone Duo, "Vertical
-            // controls"). The system's TabView put Control and Dashboard under "•••" on his phone open flat (TestFlight
-            // 317; Richard, 2026-11-26: "the side bar not encompassing everything"). Each tab is still its own system
-            // NavigationStack with the system Back and swipe.
-            // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab (Richard, 2026-11-07).
-            // The updates waiting, as a number on the Apps tab, the App Store's way.
-            DuoTabs(selection: tabBinding, items: Self.railItems, badge: badge) { screen($0) }
+            // The system's own tabs, placed by iOS: down the side strip folded, folded on its side and open flat, a bar
+            // along the foot open upright (HIG, iPhone Duo, "Vertical controls"; Richard, 2026-11-28: "the side bar in the
+            // mac pro app doesn't follow ios conventions at all"). Five, every one in view in every posture. Each tab is
+            // its own NavigationStack with the system Back and edge swipe.
+            TabView(selection: tabBinding) {
+                ForEach(Self.railItems) { it in
+                    Tab(value: it.value) {
+                        screen(it.value).environment(\.duoTabFront, model.tab == it.value)
+                    } label: { it.label }
+                        // The updates waiting, as a number on the Apps tab, the App Store's way.
+                        .badge(badge(it.value))
+                }
+            }
+            // Where iOS put its bars (the side strip or across), for Status's portrait (Hero).
+            .readsSideStrip()
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
                 UserDefaults.standard.set(t, forKey: "tab")
@@ -568,7 +591,7 @@ struct RootView: View {
         // The Mac's Console follows the page he's on (MacFollow).
         .background { MacFollower(nav: model.nav) }
         // NavTransit watches every push and pop from the first (it holds a page's layout under the edge swipe).
-        .onAppear { _ = NavTransit.shared; BackFinder.start(); MacPrefs.shareWithWidgets(); AppBadge.set(updateCount); ShotWindow.apply() }
+        .onAppear { _ = NavTransit.shared; BackFinder.start(); MacPrefs.shareWithWidgets(); AppBadge.set(updateCount); ShotWindow.apply(); warmMacOS() }
         // And on the app's icon on the home screen, like the App Store's.
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
@@ -796,7 +819,7 @@ struct Screen<Content: View>: View {
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
                 // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
-                if let (t, to) = ["forcequit": (1, "open"), "appsfail": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power"), "music": (6, "mac-music")][model.pose], t == tab {
+                if let (t, to) = ["forcequit": (1, "open"), "appsfail": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power"), "music": (6, "mac-music"), "macosrow": (0, "mac-macos")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     // The This Mac card is drawn only once its first reads land: waited for, or the scroll found nothing
                     // and the open portrait and folded shots never showed it (CI d9c229c).
@@ -890,8 +913,6 @@ struct Screen<Content: View>: View {
             // the tab coming back under the page slides in whole, rows as they were (later list 11-24, 12). Pushed pages
             // hold their own.
             .holdsWhileMoving("tab \(tab)")
-            // Clear of the tab bar drawn along the foot open upright (DuoTabs).
-            .tabBarRoom()
             .modifier(TabBarFade())
             .modifier(StatusBarFade())
             .background(groupedBackground.ignoresSafeArea())
@@ -954,13 +975,13 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Status's histories and processes, or the Dashboard's own (NavStore keeps the two stacks apart).
-            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6).tabBarRoom() }
+            .navigationDestination(item: tab == 0 ? $nav.history : tab == 6 ? $nav.dashHistory : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0).environment(\.onDashboard, tab == 6) }
             // Settings, behind the gear in the bar, on the stack of the tab it was opened from.
-            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true).tabBarRoom() }
+            .navigationDestination(isPresented: Binding(get: { nav.settingsOpen && nav.settingsTab == tab }, set: { if !$0, nav.settingsTab == tab { nav.settingsOpen = false } })) { MacSettings(pushed: true) }
             // All processes, from the tab itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model).tabBarRoom() }
-            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model).tabBarRoom() }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model).tabBarRoom() }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : tab == 6 && nav.dashHistory == nil ? $nav.dashProcesses : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             // Everything on the Mac and its other pages: Control's, or the Dashboard's own.
             .navigationDestination(item: tab == 5 ? $nav.macPage : tab == 0 ? $nav.dashPage : Binding<MacPage?>.constant(nil)) { p in
@@ -975,9 +996,10 @@ struct StackPages: ViewModifier {
                 case .startup: StartupView(model: model)
                 case .actions: MacActionsView(model: model)
                 case .upgrade: UpgradeView(model: model)
+                // The macOS page, from its row on Status (it was a tab until 2026-11-28).
+                case .macos: MacOSPage(model: model)
+                case .notifications: MacNotifsView(model: model)
                 } }
-                .tabBarRoom()
-                
             }
     }
 }
@@ -987,7 +1009,7 @@ struct ProcessesOverHistory: ViewModifier {
     @ObservedObject var nav: NavStore
     @Environment(\.onDashboard) private var dash
     func body(content: Content) -> some View {
-        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model).tabBarRoom() }
+        content.navigationDestination(item: dash ? $nav.dashProcesses : $nav.processes) { ProcessesView(first: $0, model: model) }
     }
 }
 // A page pushed on the Dashboard's stack (NavStore's dash pages), not Status's or Control's.
@@ -1341,7 +1363,8 @@ struct Hero: View {
     @EnvironmentObject var model: AppModel
     let s: Status
     @Environment(\.paneLayout) private var panes
-    @Environment(\.duoTabsSide) private var sideTabs
+    // Folded and folded on its side, iOS has its bars down the side strip beside one column; open upright they run across.
+    @Environment(\.tabsSide) private var sideTabs
     // Folded (one column beside the side strip), the Mac's portrait sits beside its name, a third the height, so the figures
     // he opens Status for start above the fold (Richard, 2026-11-21: the big picture pushed them below the screen).
     private var chips: some View {
@@ -1625,6 +1648,24 @@ struct StatusTab: View {
             }
         }
     }
+    // macOS, the Mac's own system and its updates: a row with the version and where updates stand, opening the macOS page
+    // (a tab until 2026-11-28, when the tab bar went down to five).
+    var macOSRow: some View {
+        Button { model.macPage = .macos } label: {
+            HStack(spacing: 6) {
+                Text("macOS").foregroundStyle(Color.primary)
+                Spacer(minLength: 8)
+                Text(UpgradeTab.rowLine(s)).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+                RowChevron()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("status.macos")
+        // Where it is, for the build's films of the macOS push (-findBack YES only).
+        .findSpot("macosrow")
+        .place("mac-macos")
+    }
     // The alerts switch is in Settings' Behaviour card (Richard, 2026-11-11: "the notify setting should be in settings").
     @ViewBuilder var text: some View {
         if showAccess {
@@ -1641,10 +1682,13 @@ struct StatusTab: View {
             Section("This Mac") {
                 LabeledContent("Model", value: s.model).place("mac-model")
                 LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: "")).place("mac-cpu")
+                macOSRow
                 LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in").place("mac-tailnet")
                 Button("Change connection") { model.signInSheet = true }.place("mac-change")
             }
         }
+        // With This Mac hidden in Settings, the way to the macOS page stays.
+        else { Section { macOSRow } }
         if showProcesses {
             Section("Top processes") {
                 // Eight rows by place, not by process: the Mac's top eight change order and members with every reading, and
@@ -1669,6 +1713,7 @@ struct StatusTab: View {
         if side != .right {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
+            MacNotifsRow(count: s.macNotifications ?? 0)
             Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
             if showQuick { Section { QuickActions(displayOn: s.displayOn, displayOff: s.screen == "display off").place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
@@ -2169,6 +2214,57 @@ struct APIKeyRow: View {
     }
 }
 
+// The macOS page: the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07). It was a
+// tab until 2026-11-28; Status's macOS row opens it now, with the system Back and edge swipe, so the tab bar holds five
+// and iOS never puts one under "More" (Richard: "the side bar in the mac pro app doesn't follow ios conventions"). Laid
+// out as the tab was, so nothing on it moved: its name as the first line (in one column it goes up with the page), the
+// notice under it, the cards in one pane or two.
+struct MacOSPage: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
+    let model: AppModel
+    @Environment(\.statusBarTop) private var statusBarTop
+    @Environment(\.paneLayout) private var panes
+    @State private var shown: Status?
+    static let title = "macOS"
+    func heading(_ side: Side) -> some View {
+        HStack(alignment: .center) {
+            Text(Self.title).font(.largeTitle.weight(.bold)).lineLimit(1)
+            Spacer(minLength: 8)
+        }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(side == .right ? 0 : 1)
+            .accessibilityHidden(side == .right)
+            .accessibilityAddTraits(.isHeader)
+            .padding(.top, (statusBarTop < 20 ? 14 : 0) + 2).padding(.bottom, 2)
+    }
+    func page(_ side: Side) -> some View {
+        VStack(spacing: 12) {
+            if side != .all { heading(side) }
+            if side != .right, Notice.shows(model) {
+                Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+            }
+            if let s = shown ?? model.status { UpgradeTab(s, side: side) }
+            else if side != .right, !Notice.shows(model) { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) }.frame(maxHeight: .infinity) }
+        }
+        .modifier(PageLead(on: side != .right))
+        .environment(\.handTitle, side == .all ? AnyView(heading(side)) : nil)
+    }
+    var body: some View {
+        Group {
+            if panes { FoldSplit { page(.left) } right: { page(.right) } } else { page(.all) }
+        }
+        .holdsWhileMoving("macos")
+        .modifier(TabBarFade())
+        .background(groupedBackground.ignoresSafeArea())
+        .topEdge()
+        .pushedTitle(Self.title)
+        .onReceive(model.statusStore.$status) { s in
+            guard let s else { return }
+            if model.statusStore.moves { withAnimation(Motion.quick) { shown = s } } else { shown = s }
+        }
+    }
+}
+
 // The Updates page: where the machine stands, pinned, with the log scrolling on its own underneath.
 struct UpgradeTab: View {
     @EnvironmentObject var model: AppModel
@@ -2200,6 +2296,17 @@ struct UpgradeTab: View {
     static let stamp: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f }()
     // A check in progress says so: "Running" over Details' "Running 26.7.2" said two things with one word (designer, 2026-11-11).
     var checking: Bool { statusParts.word.lowercased() == "running" }
+    // Status's macOS row: the version running and, in a word or two, where its updates stand ("26.7.2 · Up to date").
+    static func rowLine(_ s: Status) -> String {
+        let t = UpgradeTab(s)
+        let word: String
+        if !s.upgrade.installed { word = "Not set up" }
+        else if t.checking { word = "Checking" }
+        else if t.seal.1 == .orange || t.seal.1 == macBlue { word = s.upgrade.status.isEmpty ? "Starting" : t.statusParts.word }
+        else if let held = t.held { word = "\(held.split(separator: " ").first ?? "") waiting" }
+        else { word = "Up to date" }
+        return "\(s.macos) · \(word)"
+    }
     var headline: String {
         if s.upgrade.installed, checking { return "Checking for updates" }
         return s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : statusParts.word) : onTahoe ? "On Tahoe" : "Waiting for your password to start"

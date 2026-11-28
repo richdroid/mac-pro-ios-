@@ -3,6 +3,12 @@
 const now = () => Date.now();
 const link = (id, name, state, detail, extra = {}) => ({ id, name, state, detail, checkedAt: now(), can: [], ...extra });
 let restartAt = 0;
+const notifsAll = [
+  { id: '6733E63E-DEC7-4FA2-A7A4-5E53F1869DF7', app: 'Calendar', title: 'Shift', subtitle: '', body: 'Today at 4:30 PM', stack: false, kind: 'alert', closable: true },
+  { id: 'A1B2C3D4-0000-1111-2222-333344445555', app: 'System Settings', title: 'App Background Activity', subtitle: '', body: '“Example Console” can run in the background. You can manage this in Login Items & Extensions.', stack: true, kind: 'alert', closable: true },
+  { id: 'n3c9e1a2b4d5f', app: '', title: 'Some iCloud Data Isn’t Syncing', subtitle: '', body: 'Open iCloud settings to fix it.', stack: false, kind: 'banner', closable: true },
+];
+let notifsOn = notifsAll.slice(), notifsGoneAt = 0;
 const feeds = {
   '/api/mac/links': () => ({ t: now(), healthAt: now(), links: [
     link('tailscale', 'Tailscale', 'up', 'Running · 4 of 6 devices online', { endpoint: '100.64.0.10 · mac-pro.example.ts.net', note: 'Never stopped from here: the phone reaches the Mac through it.' }),
@@ -47,6 +53,7 @@ const feeds = {
 // The Console on the Mac as the bridge relays it (API.md "Console remote"): a command is acked after 0.7 s, and changes
 // the state that GET /api/mac/console reports.
 const consoleState = { running: true, frontmost: true, fullscreen: true, page: 'temps', board: null, rotate: false, rotateSecs: 45, mode: 'desk', rotating: ['machine', 'media', 'home', 'work', 'tonight'], animations: 'full', display: 'awake', glance: false, at: Date.now() };
+let filmAt = 0, filmAsked = 0;
 module.exports = (q, s) => {
   const u = new URL(q.url, 'http://x');
   // Music on the Mac (the Dashboard's Music section), one state per port (ci/mock-chumby.js listens on each):
@@ -62,6 +69,38 @@ module.exports = (q, s) => {
     9064: { state: 'playing', title: 'Everything Now (Continued) [Live at Madison Square Garden, New York, 2018] – 2024 Remaster', artist: 'Arcade Fire', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: true } },
   }[mp] || { state: 'stopped', session: { on: false } };
   // 9066: lyrics off, its first answer 8 s late, for the cold open's "Checking…".
+  // The session card (11-28), GET /api/mac/music/session: 9061 lyrics up, playing; 9062 connecting the speaker;
+  // 9063 the speaker didn't connect; 9064 a long title, a press answered after 40 s; 9065 a refused press;
+  // 9066 the cold open; 9067 just ended, the speaker free; 9068 AirPlayed from another device (skips there). Else none.
+  const song = { title: 'Sample Song', artist: 'Sample Artist', position: 74, duration: 212, playing: true, from: 'airplay' };
+  const on = (o) => ({ on: true, phase: 'lyrics', elapsed: 754, speaker: 'HK Invoke_C20142', speakerConnected: true, speakerState: 'connected', music: 'playing', lyrics: true, lyricsOff: false, song, volume: { level: 62, of: 'music' }, airplay: false, sender: null, endsIn: null, ...o });
+  const sessionNow = {
+    9061: on({}),
+    9062: on({ phase: 'connecting', elapsed: 4, speakerConnected: false, speakerState: 'connecting', music: null, lyrics: false, song: { ...song, position: 3 } }),
+    9063: on({ phase: 'lyrics', speakerConnected: false, speakerState: 'off', speakerSay: 'Couldn’t reach HK Invoke_C20142: it’s off, out of range or playing for another device.' }),
+    9064: on({ song: { ...song, title: 'Everything Now (Continued) [Live at Madison Square Garden, New York, 2018] – 2024 Remaster', artist: 'Arcade Fire' } }),
+    9065: on({ song: { ...song, playing: false }, phase: 'lyrics' }),
+    9067: { on: false, phase: 'ended', ended: { why: 'the AirPlay session closed', speaker: 'HK Invoke_C20142', speakerFree: true, ago: 3 } },
+    9068: on({ airplay: true, sender: 'Living Room iPad' }),
+  }[mp] || { on: false, phase: 'idle' };
+  // 9069: a whole session in about a minute, for the film: connecting 0–8 s, finding the song 8–12, lyrics 12–55,
+  // ending 55–59, ended after.
+  if (u.pathname === '/api/mac/music/session' && q.method === 'GET' && mp === 9069) {
+    if (!filmAt || Date.now() - filmAsked > 40000) filmAt = Date.now(); filmAsked = Date.now();
+    const t = (Date.now() - filmAt) / 1000;
+    const st = t < 8 ? on({ phase: 'connecting', elapsed: Math.round(t), speakerConnected: false, speakerState: 'connecting', music: null, lyrics: false, song: { ...song, position: t } })
+      : t < 12 ? on({ phase: 'starting', elapsed: Math.round(t), music: 'finding', lyrics: false, song: { ...song, position: t } })
+      : t < 55 ? on({ phase: 'lyrics', elapsed: Math.round(t), song: { ...song, position: t } })
+      : t < 59 ? { on: false, phase: 'ending', ending: { why: 'the AirPlay session closed', speaker: 'HK Invoke_C20142' } }
+      : { on: false, phase: 'ended', ended: { why: 'the AirPlay session closed', speaker: 'HK Invoke_C20142', speakerFree: true, ago: Math.round(t - 59) } };
+    s.end(JSON.stringify(st)); return true;
+  }
+  if (u.pathname === '/api/mac/music/session' && q.method === 'GET') { if (mp === 9066) { setTimeout(() => s.end(JSON.stringify(sessionNow)), 8000); return true; } s.end(JSON.stringify(sessionNow)); return true; }
+  if (q.method === 'POST' && ['/api/mac/music/lyrics', '/api/mac/music/speaker', '/api/mac/music/volume', '/api/mac/music/control', '/api/mac/music/continue'].includes(u.pathname)) {
+    if (mp === 9064) { setTimeout(() => s.end(JSON.stringify({ ok: true })), 40000); return true; }
+    if (mp === 9065) { s.end(JSON.stringify({ ok: false, say: 'Music on the Mac didn’t answer. Try again in a moment.' })); return true; }
+    s.end(JSON.stringify({ ok: true })); return true;
+  }
   if (u.pathname === '/api/mac/music/now') { if (mp === 9066) { setTimeout(() => s.end(JSON.stringify(musicNow)), 8000); return true; } s.end(JSON.stringify(musicNow)); return true; }
   if (u.pathname === '/api/mac/audio') { s.end(JSON.stringify({ outputs: [{ id: 'hk', name: 'HK Invoke_C20142', connected: lyricsOn && mp !== 9063 }, { id: 'mbp', name: 'Mac Pro Speakers', connected: false }], preferred: 'hk' })); return true; }
   if (q.method === 'POST' && (u.pathname === '/api/mac/music/session' || u.pathname.startsWith('/api/mac/audio/'))) {
@@ -74,6 +113,22 @@ module.exports = (q, s) => {
   // The actions mirror and shared dismissals (2026-11-13): nothing under way; a dismissal is taken.
   if (u.pathname === '/api/mac/actions/current') { s.end(JSON.stringify({ action: null })); return true; }
   if (u.pathname === '/api/mac/alerts/dismiss' && q.method === 'POST') { s.end(JSON.stringify({ ok: true })); return true; }
+  // The Mac's notifications on its screen (notifs.js, 11-28): three, each closed by a swipe, or all at once; the three
+  // come back 20 s after the last one closed, so a film in one posture leaves the next posture's shots their list.
+  if (u.pathname.startsWith('/api/mac/notifications')) {
+    if (notifsGoneAt && now() - notifsGoneAt > 20000) { notifsOn = notifsAll.slice(); notifsGoneAt = 0; }
+    const feed = () => ({ ok: true, notifications: notifsOn });
+    if (u.pathname === '/api/mac/notifications' && q.method === 'GET') { s.end(JSON.stringify(feed())); return true; }
+    if (q.method !== 'POST') return false;
+    let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
+      let b = {}; try { b = JSON.parse(body); } catch {}
+      const before = notifsOn.length;
+      notifsOn = u.pathname.endsWith('/dismiss-all') ? [] : notifsOn.filter(n => n.id !== b.id);
+      const closed = before - notifsOn.length; if (closed) notifsGoneAt = now();
+      setTimeout(() => s.end(JSON.stringify({ ok: true, say: closed ? 'Dismissed.' : 'It’s already gone.', closed, ...feed() })), 600);
+    });
+    return true;
+  }
   if (u.pathname === '/api/mac/console/command' && q.method === 'POST') {
     let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
       let b = {}; try { b = JSON.parse(body); } catch {}
