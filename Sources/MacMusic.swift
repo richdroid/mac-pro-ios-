@@ -323,7 +323,7 @@ struct MacMusicSection: View {
     private var subtitle: String {
         if session, let a = s?.song?.artist, !a.isEmpty { return a }
         if session || ended { return speakerName }
-        return "Lyrics on the Mac, sound on \(speakerName)"
+        return "Lyrics on the Mac, sound on the speaker"
     }
     // The phase, or the Mac's answer to the last press for a few seconds, or why the keys are dimmed.
     private var line: (text: String, warn: Bool) {
@@ -339,7 +339,7 @@ struct MacMusicSection: View {
         case "ended":
             if s?.ended?.continued == true { return ("Continued on iPhone · \(speakerName) is free", false) }
             return (s?.ended?.speakerFree == true ? "Disconnected · \(speakerName) is free" : "Ended · \(speakerName) still connected", false)
-        case "idle": return ("Nothing playing. Tap here to choose Mac Pro.", false)
+        case "idle": return ("Nothing playing. Tap to choose Mac Pro.", false)
         default:
             if let e = s?.endsIn { return ("AirPlay stopped · ends in \(e) s unless it comes back", false) }
             var t = s?.song?.playing == false ? "Paused" : store.phase == "airplay" ? "Playing the AirPlay sound directly" : s?.lyricsOff == true ? "Playing · lyrics off" : "Lyrics on the Mac"
@@ -482,7 +482,7 @@ struct MacMusicSection: View {
         let on = session ? (s?.lyricsOff != true) : false
         let note = store.busy == "lyrics" ? "Asking the Mac…"
             : session ? (s?.lyricsOff == true ? "Off · the music plays on" : s?.lyrics == true ? "Full screen on the Mac" : "Coming up on the Mac")
-            : "Starts the speaker and lyrics for what the Mac plays"
+            : "For what the Mac plays now"
         return Toggle(isOn: Binding(get: { store.asked["lyrics"] ?? on }, set: { w in Task { await store.lyrics(model, w) } })) {
             row("Lyrics", note, "quote.bubble")
         }

@@ -100,7 +100,7 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             kill -INT $REC; wait $REC
             sleep 45   # the mock's session starts over after 40 s quiet
-            case "$x" in -open) dashfilm $d $x 0.7;; *) dashfilm $d $x 0.06;; esac
+            case "$x" in -open) dashfilm $d "$x" 0.7;; *) dashfilm $d "$x" 0.06;; esac
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
