@@ -30,7 +30,7 @@ struct DashboardTab: View {
         if st.display == "asleep" { return .asleep }
         if st.screenStepAside == true { return .aside }
         // Apple Music's lyrics on the Mac's screen (the music session): the dashboard is aside on purpose.
-        if music.now?.session?.on == true, st.frontmost != true { return .lyrics }
+        if music.on, music.s?.lyricsOff != true, st.frontmost != true { return .lyrics }
         if st.frontmost == false { return .behind }
         return .on
     }
@@ -92,7 +92,7 @@ struct DashboardTab: View {
         guard ready, running, let st else { return nil }
         let bed = ConsolePlace.fromBed(st, pose: model.pose)
         let name = bed ? "From bed" : "At the desk", symbol = bed ? "bed.double" : "desktopcomputer"
-        if st.glance == true { return (name, symbol, "Glance covers the boards with big, dim figures until you turn it off") }
+        if st.glance == true { return (name, symbol, "Glance is on: big, dim figures over the boards. Turn it off to step through them.") }
         guard st.board != nil else { return (name, symbol, "A page stays up until you pick a board") }
         let large = st.text == "room" ? ", in large text" : ""
         guard st.rotate == true else { return (name, symbol, "Staying on this board\(large)") }
@@ -102,6 +102,22 @@ struct DashboardTab: View {
         if turns.count == ConsolePlace.boards.count { return (name, symbol, "All \(turns.count) boards take turns\(every)\(large)") }
         if turns.count == 1 { return (name, symbol, "Only \(turns[0]) is in the turns\(large)") }
         return (name, symbol, "\(turns.dropLast().joined(separator: ", ")) and \(turns.last ?? "") take turns\(every)\(large)")
+    }
+    // Where the mode line would be, when there's no mode to say: why.
+    var modeAbsent: String {
+        switch seen {
+        case .looking: return "Looking at the Mac…"
+        case .unsupported: return "This Mac’s bridge has no dashboard remote."
+        case .away: return "The Mac can’t be asked right now."
+        default: return "The dashboard isn’t running. Start it to pick boards."
+        }
+    }
+    // Why a key or a switch can't be pressed now, said under it (HIG: a dimmed control says why, or isn't shown).
+    var boardsWhy: String? {
+        guard ready else { return "These work once the Mac answers." }
+        if !running { return "Start the dashboard above to put a board on the Mac." }
+        if seen == .lyrics { return "A board would sit behind the lyrics. Turn Lyrics off in Music, or wait for the music to end." }
+        return nil
     }
     // The Console's pace between boards; 45 s, its default, until it says.
     var secs: Int { st?.rotateSecs.map { $0 > 0 ? Int($0) : 45 } ?? 45 }
@@ -129,8 +145,10 @@ struct DashboardTab: View {
                             if status.busy { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
                             else if remote.said != nil && remote.fail == nil { Image(systemName: "checkmark.circle.fill").font(.footnote).foregroundStyle(.green).frame(width: 12, height: 12) }
                             else { Circle().fill(status.color == .secondary ? Color(white: 0.45) : status.color).frame(width: 8, height: 8).frame(width: 12, height: 12) }
+                            // One line, always: it changes with every answer and poll, and a second line coming and going
+                            // moved the whole page under his thumb (Richard, 11-28: "going up upon going down").
                             Text(status.say).font(.subheadline).foregroundStyle(status.color == .red ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
-                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(1).minimumScaleFactor(0.75)
                         }
                         .accessibilityIdentifier("remote.status")
                     }
@@ -138,14 +156,19 @@ struct DashboardTab: View {
                 }
                 .accessibilityElement(children: .combine)
                 .animation(Motion.quick, value: status.say)
-                if let m = mode {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // Always there, two lines held for it, so the card is one height whatever the Mac says (it came and went
+                // with each moment the Mac couldn't be asked, and the page jumped).
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let m = mode {
                         Label(m.name, systemImage: m.symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).labelStyle(.titleAndIcon).fixedSize()
-                        Text(m.say).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(m.say).font(.footnote).foregroundStyle(.secondary).lineLimit(2, reservesSpace: true)
+                    } else {
+                        Text(modeAbsent).font(.footnote).foregroundStyle(.secondary).lineLimit(2, reservesSpace: true)
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("remote.mode")
+                    Spacer(minLength: 0)
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("remote.mode")
                 keys
             }
             .padding(Space.card)
@@ -253,7 +276,8 @@ struct DashboardTab: View {
             .opacity(ready && running && seen != .lyrics ? 1 : 0.4)
             .animation(.easeOut(duration: 0.2), value: seen == .lyrics)
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-        } header: { Text("Put on the Mac") }
+        // Always there, two lines held, so the page never moves as the reason comes and goes.
+        } header: { Text("Put on the Mac") } footer: { Text(boardsWhy ?? "The lit one is on the Mac’s screen now.").lineLimit(2, reservesSpace: true) }
     }
 
     // MARK: The switches
@@ -292,7 +316,10 @@ struct DashboardTab: View {
                 HStack { Label("See the Mac’s screen", systemImage: "macwindow"); Spacer(minLength: 8); RowChevron() }.contentShape(Rectangle())
             }
             .accessibilityIdentifier("dash.screen")
-        } header: { Text("Switches") }
+        } header: { Text("Switches") } footer: {
+            if !ready, remote.read { Text("These work once the Mac answers.") }
+            else if ready && !running { Text("Take turns, Large text and Glance change the dashboard, so they work while it runs. Turn On screen on to start it.") }
+        }
         .disabled(!ready)
     }
 }

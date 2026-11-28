@@ -1,0 +1,134 @@
+name: Mac Pro AirPlay session 1128 (branch only)
+# The Dashboard's Music card (the AirPlay session, 11-28) in every state the mock Mac can be in, shot in every posture with
+# open portrait (the posture Richard holds) first. Artifacts only; the full build and its releases are untouched.
+on:
+  push:
+    branches: [airplay-session-1128]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: airplay-session-1128
+  # The running job always finishes; a newer push only replaces one still waiting (several sessions push the Mac Pro app).
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 82
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          shot() {
+            local name=$1 display=$2 wait=$3 port=9001; shift 3
+            if [ "$1" = "@" ]; then port=$2; shift 2; fi
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$port "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          snap() { xcrun simctl io "$DEVICE" screenshot --display=$1 dist/$2.png > /dev/null 2>&1; }
+          swipelog() { local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0; [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/$1-swipe.log; }
+          # The Dashboard scrolled top to bottom and back while the Music card goes through a whole session (mock 9069:
+          # connecting, finding, lyrics, ending, ended), the Pages menu opened and a page chosen, End's question asked and
+          # cancelled (Richard, 11-28: "going up upon going down", menus that don't make sense). Row heights in the log.
+          dashfilm() {
+            local d=$1 x=$2 dx=$3 n=macpro-dash-scroll$2
+            down() { $D "$DEVICE" drag $dx 0.8 $dx 0.4 0.6 || echo "drag failed"; sleep 2; }
+            up() { $D "$DEVICE" drag $dx 0.35 $dx 0.8 0.6 || echo "drag failed"; sleep 2; }
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/$n.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9069 -tab 6 -swipeLog YES > /dev/null
+            sleep 5; snap $d $n-0top
+            down; snap $d $n-1-down; down; snap $d $n-2-down; down; down; snap $d $n-3-bottom
+            up; up; snap $d $n-4-up; down; down; down; snap $d $n-5-bottom
+            $D "$DEVICE" tap "End session" || echo "End not found"; sleep 1.5; snap $d $n-6end-ask
+            $D "$DEVICE" tap "Cancel" || echo "Cancel not found"; sleep 1.5
+            echo "$n: waiting at the bottom through the session's end"; sleep 26; snap $d $n-7ended-bottom
+            up; up; up; up; snap $d $n-8top
+            $D "$DEVICE" tap "Fans & heat" || echo "Pages key not found"; sleep 1.5; snap $d $n-9pages-menu
+            $D "$DEVICE" tap "Storage" || echo "Storage not found"; sleep 2.5; snap $d $n-10page-chosen
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            kill -INT $REC; wait $REC
+            swipelog $n
+            sleep 45   # the mock's session starts over after 40 s quiet
+          }
+          # Every tab and its main pages, the reach and sign-in states (11-25 debug pass: broken states, slow loads, spacing).
+          poses() {
+            local d=$1 x=$2
+            shot tab6$x $d 7 -tab 6
+            shot music-idle$x $d 9 -tab 6 -pose music
+            shot music-lyrics$x $d 9 @ 9061 -tab 6 -pose music
+            shot music-connecting$x $d 9 @ 9062 -tab 6 -pose music
+            shot music-nospeaker$x $d 9 @ 9063 -tab 6 -pose music
+            shot music-long-busy$x $d 11 @ 9064 -tab 6 -pose music -musicPress lyrics
+            shot music-refused$x $d 11 @ 9065 -tab 6 -pose music -musicPress next
+            shot music-cold$x $d 3 @ 9066 -tab 6 -pose music
+            shot music-ended$x $d 9 @ 9067 -tab 6 -pose music
+            shot music-other-sender$x $d 9 @ 9068 -tab 6 -pose music
+            shot music-end-confirm$x $d 11 @ 9061 -tab 6 -pose music -musicPress endask
+            # The whole session in motion: connecting, finding the song, lyrics, ending, ended (mock 9069).
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/macpro-music-session$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9069 -tab 6 -pose music > /dev/null
+            sleep 68
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            kill -INT $REC; wait $REC
+            sleep 45   # the mock's session starts over after 40 s quiet
+            case "$x" in -open) dashfilm $d "$x" 0.7;; *) dashfilm $d "$x" 0.06;; esac
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          D=/tmp/dh/.build/release/devicehubctl
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          poses 3 -portrait
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          poses 3 -open
+          $D "$DEVICE" pose closed || true; sleep 5
+          poses 1 ""
+          ls dist | wc -l
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view airplay-session-1128-shots >/dev/null 2>&1 || gh release create airplay-session-1128-shots --prerelease --title "AirPlay session check (airplay-session-1128)" --notes "Branch airplay-session-1128: the Dashboard's Music card in every state and posture."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload airplay-session-1128-shots "$f" --clobber && break; sleep 15; done
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: airplay-session-shots
+          path: dist/*.png
+          retention-days: 5

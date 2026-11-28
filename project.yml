@@ -33,6 +33,8 @@ targets:
         UIBackgroundModes: [fetch, remote-notification]
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.MacPro.alerts]
         NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
+        # Continue on iPhone and the play keys when this phone is the one AirPlaying (MacMusic.swift, 11-28).
+        NSAppleMusicUsageDescription: Picks up the song the Mac is playing, and plays, pauses and skips the song this iPhone AirPlays to the Mac.
         # The Mac Pro's portrait on its glow from the first frame, pinned where Status draws it, so nothing jumps.
         UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]

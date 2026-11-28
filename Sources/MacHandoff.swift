@@ -54,7 +54,7 @@ enum MacDeepLink {
             model.showMacOS()
         case "settings":
             model.tab = 0; model.history = nil; model.processes = nil; model.nav.settingsTab = 0; model.nav.settingsOpen = true
-        case "console":
+        case "console", "music":
             model.tab = 6
         default:
             return false
