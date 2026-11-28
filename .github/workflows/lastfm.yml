@@ -342,6 +342,11 @@ jobs:
             X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film diag-fresh-charts 3 18 -tab 1
             crash_reports
           fi
+          # Published here, small and at once: the publish step's 2 GB of films can use up its time first (run 91).
+          mkdir -p dist/crash; cp dist/crashed.txt dist/crash/ 2>/dev/null
+          (cd dist/crash && zip -q "$GITHUB_WORKSPACE/crash-logs.zip" * 2>/dev/null) || zip -q crash-logs.zip /dev/null
+          echo "$GITHUB_SHA crashes run $GITHUB_RUN_NUMBER: $(cat dist/crashed.txt 2>/dev/null | tr '\n' ' ')" > crashes.txt
+          release; upload crash-logs.zip crashes.txt
           # The simulator stopped before any film is shrunk: shrinking beside it failed with "Cannot Decode" (runs 34, 35).
           xcrun simctl shutdown "$DEVICE"
       - name: Publish films
@@ -372,7 +377,3 @@ jobs:
           for f in dist/hitches-*.txt; do [ -f "$f" ] && echo "$(basename "$f" .txt | sed 's/^hitches-//') $(head -1 "$f")"; done > hitches.txt
           (cd dist && zip -q ../films-logs.zip films.log publish.log hitches-*.txt 2>/dev/null || zip -q ../films-logs.zip /dev/null)
           upload films.txt hitches.txt films-logs.zip
-          # The crash reports, if the app died in any film (an empty zip says it never did).
-          mkdir -p dist/crash; cp dist/crashed.txt dist/crash/ 2>/dev/null
-          (cd dist/crash && zip -q ../../crash-logs.zip * 2>/dev/null || zip -q ../../crash-logs.zip /dev/null)
-          upload crash-logs.zip
