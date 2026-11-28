@@ -981,6 +981,7 @@ struct StackPages: ViewModifier {
                 case .upgrade: UpgradeView(model: model)
                 // The macOS page, from its row on Status (it was a tab until 2026-11-28).
                 case .macos: MacOSPage(model: model)
+                case .notifications: MacNotifsView(model: model)
                 } }
             }
     }
@@ -1695,6 +1696,7 @@ struct StatusTab: View {
         if side != .right {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
+            MacNotifsRow(count: s.macNotifications ?? 0)
             Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
             if showQuick { Section { QuickActions(displayOn: s.displayOn, displayOff: s.screen == "display off").place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }

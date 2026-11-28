@@ -147,6 +147,8 @@ struct Status: Decodable {
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
     var displayOn: Bool?
+    // How many of the Mac's notifications are on its screen (Status's row to them); nil from a bridge older than 11-28.
+    var macNotifications: Int?
     var temps: [Temp]?
     // The bridge's heat verdict (each sensor against its own limits); nil from a bridge older than 2026-11-12.
     var heat: HeatVerdict?
@@ -169,7 +171,7 @@ struct Status: Decodable {
     // sessions, apps and alerts here, since a status that doesn't decode is dropped whole (audit, 2026-11-10).
     enum CodingKeys: String, CodingKey {
         case model, macos, build, uptime, load, cpuModel, cpu, mem, disk, net, hist, apps, installed, procs, tailscale, claude, usage, upgrade, oclp, sharing
-        case publicUrl, typing, iphone, iloader, macLogin, screen, agentStale, ios, displayOn, temps, heat, services, iosApps, alerts, apiUsage, publicUp, healthBad, healthAt
+        case publicUrl, typing, iphone, iloader, macLogin, screen, agentStale, ios, displayOn, macNotifications, temps, heat, services, iosApps, alerts, apiUsage, publicUp, healthBad, healthAt
     }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -189,7 +191,7 @@ struct Status: Decodable {
         publicUrl = opt(.publicUrl) ?? ""; typing = opt(.typing) ?? ""; iphone = opt(.iphone) ?? false; iloader = opt(.iloader) ?? false
         macLogin = opt(.macLogin) ?? false; screen = opt(.screen) ?? ""; agentStale = opt(.agentStale) ?? false
         ios = opt(.ios) ?? IOSStatus(hasPhone: false, signedIn: true, ready: false, installedAt: 0, nextDue: 0, lastResult: "", resigning: false, job: IOSJob(state: "", message: ""))
-        displayOn = opt(.displayOn); temps = opt(.temps); heat = opt(.heat); services = opt(.services); iosApps = opt(.iosApps); alerts = opt(.alerts)
+        displayOn = opt(.displayOn); macNotifications = opt(.macNotifications); temps = opt(.temps); heat = opt(.heat); services = opt(.services); iosApps = opt(.iosApps); alerts = opt(.alerts)
         apiUsage = opt(.apiUsage); publicUp = opt(.publicUp); healthBad = opt(.healthBad); healthAt = opt(.healthAt)
     }
 }

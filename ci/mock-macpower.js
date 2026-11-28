@@ -3,6 +3,12 @@
 const now = () => Date.now();
 const link = (id, name, state, detail, extra = {}) => ({ id, name, state, detail, checkedAt: now(), can: [], ...extra });
 let restartAt = 0;
+const notifsAll = [
+  { id: '6733E63E-DEC7-4FA2-A7A4-5E53F1869DF7', app: 'Calendar', title: 'Shift', subtitle: '', body: 'Today at 4:30 PM', stack: false, kind: 'alert', closable: true },
+  { id: 'A1B2C3D4-0000-1111-2222-333344445555', app: 'System Settings', title: 'App Background Activity', subtitle: '', body: '“Example Console” can run in the background. You can manage this in Login Items & Extensions.', stack: true, kind: 'alert', closable: true },
+  { id: 'n3c9e1a2b4d5f', app: '', title: 'Some iCloud Data Isn’t Syncing', subtitle: '', body: 'Open iCloud settings to fix it.', stack: false, kind: 'banner', closable: true },
+];
+let notifsOn = notifsAll.slice(), notifsGoneAt = 0;
 const feeds = {
   '/api/mac/links': () => ({ t: now(), healthAt: now(), links: [
     link('tailscale', 'Tailscale', 'up', 'Running · 4 of 6 devices online', { endpoint: '100.64.0.10 · mac-pro.example.ts.net', note: 'Never stopped from here: the phone reaches the Mac through it.' }),
@@ -107,6 +113,22 @@ module.exports = (q, s) => {
   // The actions mirror and shared dismissals (2026-11-13): nothing under way; a dismissal is taken.
   if (u.pathname === '/api/mac/actions/current') { s.end(JSON.stringify({ action: null })); return true; }
   if (u.pathname === '/api/mac/alerts/dismiss' && q.method === 'POST') { s.end(JSON.stringify({ ok: true })); return true; }
+  // The Mac's notifications on its screen (notifs.js, 11-28): three, each closed by a swipe, or all at once; the three
+  // come back 20 s after the last one closed, so a film in one posture leaves the next posture's shots their list.
+  if (u.pathname.startsWith('/api/mac/notifications')) {
+    if (notifsGoneAt && now() - notifsGoneAt > 20000) { notifsOn = notifsAll.slice(); notifsGoneAt = 0; }
+    const feed = () => ({ ok: true, notifications: notifsOn });
+    if (u.pathname === '/api/mac/notifications' && q.method === 'GET') { s.end(JSON.stringify(feed())); return true; }
+    if (q.method !== 'POST') return false;
+    let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
+      let b = {}; try { b = JSON.parse(body); } catch {}
+      const before = notifsOn.length;
+      notifsOn = u.pathname.endsWith('/dismiss-all') ? [] : notifsOn.filter(n => n.id !== b.id);
+      const closed = before - notifsOn.length; if (closed) notifsGoneAt = now();
+      setTimeout(() => s.end(JSON.stringify({ ok: true, say: closed ? 'Dismissed.' : 'It’s already gone.', closed, ...feed() })), 600);
+    });
+    return true;
+  }
   if (u.pathname === '/api/mac/console/command' && q.method === 'POST') {
     let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
       let b = {}; try { b = JSON.parse(body); } catch {}
