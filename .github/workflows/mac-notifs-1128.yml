@@ -6,7 +6,7 @@ on:
     branches: [mac-notifs-1128]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: mac-notifs-1128
   cancel-in-progress: true
@@ -82,13 +82,15 @@ jobs:
           $D "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
           ls dist | wc -l
-      - uses: actions/upload-artifact@v4
+      - name: Publish
         if: always()
-        with:
-          name: mac-notifs-shots
-          path: |
-            dist/*.png
-            dist/*.mp4
-            dist/sim.log
-            dist/build.log
-          retention-days: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view mac-notifs-1128 >/dev/null 2>&1 || gh release create mac-notifs-1128 --prerelease --title "Mac Pro notifications 1128 shots" --notes "Branch-only shots; deleted with the branch's workflow."
+          for f in shots.zip films.zip status.txt; do
+            for i in 1 2 3; do gh release upload mac-notifs-1128 "$f" --clobber && break; sleep 15; done
+          done
