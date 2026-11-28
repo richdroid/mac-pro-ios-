@@ -275,9 +275,22 @@ struct DashboardTab: View {
             .disabled(!ready || !running || seen == .lyrics)
             .opacity(ready && running && seen != .lyrics ? 1 : 0.4)
             .animation(.easeOut(duration: 0.2), value: seen == .lyrics)
+            // Why the six are dimmed, said over them, so it takes no room: as a footer it held two lines under the keys
+            // even with nothing to say (and then restated the lit key), which moved the switches down and cut the
+            // second row of tiles on its side (gate on macpro-1128); coming and going, it moved the page.
+            .overlay {
+                if let why = boardsWhy {
+                    Text(why).font(.footnote.weight(.medium)).multilineTextAlignment(.center).lineLimit(3).minimumScaleFactor(0.85)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.horizontal, 16)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("boards.why")
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: boardsWhy)
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-        // Always there, two lines held, so the page never moves as the reason comes and goes.
-        } header: { Text("Put on the Mac") } footer: { Text(boardsWhy ?? "The lit one is on the Mac’s screen now.").lineLimit(2, reservesSpace: true) }
+        } header: { Text("Put on the Mac") }
     }
 
     // MARK: The switches

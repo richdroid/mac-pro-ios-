@@ -61,7 +61,8 @@ struct MacNotifRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let app = n.app, !app.isEmpty { Text(app).font(.footnote).foregroundStyle(.secondary) }
                 Text(n.heading).foregroundStyle(Color.primary)
-                if let d = n.detail { Text(d).font(.subheadline).foregroundStyle(.secondary).lineLimit(2) }
+                // The whole of it: cut at two lines, folded lost the end of a sentence with no way to read it (gate on macpro-1128).
+                if let d = n.detail { Text(d).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             }
         }
         .padding(.vertical, 2)
@@ -76,6 +77,8 @@ struct MacNotifsView: View {
     @State private var gone: Set<String> = []
     @State private var clearing = false
     @State private var failure: String?
+    @Environment(\.paneLayout) private var panes
+    static let how = "Each closes as it would on the Mac. Its buttons, like Allow or Turn Off, are never pressed."
     var shown: [MacNotif] { (feed.value?.notifications ?? []).filter { !gone.contains($0.id) } }
     var body: some View {
         ConsolePage(title: "Notifications", place: "macnotifs", away: feed.away, lastRead: feed.lastRead) {
@@ -94,11 +97,13 @@ struct MacNotifsView: View {
                                     Button(role: .destructive) { dismiss(n) } label: { Label(n.stack == true ? "Clear" : "Dismiss", systemImage: "xmark") }
                                 }
                                 .place(n.id)
+                                // Where the first row is, for the build's swipe films (-findBack YES only).
+                                .findSpot(n.id == shown.first?.id ? "notif0" : "")
                         }
                     } header: {
                         Text("On the Mac’s screen")
                     } footer: {
-                        Text("Each closes as it would on the Mac. Its buttons, like Allow or Turn Off, are never pressed.")
+                        if !panes { Text(Self.how) }
                     }
                 }
                 if let failure { Section { FailText(failure) } }
@@ -106,7 +111,20 @@ struct MacNotifsView: View {
                 Section { HStack { ProgressView(); Text("Reading the Mac’s screen…").foregroundStyle(.secondary) } }
             }
         } right: {
-            EmptyView()
+            // Open flat, the right pane holds what the list's footer says and Dismiss All beside the list; it was left
+            // empty, half the screen black (gate on macpro-1128).
+            if let f = feed.value, f.ok {
+                if shown.isEmpty {
+                    Section { Text(Self.how).foregroundStyle(.secondary) } header: { Text("Dismissing from the phone") }
+                } else {
+                    Section {
+                        Button(role: .destructive) { dismissAll() } label: {
+                            Label(shown.count == 1 ? "Dismiss the notification" : "Dismiss all \(shown.count)", systemImage: "xmark.circle")
+                        }
+                        .disabled(clearing || feed.away)
+                    } header: { Text("Dismissing from the phone") } footer: { Text(Self.how) }
+                }
+            }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

@@ -323,7 +323,9 @@ struct MacMusicSection: View {
     private var subtitle: String {
         if session, let a = s?.song?.artist, !a.isEmpty { return a }
         if session || ended { return speakerName }
-        return "Lyrics on the Mac, sound on the speaker"
+        // Short enough for one line folded and open flat ("…sound on the speaker" was cut there, gate on macpro-1128);
+        // the speaker is named on its own row below.
+        return "Lyrics on the Mac’s screen"
     }
     // The phase, or the Mac's answer to the last press for a few seconds, or why the keys are dimmed.
     private var line: (text: String, warn: Bool) {
@@ -522,12 +524,15 @@ struct MacMusicSection: View {
                 if store.busy == "continue" { ProgressView().controlSize(.small) } else { RowChevron() }
             }
             .contentShape(Rectangle())
+            // Dimmed as the card's other keys are when there's no session to carry on (it was drawn at full strength
+            // with its chevron and did nothing, gate on macpro-1128).
+            .opacity(session && store.busy == nil ? 1 : 0.4)
         }
         .accessibilityIdentifier("music.continue")
         .disabled(!session || store.busy != nil)
     }
     private var endRow: some View {
-        Button(role: .destructive) { confirmEnd = true } label: { Label("End session", systemImage: "stop.circle") }
+        Button(role: .destructive) { confirmEnd = true } label: { Label("End session", systemImage: "stop.circle").opacity(session && store.busy == nil ? 1 : 0.4) }
             .accessibilityIdentifier("music.end")
             .disabled(!session || store.busy != nil)
             .confirmationDialog("End the session?", isPresented: $confirmEnd, titleVisibility: .visible) {
