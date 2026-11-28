@@ -47,6 +47,7 @@ const feeds = {
 // The Console on the Mac as the bridge relays it (API.md "Console remote"): a command is acked after 0.7 s, and changes
 // the state that GET /api/mac/console reports.
 const consoleState = { running: true, frontmost: true, fullscreen: true, page: 'temps', board: null, rotate: false, rotateSecs: 45, mode: 'desk', rotating: ['machine', 'media', 'home', 'work', 'tonight'], animations: 'full', display: 'awake', glance: false, at: Date.now() };
+let filmAt = 0, filmAsked = 0;
 module.exports = (q, s) => {
   const u = new URL(q.url, 'http://x');
   // Music on the Mac (the Dashboard's Music section), one state per port (ci/mock-chumby.js listens on each):
@@ -76,6 +77,17 @@ module.exports = (q, s) => {
     9067: { on: false, phase: 'ended', ended: { why: 'the AirPlay session closed', speaker: 'HK Invoke_C20142', speakerFree: true, ago: 3 } },
     9068: on({ airplay: true, sender: 'Living Room iPad' }),
   }[mp] || { on: false, phase: 'idle' };
+  // 9069: a whole session in 26 s, for the film: connecting 0–6 s, finding the song 6–9, lyrics 9–18, ending 18–22, ended.
+  if (u.pathname === '/api/mac/music/session' && q.method === 'GET' && mp === 9069) {
+    if (!filmAt || Date.now() - filmAsked > 40000) filmAt = Date.now(); filmAsked = Date.now();
+    const t = (Date.now() - filmAt) / 1000;
+    const st = t < 6 ? on({ phase: 'connecting', elapsed: Math.round(t), speakerConnected: false, speakerState: 'connecting', music: null, lyrics: false, song: { ...song, position: t } })
+      : t < 9 ? on({ phase: 'starting', elapsed: Math.round(t), music: 'finding', lyrics: false, song: { ...song, position: t } })
+      : t < 18 ? on({ phase: 'lyrics', elapsed: Math.round(t), song: { ...song, position: t } })
+      : t < 22 ? { on: false, phase: 'ending', ending: { why: 'the AirPlay session closed', speaker: 'HK Invoke_C20142' } }
+      : { on: false, phase: 'ended', ended: { why: 'the AirPlay session closed', speaker: 'HK Invoke_C20142', speakerFree: true, ago: Math.round(t - 22) } };
+    s.end(JSON.stringify(st)); return true;
+  }
   if (u.pathname === '/api/mac/music/session' && q.method === 'GET') { if (mp === 9066) { setTimeout(() => s.end(JSON.stringify(sessionNow)), 8000); return true; } s.end(JSON.stringify(sessionNow)); return true; }
   if (q.method === 'POST' && ['/api/mac/music/lyrics', '/api/mac/music/speaker', '/api/mac/music/volume', '/api/mac/music/control', '/api/mac/music/continue'].includes(u.pathname)) {
     if (mp === 9064) { setTimeout(() => s.end(JSON.stringify({ ok: true })), 40000); return true; }

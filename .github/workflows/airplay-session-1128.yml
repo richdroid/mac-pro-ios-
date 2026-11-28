@@ -66,6 +66,14 @@ jobs:
             shot music-ended$x $d 9 @ 9067 -tab 6 -pose music
             shot music-other-sender$x $d 9 @ 9068 -tab 6 -pose music
             shot music-end-confirm$x $d 11 @ 9061 -tab 6 -pose music -musicPress endask
+            # The whole session in motion: connecting, finding the song, lyrics, ending, ended (mock 9069).
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/macpro-music-session$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9069 -tab 6 -pose music > /dev/null
+            sleep 32
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            kill -INT $REC; wait $REC
+            sleep 45   # the mock's session starts over after 40 s quiet
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
@@ -78,6 +86,19 @@ jobs:
           $D "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
           ls dist | wc -l
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view airplay-session-1128-shots >/dev/null 2>&1 || gh release create airplay-session-1128-shots --prerelease --title "AirPlay session check (airplay-session-1128)" --notes "Branch airplay-session-1128: the Dashboard's Music card in every state and posture."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload airplay-session-1128-shots "$f" --clobber && break; sleep 15; done
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

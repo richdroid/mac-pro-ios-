@@ -222,7 +222,7 @@ http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9013, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, 'idle'));
 // The Screen as video (mp-screen): the bridge's H.264 path, replayed from a stream its own helper made.
 // A Mac with Apple Music's lyrics up (ci/mock-macpower.js reads the port): the Dashboard's Music section with its card aside.
-for (const p of [9061, 9062, 9063, 9064, 9065, 9066, 9067, 9068]) http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(p, '127.0.0.1');
+for (const p of [9061, 9062, 9063, 9064, 9065, 9066, 9067, 9068, 9069]) http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(p, '127.0.0.1');
 http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(9014, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, false, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
