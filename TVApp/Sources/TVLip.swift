@@ -62,7 +62,7 @@ struct Lip: View {
     @Environment(\.pagePush) private var pagePush
     @Environment(\.paneLayout) private var panes
     // With the tabs down the side the gear is the system's bar item in the strip (Page); the lip keeps it open upright.
-    @Environment(\.duoTabsSide) private var stripSide
+    @Environment(\.tabsSide) private var stripSide
     // The tab it sits on: only the one showing says where the lip is.
     let tab: Int
     static let height: CGFloat = 56

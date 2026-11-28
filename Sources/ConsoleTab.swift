@@ -160,7 +160,7 @@ final class ConsoleRemote: ObservableObject {
         } catch is CancellationError {
         } catch { read = true }
     }
-    // Only while the Dashboard is the tab in front (its pages stay in place unseen behind other tabs, DuoTabs), read at
+    // Only while the Dashboard is the tab in front (duoTabFront, which the tab view hands each tab), read at
     // once as it comes back, as the system's TabView restarted it.
     func loop(_ model: AppModel) async {
         var last = Date.distantPast, wasFront = false
@@ -326,9 +326,8 @@ enum MacFollow {
         }
         func of(_ h: HistoryMetric?) -> String { h?.kind == .temperature ? "temps" : "overview" }
         switch tab {
-        case 0: return n.processes != nil ? "processes" : n.dashPage != nil ? of(n.dashPage) : of(n.history)
+        case 0: return n.processes != nil ? "processes" : n.dashPage == .macos ? "updates" : n.dashPage != nil ? of(n.dashPage) : of(n.history)
         case 1, 2: return "activity"
-        case 4: return "updates"
         case 5: return of(n.macPage)
         default: return nil
         }

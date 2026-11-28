@@ -97,7 +97,7 @@ struct MacSettings: View {
         Section {
             Picker("Open on", selection: $startTab) {
                 Text("The last tab used").tag(-1)
-                Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5); Text("Dashboard").tag(6)
+                Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("Control").tag(5); Text("Dashboard").tag(6)
             }
             // The Mac's Console turns to the page he's on here, when it's already on screen and free (MacFollow).
             Toggle("Mac follows this iPhone", isOn: $macFollows)

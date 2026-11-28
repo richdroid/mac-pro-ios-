@@ -429,7 +429,7 @@ struct AppBrowse: View {
         }
         .topShade().topFade()
         .environment(\.openRow, { row = $0 })
-        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true).tabBarRoom() }
+        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true) }
         .background { Ambience() }
         .onScreen { on in
             if on { model.mood = source.mood } else if model.mood == source.mood { model.mood = nil }

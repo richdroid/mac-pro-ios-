@@ -331,7 +331,7 @@ final class ConsoleSummary: ObservableObject {
             g.addTask { if let p = UpgradeFeed.posed(MacConsole.pose) { await self.upgrade.set(p.feed) } else { await self.upgrade.read(api) } }
         }
     }
-    // Only while the Dashboard is the tab in front (its pages stay in place unseen behind other tabs, DuoTabs), read at
+    // Only while the Dashboard is the tab in front (duoTabFront, which the tab view hands each tab), read at
     // once as it comes back, as the system's TabView restarted it.
     func loop(_ model: AppModel) async {
         if MacConsole.pose == "oldbridge" { return }
@@ -1010,7 +1010,7 @@ struct UpdatesView: View {
                 .disabled(m.checking == true || checking)
                 // Only with something to install: with nothing waiting it led nowhere (designer, CI d9c229c).
                 if m.pending?.isEmpty == false {
-                    Button { model.macPage = nil; model.tab = 4 } label: { HStack { Text("Install from the macOS tab"); Spacer(); RowChevron() } }
+                    Button { model.macPage = nil; model.showMacOS() } label: { HStack { Text("Install from the macOS page"); Spacer(); RowChevron() } }
                 }
             } header: { Text("macOS") } footer: {
                 // The one footnote on the page, and only when an update is waiting: the risk is about installing it.
@@ -1088,7 +1088,7 @@ struct UpdatesView: View {
             await feed.loop(model, every: 15)
         }
     }
-    static let posed = UpdatesFeed(t: 0, macos: .init(current: "26.7.2 (25G332)", checkedAt: Date().timeIntervalSince1970 * 1000 - 2 * 3_600_000, checking: false, pending: [.init(label: "macOS Tahoe 26.7.3", version: "26.7.3", size: "1.9 GB", restart: true)], error: nil, autoInstall: false, command: "softwareupdate --install --all --restart", risk: "A macOS update removes the OpenCore root patches. Updates go through the macOS tab, which patches again after."),
+    static let posed = UpdatesFeed(t: 0, macos: .init(current: "26.7.2 (25G332)", checkedAt: Date().timeIntervalSince1970 * 1000 - 2 * 3_600_000, checking: false, pending: [.init(label: "macOS Tahoe 26.7.3", version: "26.7.3", size: "1.9 GB", restart: true)], error: nil, autoInstall: false, command: "softwareupdate --install --all --restart", risk: "A macOS update removes the OpenCore root patches. Updates go through the macOS page, which patches again after."),
                                    oclp: .init(installed: "3.0.0", latest: "3.0.0-rc.5", latestPre: true, newer: false, patchedFor: "26.7.2", patchedAt: nil, patches: "HEALTHY: macOS 26.7.2 (25G332), OCLP 3.0.0", healthy: true, command: "open -a OpenCore-Patcher"),
                                    brew: nil, apps: [.init(name: "Tailscale", installed: "1.104.4", latest: nil, how: "Updates itself")])
 }
