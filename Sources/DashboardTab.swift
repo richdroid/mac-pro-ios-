@@ -30,7 +30,7 @@ struct DashboardTab: View {
         if st.display == "asleep" { return .asleep }
         if st.screenStepAside == true { return .aside }
         // Apple Music's lyrics on the Mac's screen (the music session): the dashboard is aside on purpose.
-        if music.now?.session?.on == true, st.frontmost != true { return .lyrics }
+        if music.on, music.s?.lyricsOff != true, st.frontmost != true { return .lyrics }
         if st.frontmost == false { return .behind }
         return .on
     }

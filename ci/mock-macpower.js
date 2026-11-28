@@ -62,6 +62,26 @@ module.exports = (q, s) => {
     9064: { state: 'playing', title: 'Everything Now (Continued) [Live at Madison Square Garden, New York, 2018] – 2024 Remaster', artist: 'Arcade Fire', session: { on: true, speaker: 'HK Invoke_C20142', speakerConnected: true } },
   }[mp] || { state: 'stopped', session: { on: false } };
   // 9066: lyrics off, its first answer 8 s late, for the cold open's "Checking…".
+  // The session card (11-28), GET /api/mac/music/session: 9061 lyrics up, playing; 9062 connecting the speaker;
+  // 9063 the speaker didn't connect; 9064 a long title, a press answered after 40 s; 9065 a refused press;
+  // 9066 the cold open; 9067 just ended, the speaker free; 9068 AirPlayed from another device (skips there). Else none.
+  const song = { title: 'Sample Song', artist: 'Sample Artist', position: 74, duration: 212, playing: true, from: 'airplay' };
+  const on = (o) => ({ on: true, phase: 'lyrics', elapsed: 754, speaker: 'HK Invoke_C20142', speakerConnected: true, speakerState: 'connected', music: 'playing', lyrics: true, lyricsOff: false, song, volume: { level: 62, of: 'music' }, airplay: false, sender: null, endsIn: null, ...o });
+  const sessionNow = {
+    9061: on({}),
+    9062: on({ phase: 'connecting', elapsed: 4, speakerConnected: false, speakerState: 'connecting', music: null, lyrics: false, song: { ...song, position: 3 } }),
+    9063: on({ phase: 'lyrics', speakerConnected: false, speakerState: 'off', speakerSay: 'Couldn’t reach HK Invoke_C20142: it’s off, out of range or playing for another device.' }),
+    9064: on({ song: { ...song, title: 'Everything Now (Continued) [Live at Madison Square Garden, New York, 2018] – 2024 Remaster', artist: 'Arcade Fire' } }),
+    9065: on({ song: { ...song, playing: false }, phase: 'lyrics' }),
+    9067: { on: false, phase: 'ended', ended: { why: 'the AirPlay session closed', speaker: 'HK Invoke_C20142', speakerFree: true, ago: 3 } },
+    9068: on({ airplay: true, sender: 'Living Room iPad' }),
+  }[mp] || { on: false, phase: 'idle' };
+  if (u.pathname === '/api/mac/music/session' && q.method === 'GET') { if (mp === 9066) { setTimeout(() => s.end(JSON.stringify(sessionNow)), 8000); return true; } s.end(JSON.stringify(sessionNow)); return true; }
+  if (q.method === 'POST' && ['/api/mac/music/lyrics', '/api/mac/music/speaker', '/api/mac/music/volume', '/api/mac/music/control', '/api/mac/music/continue'].includes(u.pathname)) {
+    if (mp === 9064) { setTimeout(() => s.end(JSON.stringify({ ok: true })), 40000); return true; }
+    if (mp === 9065) { s.end(JSON.stringify({ ok: false, say: 'Music on the Mac didn’t answer. Try again in a moment.' })); return true; }
+    s.end(JSON.stringify({ ok: true })); return true;
+  }
   if (u.pathname === '/api/mac/music/now') { if (mp === 9066) { setTimeout(() => s.end(JSON.stringify(musicNow)), 8000); return true; } s.end(JSON.stringify(musicNow)); return true; }
   if (u.pathname === '/api/mac/audio') { s.end(JSON.stringify({ outputs: [{ id: 'hk', name: 'HK Invoke_C20142', connected: lyricsOn && mp !== 9063 }, { id: 'mbp', name: 'Mac Pro Speakers', connected: false }], preferred: 'hk' })); return true; }
   if (q.method === 'POST' && (u.pathname === '/api/mac/music/session' || u.pathname.startsWith('/api/mac/audio/'))) {

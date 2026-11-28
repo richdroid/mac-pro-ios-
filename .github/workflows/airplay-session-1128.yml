@@ -1,0 +1,86 @@
+name: Mac Pro AirPlay session 1128 (branch only)
+# The Dashboard's Music card (the AirPlay session, 11-28) in every state the mock Mac can be in, shot in every posture with
+# open portrait (the posture Richard holds) first. Artifacts only; the full build and its releases are untouched.
+on:
+  push:
+    branches: [airplay-session-1128]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: airplay-session-1128
+  # The running job always finishes; a newer push only replaces one still waiting (several sessions push the Mac Pro app).
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 82
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          shot() {
+            local name=$1 display=$2 wait=$3 port=9001; shift 3
+            if [ "$1" = "@" ]; then port=$2; shift 2; fi
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$port "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # Every tab and its main pages, the reach and sign-in states (11-25 debug pass: broken states, slow loads, spacing).
+          poses() {
+            local d=$1 x=$2
+            shot tab6$x $d 7 -tab 6
+            shot music-idle$x $d 9 -tab 6 -pose music
+            shot music-lyrics$x $d 9 @ 9061 -tab 6 -pose music
+            shot music-connecting$x $d 9 @ 9062 -tab 6 -pose music
+            shot music-nospeaker$x $d 9 @ 9063 -tab 6 -pose music
+            shot music-long-busy$x $d 11 @ 9064 -tab 6 -pose music -musicPress lyrics
+            shot music-refused$x $d 11 @ 9065 -tab 6 -pose music -musicPress next
+            shot music-cold$x $d 3 @ 9066 -tab 6 -pose music
+            shot music-ended$x $d 9 @ 9067 -tab 6 -pose music
+            shot music-other-sender$x $d 9 @ 9068 -tab 6 -pose music
+            shot music-end-confirm$x $d 11 @ 9061 -tab 6 -pose music -musicPress endask
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          D=/tmp/dh/.build/release/devicehubctl
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          poses 3 -portrait
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          poses 3 -open
+          $D "$DEVICE" pose closed || true; sleep 5
+          poses 1 ""
+          ls dist | wc -l
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: airplay-session-shots
+          path: dist/*.png
+          retention-days: 5
